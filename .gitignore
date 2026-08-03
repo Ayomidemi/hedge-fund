@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+backend/.env
+
+# Build / cache
+.next/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
