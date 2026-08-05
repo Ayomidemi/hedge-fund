@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { AppShell } from "@/components/shell/AppShell";
+import { getHealth } from "@/lib/api";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -17,17 +19,30 @@ export const metadata: Metadata = {
   description: "Quantitative trading and portfolio operations platform",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  let apiStatus: "connected" | "offline" = "offline";
+
+  try {
+    const health = await getHealth();
+    if (health.status === "ok") {
+      apiStatus = "connected";
+    }
+  } catch {
+    apiStatus = "offline";
+  }
+
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full">
+        <AppShell apiStatus={apiStatus}>{children}</AppShell>
+      </body>
     </html>
   );
 }
