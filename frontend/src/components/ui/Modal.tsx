@@ -9,7 +9,7 @@ type ModalProps = {
   description?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  size?: "md" | "lg";
+  size?: "md" | "lg" | "xl";
 };
 
 export function Modal({
@@ -61,7 +61,7 @@ export function Modal({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={`relative z-10 w-full modal-panel ${
-          size === "lg" ? "max-w-2xl" : "max-w-lg"
+          size === "xl" ? "max-w-5xl" : size === "lg" ? "max-w-2xl" : "max-w-lg"
         }`}
       >
         <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">

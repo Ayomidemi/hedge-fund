@@ -469,7 +469,82 @@ Ticker
 Structured investment memo
 ```
 
-## 8.2 Required analysis modules
+## 8.2 Three-layer analyst model
+
+Every ticker analysis must be organized into three layers.
+
+### Layer 1: Descriptive analysis
+
+The first layer answers:
+
+```text
+What is true now?
+```
+
+It measures the ticker’s current:
+
+* valuation;
+* growth;
+* margins;
+* leverage;
+* volatility;
+* momentum.
+
+This layer must distinguish observed facts from inferred judgments. Missing data lowers confidence rather than being silently ignored.
+
+### Layer 2: Comparative analysis
+
+The second layer answers:
+
+```text
+How does this ticker compare?
+```
+
+The ticker must be compared against:
+
+* its own history;
+* its sector;
+* its direct peers;
+* the complete stock universe.
+
+Comparative outputs may include percentile ranks, spread from historical median, sector-relative momentum, peer-relative valuation, and universe-relative quality or risk.
+
+### Layer 3: Predictive analysis
+
+The third layer answers:
+
+```text
+What should we expect from here, using only information available today?
+```
+
+The model must estimate:
+
+* expected relative return;
+* downside distribution;
+* model confidence;
+* portfolio improvement or deterioration.
+
+Predictive analysis is advisory only. It cannot override portfolio risk limits or human approval.
+
+## 8.3 Automation sequence
+
+The ticker workflow will evolve in stages:
+
+```text
+Ticker entered
+-> data prefill
+-> AI-suggested research questions
+-> descriptive scorecard
+-> comparative ranking
+-> predictive model output
+-> portfolio-fit check
+-> human review
+-> saved memo
+```
+
+AI-generated questions and draft memo language must be treated as suggestions. Model outputs must be versioned, timestamped and linked to the exact data available at the time.
+
+## 8.4 Required analysis modules
 
 ### Business-quality engine
 
@@ -554,7 +629,7 @@ Calculates:
 * earnings-event risk;
 * portfolio correlation.
 
-## 8.3 Standard ticker memo
+## 8.5 Standard ticker memo
 
 Every ticker analysis must contain:
 
@@ -577,12 +652,12 @@ Every ticker analysis must contain:
 17. Confidence level
 18. Data timestamp and model version
 
-## 8.4 Example output
+## 8.6 Example output
 
 ```text
 Ticker:                  XYZ
 Classification:          Buy candidate
-Time horizon:            6–12 months
+Time horizon:            6-12 months
 Fundamental score:       82/100
 Valuation score:         68/100
 Momentum score:          74/100

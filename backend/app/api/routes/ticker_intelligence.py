@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,7 @@ from app.api.schemas.ticker_intelligence import (
 from app.db.session import get_session
 from app.services.ticker_intelligence.analysis import (
     analyze_ticker,
+    get_ticker_memo,
     list_recent_ticker_memos,
     list_ticker_memos,
 )
@@ -40,6 +43,20 @@ async def read_recent_ticker_memos(
     session: AsyncSession = Depends(get_session),
 ) -> list[TickerMemoSummaryResponse]:
     return await list_recent_ticker_memos(session, limit=limit)
+
+
+@router.get("/memos/{memo_id}", response_model=TickerMemoResponse)
+async def read_ticker_memo(
+    memo_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> TickerMemoResponse:
+    memo = await get_ticker_memo(session, memo_id)
+    if memo is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ticker memo not found.",
+        )
+    return memo
 
 
 @router.get("/{ticker}/prefill", response_model=TickerPrefillResponse)

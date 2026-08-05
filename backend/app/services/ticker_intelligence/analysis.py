@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -162,6 +163,22 @@ async def list_ticker_memos(
     )
 
     return [_memo_response(memo) for memo in memos]
+
+
+async def get_ticker_memo(
+    session: AsyncSession,
+    memo_id: UUID,
+) -> TickerMemoResponse | None:
+    memo = await _load_memo(session, memo_id)
+    if memo is None:
+        logger.info("ticker_memo_not_found", extra={"memo_id": str(memo_id)})
+        return None
+
+    logger.info(
+        "ticker_memo_loaded",
+        extra={"memo_id": str(memo.id), "ticker": memo.instrument.ticker},
+    )
+    return _memo_response(memo)
 
 
 async def _get_or_create_model_version(session: AsyncSession) -> ModelVersion:

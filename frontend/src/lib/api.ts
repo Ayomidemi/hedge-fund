@@ -328,6 +328,12 @@ export function getRecentTickerMemos() {
   return fetchApi<TickerMemoSummary[]>("/api/ticker-intelligence/memos");
 }
 
+export function getTickerMemo(memoId: string) {
+  return fetchApi<TickerMemo>(
+    `/api/ticker-intelligence/memos/${encodeURIComponent(memoId)}`,
+  );
+}
+
 export function getTickerPrefill(ticker: string) {
   return fetchApi<TickerPrefill>(
     `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill`,

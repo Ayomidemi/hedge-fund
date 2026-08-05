@@ -10,6 +10,10 @@ import httpx
 from app.api.schemas.operating_core import InstrumentCreate
 from app.api.schemas.ticker_intelligence import TickerMetricsInput, TickerPrefillResponse
 from app.core.config import settings
+from app.services.ticker_intelligence.sec_fundamentals import (
+    SecFundamentals,
+    calculate_sec_fundamentals,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +34,8 @@ class PrefillBuildContext:
     details: dict = field(default_factory=dict)
     ratios: dict = field(default_factory=dict)
     bars: list[dict] = field(default_factory=list)
+    sec_fundamentals: SecFundamentals = field(default_factory=SecFundamentals)
+    sec_facts_summary: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -69,6 +75,9 @@ async def prefill_ticker(ticker: str) -> TickerPrefillResponse:
         for warning in [details.warning, ratios.warning, bars.warning]
         if warning is not None
     ]
+    sec_result = await _fetch_sec_fundamentals(context)
+    if sec_result.warning is not None:
+        context.warnings.append(sec_result.warning)
 
     response = _build_prefill_response(context)
     logger.info(
@@ -88,6 +97,37 @@ def normalize_massive_base_url(base_url: str) -> str:
     if normalized in {"https://massive.com", "http://massive.com"}:
         return "https://api.massive.com"
     return normalized
+
+
+async def _fetch_sec_fundamentals(context: PrefillBuildContext) -> ProviderResult:
+    cik = _cik(context.details)
+    if cik is None:
+        return ProviderResult(warning="SEC companyfacts skipped: Massive did not return a CIK.")
+
+    headers = {
+        "User-Agent": settings.hf_sec_user_agent,
+        "Accept-Encoding": "gzip, deflate",
+    }
+    async with httpx.AsyncClient(
+        base_url=settings.hf_sec_base_url.rstrip("/"),
+        timeout=httpx.Timeout(10.0),
+        headers=headers,
+    ) as client:
+        result = await _safe_get(client, f"/api/xbrl/companyfacts/CIK{cik}.json")
+
+    if result.payload is None:
+        return result
+
+    market_cap = _market_cap(context)
+    fundamentals = calculate_sec_fundamentals(result.payload, market_cap)
+    context.sec_fundamentals = fundamentals
+    context.sec_facts_summary = {
+        "cik": cik,
+        "entity_name": result.payload.get("entityName"),
+        "source_period": fundamentals.source_period,
+        "used_tags": fundamentals.used_tags or {},
+    }
+    return ProviderResult(payload=context.sec_facts_summary)
 
 
 async def _safe_get(
@@ -123,6 +163,7 @@ def _bars_path(ticker: str) -> str:
 
 
 def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillResponse:
+    fundamentals = context.sec_fundamentals
     instrument = InstrumentCreate(
         ticker=context.ticker,
         name=str(context.details.get("name") or context.ticker),
@@ -142,13 +183,15 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
     metrics = TickerMetricsInput(
         current_price=_latest_price(context),
         market_cap_billion=_market_cap_billion(context),
-        pe_ratio=_decimal(context.ratios.get("price_to_earnings")),
+        pe_ratio=_decimal(context.ratios.get("price_to_earnings")) or fundamentals.pe_ratio,
         forward_pe=None,
-        revenue_growth_pct=None,
-        earnings_growth_pct=None,
-        free_cash_flow_yield_pct=_free_cash_flow_yield(context),
-        net_margin_pct=_net_margin(context),
-        debt_to_equity=_decimal(context.ratios.get("debt_to_equity")),
+        revenue_growth_pct=fundamentals.revenue_growth_pct,
+        earnings_growth_pct=fundamentals.earnings_growth_pct,
+        free_cash_flow_yield_pct=_free_cash_flow_yield(context)
+        or fundamentals.free_cash_flow_yield_pct,
+        net_margin_pct=_net_margin(context) or fundamentals.net_margin_pct,
+        debt_to_equity=_decimal(context.ratios.get("debt_to_equity"))
+        or fundamentals.debt_to_equity,
         price_vs_200d_pct=_price_vs_200d(context.bars),
         relative_strength_6m_pct=_relative_strength(context.bars),
         volatility_30d_pct=_volatility_30d(context.bars),
@@ -158,7 +201,7 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
         instrument=instrument,
         metrics=metrics,
         provider="polygon",
-        source_reference=f"massive:{context.ticker}:{datetime.now(timezone.utc).isoformat()}",
+        source_reference=_source_reference(context),
         data_timestamp=datetime.now(timezone.utc),
         source_warnings=context.warnings,
         raw_sources={
@@ -169,8 +212,16 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
                 "first_date": _bar_date(context.bars[0]) if context.bars else None,
                 "last_date": _bar_date(context.bars[-1]) if context.bars else None,
             },
+            "sec_companyfacts": context.sec_facts_summary,
         },
     )
+
+
+def _source_reference(context: PrefillBuildContext) -> str:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    if context.sec_facts_summary:
+        return f"massive+sec:{context.ticker}:{timestamp}"
+    return f"massive:{context.ticker}:{timestamp}"
 
 
 def _first_result(payload: dict | None) -> dict:
@@ -214,10 +265,15 @@ def _latest_price(context: PrefillBuildContext) -> Decimal | None:
     return None
 
 
-def _market_cap_billion(context: PrefillBuildContext) -> Decimal | None:
+def _market_cap(context: PrefillBuildContext) -> Decimal | None:
     market_cap = _decimal(context.ratios.get("market_cap"))
     if market_cap is None:
         market_cap = _decimal(context.details.get("market_cap"))
+    return market_cap
+
+
+def _market_cap_billion(context: PrefillBuildContext) -> Decimal | None:
+    market_cap = _market_cap(context)
     if market_cap is None:
         return None
     return _quantize_pct(market_cap / Decimal("1000000000"))
@@ -304,6 +360,16 @@ def _decimal(value: object) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _cik(details: dict) -> str | None:
+    cik_value = details.get("cik")
+    if cik_value is None:
+        return None
+    digits = "".join(character for character in str(cik_value) if character.isdigit())
+    if not digits:
+        return None
+    return digits.zfill(10)
 
 
 def _quantize_pct(value: Decimal) -> Decimal:

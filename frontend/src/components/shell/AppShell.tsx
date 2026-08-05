@@ -7,7 +7,7 @@ const navigationItems = [
   { label: "Fund Dashboard", href: "/" },
   { label: "Cash Ledger", href: "/cash-ledger" },
   { label: "Ticker Analyst", href: "/ticker-analyst" },
-  { label: "Research Lab" },
+  { label: "Research Lab", href: "/research-lab" },
   { label: "Strategy Pods" },
   { label: "Risk Centre" },
   { label: "Opportunity Queue" },
@@ -25,6 +25,7 @@ type AppShellProps = {
 const pageTitles: Record<string, string> = {
   "Cash Ledger": "Cash Ledger History",
   "Ticker Analyst": "Ticker Research Desk",
+  "Research Lab": "Research Lab",
 };
 
 export function AppShell({ apiStatus, children }: AppShellProps) {

@@ -2,11 +2,14 @@
 
 import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Modal } from "@/components/ui/Modal";
 import {
   createTickerAnalysis,
+  getTickerMemo,
   getTickerPrefill,
   type TickerAnalysis,
   type TickerAnalysisInput,
+  type TickerMemo,
   type TickerMemoSummary,
   type TickerPrefill,
 } from "@/lib/api";
@@ -37,6 +40,8 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
   const [error, setError] = useState<string | null>(isUnavailable ? "Backend unavailable." : null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPrefilling, setIsPrefilling] = useState(false);
+  const [selectedMemo, setSelectedMemo] = useState<TickerMemo | null>(null);
+  const [memoLoadingId, setMemoLoadingId] = useState<string | null>(null);
   const [prefillWarnings, setPrefillWarnings] = useState<string[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
   const router = useRouter();
@@ -85,6 +90,20 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
       setError("Ticker analysis was not saved.");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleOpenMemo(memoId: string) {
+    setMemoLoadingId(memoId);
+    setError(null);
+
+    try {
+      const memo = await getTickerMemo(memoId);
+      setSelectedMemo(memo);
+    } catch {
+      setError("Past analysis could not be loaded.");
+    } finally {
+      setMemoLoadingId(null);
     }
   }
 
@@ -211,8 +230,14 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
       </section>
 
       <aside className="space-y-5">
-        <MemoHistory memos={recentMemos} />
+        <MemoHistory
+          memos={recentMemos}
+          loadingId={memoLoadingId}
+          onOpenMemo={handleOpenMemo}
+        />
       </aside>
+
+      <TickerMemoModal memo={selectedMemo} onClose={() => setSelectedMemo(null)} />
     </div>
   );
 }
@@ -290,7 +315,15 @@ function AnalysisPanel({ analysis }: { analysis: TickerAnalysis | null }) {
   );
 }
 
-function MemoHistory({ memos }: { memos: TickerMemoSummary[] }) {
+function MemoHistory({
+  loadingId,
+  memos,
+  onOpenMemo,
+}: {
+  loadingId: string | null;
+  memos: TickerMemoSummary[];
+  onOpenMemo: (memoId: string) => void;
+}) {
   return (
     <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
       <div className="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
@@ -301,14 +334,19 @@ function MemoHistory({ memos }: { memos: TickerMemoSummary[] }) {
       </div>
       <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
         {memos.map((memo) => (
-          <div key={memo.id} className="p-4">
+          <button
+            key={memo.id}
+            type="button"
+            onClick={() => onOpenMemo(memo.id)}
+            className="block w-full p-4 text-left transition hover:bg-zinc-50 dark:hover:bg-zinc-900"
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="font-semibold">{memo.ticker}</p>
                 <p className="truncate text-sm text-zinc-500">{memo.name}</p>
               </div>
               <span className="shrink-0 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                {score(memo.composite_score)}
+                {loadingId === memo.id ? "..." : score(memo.composite_score)}
               </span>
             </div>
             <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
@@ -319,7 +357,7 @@ function MemoHistory({ memos }: { memos: TickerMemoSummary[] }) {
               <span>{formatLabel(memo.classification)}</span>
               {memo.action ? <span>{formatLabel(memo.action)}</span> : null}
             </div>
-          </div>
+          </button>
         ))}
         {memos.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-zinc-500">
@@ -329,6 +367,207 @@ function MemoHistory({ memos }: { memos: TickerMemoSummary[] }) {
       </div>
     </div>
   );
+}
+
+function TickerMemoModal({
+  memo,
+  onClose,
+}: {
+  memo: TickerMemo | null;
+  onClose: () => void;
+}) {
+  const scoreData = parseMemoScores(memo);
+  const modalTitle = memo ? `${memo.instrument.ticker} analysis` : "Ticker analysis";
+
+  return (
+    <Modal
+      open={memo !== null}
+      onClose={onClose}
+      title={modalTitle}
+      description={memo?.executive_view}
+      size="xl"
+    >
+      {memo && (
+        <div className="max-h-[70vh] overflow-y-auto pr-1">
+          <div className="grid gap-3 sm:grid-cols-4">
+            {[
+              ["Action", formatLabel(scoreData.action ?? "watch")],
+              ["Composite", score(scoreData.composite_score)],
+              ["Confidence", score(scoreData.confidence_score)],
+              ["Weight", scoreData.recommended_weight ? weight(scoreData.recommended_weight) : "-"],
+            ].map(([label, value]) => (
+              <div
+                key={label}
+                className="rounded-lg border border-zinc-100 bg-zinc-50 px-3.5 py-3 dark:border-zinc-900 dark:bg-zinc-900"
+              >
+                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  {label}
+                </p>
+                <p className="mt-1.5 text-lg font-semibold text-zinc-950 dark:text-zinc-50">
+                  {value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <section className="mt-5 grid gap-3 lg:grid-cols-3">
+            <AnalysisLayer
+              title="Descriptive"
+              rows={[
+                ["Valuation", metricText(scoreData, "Valuation")],
+                ["Growth", metricText(scoreData, "Growth")],
+                ["Margins / Quality", metricText(scoreData, "Quality")],
+                ["Leverage / Risk", metricText(scoreData, "Balance Sheet Risk")],
+                ["Volatility / Momentum", metricText(scoreData, "Momentum")],
+              ]}
+            />
+            <AnalysisLayer
+              title="Comparative"
+              rows={[
+                ["History", "Price vs 200D and 6M trend are current proxies."],
+                ["Sector", "Sector-relative benchmark pending."],
+                ["Peers", "Peer set and percentile rank pending."],
+                ["Universe", "Cross-sectional rank pending."],
+              ]}
+            />
+            <AnalysisLayer
+              title="Predictive"
+              rows={[
+                ["Expected return", "Pending model training."],
+                ["Downside distribution", "Pending downside model."],
+                ["Model confidence", score(scoreData.confidence_score)],
+                ["Portfolio improvement", "Pending portfolio-fit model."],
+              ]}
+            />
+          </section>
+
+          <section className="mt-5 grid gap-4 lg:grid-cols-2">
+            <MemoBlock title="Thesis" value={memo.thesis} />
+            <MemoBlock title="Bull case" value={memo.bull_case} />
+            <MemoBlock title="Base case" value={memo.base_case} />
+            <MemoBlock title="Bear case" value={memo.bear_case} />
+            <MemoBlock title="Thesis breakers" value={memo.thesis_breakers} />
+            <MemoBlock title="Risk notes" value={memo.risk_assessment} />
+          </section>
+
+          <section className="mt-5 rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Scorecard
+            </p>
+            <div className="mt-3 grid gap-3 lg:grid-cols-5">
+              {scoreData.scorecard.map((item) => (
+                <div
+                  key={item.name}
+                  className="rounded-md bg-zinc-50 p-3 dark:bg-zinc-900"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-zinc-500">{item.name}</p>
+                    <p className="font-mono text-sm">{score(item.score)}</p>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-zinc-500">{item.notes}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <div className="mt-5 flex flex-wrap gap-2 text-xs text-zinc-500">
+            <span>{memo.memo_date}</span>
+            <span>{memo.model_version_label ?? "Unversioned model"}</span>
+            <span>{formatLabel(memo.classification)}</span>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function AnalysisLayer({
+  rows,
+  title,
+}: {
+  rows: [string, string][];
+  title: string;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        {title}
+      </p>
+      <div className="mt-3 space-y-3">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <p className="text-xs font-medium text-zinc-500">{label}</p>
+            <p className="mt-1 text-sm leading-5 text-zinc-800 dark:text-zinc-200">
+              {value}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MemoBlock({ title, value }: { title: string; value: string | null }) {
+  return (
+    <div className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        {title}
+      </p>
+      <p className="mt-2 min-h-10 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+        {value || "Not recorded"}
+      </p>
+    </div>
+  );
+}
+
+type MemoScores = {
+  action?: string;
+  composite_score?: string;
+  confidence_score?: string;
+  recommended_weight?: string;
+  scorecard: TickerAnalysis["scorecard"];
+};
+
+function parseMemoScores(memo: TickerMemo | null): MemoScores {
+  if (!memo) {
+    return { scorecard: [] };
+  }
+  const scorecard = Array.isArray(memo.scores.scorecard)
+    ? memo.scores.scorecard.filter(isTickerScore)
+    : [];
+
+  return {
+    action: stringScoreValue(memo.scores.action),
+    composite_score: stringScoreValue(memo.scores.composite_score),
+    confidence_score: stringScoreValue(memo.scores.confidence_score),
+    recommended_weight: stringScoreValue(memo.scores.recommended_weight),
+    scorecard,
+  };
+}
+
+function isTickerScore(value: unknown): value is TickerAnalysis["scorecard"][number] {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.name === "string" &&
+    typeof item.score === "string" &&
+    typeof item.weight === "string" &&
+    typeof item.notes === "string"
+  );
+}
+
+function stringScoreValue(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function metricText(scores: MemoScores, metricName: string) {
+  const item = scores.scorecard.find((scoreItem) => scoreItem.name === metricName);
+  if (!item) {
+    return "Not scored";
+  }
+  return `${score(item.score)}/100 - ${item.notes}`;
 }
 
 function MetricField({ label, name }: { label: string; name: string }) {

@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     hf_market_data_provider: str = "disabled"
     hf_polygon_api_key: str | None = None
     hf_polygon_base_url: str = "https://api.massive.com"
+    hf_sec_base_url: str = "https://data.sec.gov"
+    hf_sec_user_agent: str = "Pease Capital research bot"
 
     @field_validator("debug", mode="before")
     @classmethod
