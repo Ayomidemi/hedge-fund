@@ -1,5 +1,13 @@
-import { OperatingCoreForms } from "@/components/portfolio/OperatingCoreForms";
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
+import { ManualTradeModal } from "@/components/portfolio/ManualTradeModal";
+import {
+  CashLedgerTypeBadge,
+  formatPlatformLabel,
+  formatSignedAmount,
+} from "@/components/ledger/cash-ledger-ui";
 import type { OperatingCoreDashboard } from "@/lib/api";
 
 type PortfolioDashboardProps = {
@@ -23,170 +31,209 @@ function pct(value: string) {
   return `${Number(value).toFixed(2)}%`;
 }
 
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value));
+}
+
 export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
+  const [tradeModalOpen, setTradeModalOpen] = useState(false);
+
   if (!dashboard) {
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Backend unavailable. Check the API server and refresh this page.
       </div>
     );
   }
 
   const metrics = [
-    ["NAV", money(dashboard.nav)],
-    ["Cash", money(dashboard.cash_balance)],
-    ["Invested", money(dashboard.invested_value)],
-    ["Positions", String(dashboard.open_position_count)],
-    ["Trades", String(dashboard.trade_count)],
+    { label: "NAV", value: money(dashboard.nav) },
+    { label: "Cash", value: money(dashboard.cash_balance) },
+    { label: "Invested", value: money(dashboard.invested_value) },
+    { label: "Positions", value: String(dashboard.open_position_count) },
+    { label: "Trades", value: String(dashboard.trade_count) },
   ];
   const breachedChecks = dashboard.risk_checks.filter((check) => !check.passed);
+  const recentCash = dashboard.recent_cash_entries.slice(0, 10);
 
   return (
-    <div className="mx-auto flex max-w-[1560px] flex-col gap-5">
-      <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              {dashboard.portfolio.name}
-            </p>
-            <h2 className="mt-1 text-xl font-semibold">Fund Operating Core</h2>
-          </div>
-          <div
-            className={`rounded-md px-3 py-2 text-sm ${
-              breachedChecks.length === 0
-                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
-            }`}
-          >
-            {breachedChecks.length === 0
-              ? "Risk within limits"
-              : `${breachedChecks.length} risk breach${breachedChecks.length === 1 ? "" : "es"}`}
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          {metrics.map(([label, value]) => (
-            <div key={label} className="border-l border-zinc-200 pl-4 dark:border-zinc-800">
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                {label}
+    <>
+      <div className="mx-auto flex max-w-[1560px] flex-col gap-5">
+        <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                {dashboard.portfolio.name}
               </p>
-              <p className="mt-2 text-2xl font-semibold tracking-normal">{value}</p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-tight">Fund overview</h2>
             </div>
-          ))}
-        </div>
-      </section>
+            <div
+              className={`rounded-full px-3.5 py-1.5 text-sm font-medium ${
+                breachedChecks.length === 0
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
+                  : "bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300"
+              }`}
+            >
+              {breachedChecks.length === 0
+                ? "Risk within limits"
+                : `${breachedChecks.length} risk breach${breachedChecks.length === 1 ? "" : "es"}`}
+            </div>
+          </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-5">
-          <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-            <Panel title="Risk Centre" eyebrow="Controls">
-              <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
-                {dashboard.risk_checks.map((check) => (
-                  <div
-                    key={check.limit_type}
-                    className="flex items-center justify-between gap-4 py-3"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{check.name}</p>
-                      <p className="mt-1 text-xs text-zinc-500">{check.message}</p>
-                    </div>
-                    <StatusPill passed={check.passed} />
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            {metrics.map((metric) => (
+              <div
+                key={metric.label}
+                className="rounded-xl border border-zinc-100 bg-zinc-50/70 px-4 py-3.5 dark:border-zinc-900 dark:bg-zinc-900/40"
+              >
+                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  {metric.label}
+                </p>
+                <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight">
+                  {metric.value}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+          <Panel title="Risk centre" eyebrow="Controls">
+            <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
+              {dashboard.risk_checks.map((check) => (
+                <div
+                  key={check.limit_type}
+                  className="flex items-center justify-between gap-4 py-3.5"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{check.name}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-zinc-500">{check.message}</p>
                   </div>
-                ))}
-              </div>
-            </Panel>
+                  <StatusPill passed={check.passed} />
+                </div>
+              ))}
+            </div>
+          </Panel>
 
-            <Panel title="Exposure" eyebrow="Portfolio">
-              <div className="space-y-5">
-                <ExposureList
-                  title="Asset Class"
-                  buckets={dashboard.asset_class_exposure}
-                />
-                <ExposureList title="Sector" buckets={dashboard.sector_exposure} />
-              </div>
-            </Panel>
-          </section>
+          <Panel title="Exposure" eyebrow="Portfolio">
+            <div className="space-y-5">
+              <ExposureList title="Asset class" buckets={dashboard.asset_class_exposure} />
+              <ExposureList title="Sector" buckets={dashboard.sector_exposure} />
+            </div>
+          </Panel>
+        </section>
 
-          <section className="grid gap-4 xl:grid-cols-2">
-            <DataTable title="Position Book" eyebrow="Holdings">
-              <thead>
-                <tr>
-                  <Th>Ticker</Th>
-                  <Th>Class</Th>
-                  <Th>Qty</Th>
-                  <Th>Value</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {dashboard.positions.map((position) => (
-                  <tr key={position.id}>
-                    <Td emphasis>{position.instrument.ticker}</Td>
-                    <Td>{formatLabel(position.instrument.asset_class)}</Td>
-                    <Td>{Number(position.quantity).toLocaleString()}</Td>
-                    <Td align="right">{money(position.market_value)}</Td>
-                  </tr>
-                ))}
-                {dashboard.positions.length === 0 && <EmptyRow columns={4} />}
-              </tbody>
-            </DataTable>
-
-            <DataTable title="Trade Journal" eyebrow="Recent">
-              <thead>
-                <tr>
-                  <Th>Ticker</Th>
-                  <Th>Side</Th>
-                  <Th>Qty</Th>
-                  <Th>Price</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {dashboard.recent_trades.map((trade) => (
-                  <tr key={trade.id}>
-                    <Td emphasis>{trade.instrument.ticker}</Td>
-                    <Td>{formatLabel(trade.side)}</Td>
-                    <Td>{Number(trade.quantity).toLocaleString()}</Td>
-                    <Td align="right">
-                      {trade.executed_price ? money(trade.executed_price) : "-"}
-                    </Td>
-                  </tr>
-                ))}
-                {dashboard.recent_trades.length === 0 && <EmptyRow columns={4} />}
-              </tbody>
-            </DataTable>
-          </section>
-
-          <DataTable
-            title="Cash Ledger"
-            eyebrow="Last 10"
-            action={<Link className={linkClassName} href="/cash-ledger">View History</Link>}
-          >
+        <section className="grid gap-5 xl:grid-cols-2">
+          <DataTable title="Position book" eyebrow="Holdings">
             <thead>
               <tr>
-                <Th>Date</Th>
-                <Th>Type</Th>
-                <Th>Description</Th>
-                <Th>Amount</Th>
+                <Th>Ticker</Th>
+                <Th>Class</Th>
+                <Th>Qty</Th>
+                <Th>Value</Th>
               </tr>
             </thead>
             <tbody>
-              {dashboard.recent_cash_entries.slice(0, 10).map((entry) => (
-                <tr key={entry.id}>
-                  <Td>{entry.entry_date}</Td>
-                  <Td>{formatLabel(entry.entry_type)}</Td>
-                  <Td>{entry.description ?? "-"}</Td>
-                  <Td align="right">{money(entry.amount)}</Td>
+              {dashboard.positions.map((position) => (
+                <tr key={position.id}>
+                  <Td emphasis>{position.instrument.ticker}</Td>
+                  <Td>{formatLabel(position.instrument.asset_class)}</Td>
+                  <Td>{Number(position.quantity).toLocaleString()}</Td>
+                  <Td align="right">{money(position.market_value)}</Td>
                 </tr>
               ))}
+              {dashboard.positions.length === 0 && <EmptyRow columns={4} message="No open positions" />}
             </tbody>
           </DataTable>
-        </div>
 
-        <aside className="space-y-5">
-          <NextBuildPanel />
-          <OperatingCoreForms />
-        </aside>
+          <DataTable
+            title="Trade journal"
+            eyebrow="Recent"
+            action={
+              <button
+                type="button"
+                onClick={() => setTradeModalOpen(true)}
+                className={ghostButtonClassName}
+              >
+                Record trade
+              </button>
+            }
+          >
+            <thead>
+              <tr>
+                <Th>Ticker</Th>
+                <Th>Side</Th>
+                <Th>Qty</Th>
+                <Th>Price</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {dashboard.recent_trades.map((trade) => (
+                <tr key={trade.id}>
+                  <Td emphasis>{trade.instrument.ticker}</Td>
+                  <Td>{formatLabel(trade.side)}</Td>
+                  <Td>{Number(trade.quantity).toLocaleString()}</Td>
+                  <Td align="right">
+                    {trade.executed_price ? money(trade.executed_price) : "—"}
+                  </Td>
+                </tr>
+              ))}
+              {dashboard.recent_trades.length === 0 && (
+                <EmptyRow columns={4} message="No trades recorded yet" />
+              )}
+            </tbody>
+          </DataTable>
+        </section>
+
+        <DataTable
+          title="Cash ledger"
+          eyebrow="Recent movements"
+          action={
+            <Link href="/cash-ledger" className={ghostButtonClassName}>
+              View all
+            </Link>
+          }
+        >
+          <thead>
+            <tr>
+              <Th>Date</Th>
+              <Th>Type</Th>
+              <Th>Platform</Th>
+              <Th>Description</Th>
+              <Th>Amount</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {recentCash.map((entry) => (
+                <tr key={entry.id}>
+                  <Td>{formatDate(entry.entry_date)}</Td>
+                  <Td>
+                    <CashLedgerTypeBadge type={entry.entry_type} />
+                  </Td>
+                  <Td>{formatPlatformLabel(entry.platform)}</Td>
+                  <Td muted>{entry.description ?? "—"}</Td>
+                  <Td align="right">
+                    <span className="font-medium tabular-nums">
+                      {formatSignedAmount(entry.amount)}
+                    </span>
+                  </Td>
+                </tr>
+              ))}
+            {recentCash.length === 0 && (
+              <EmptyRow
+                columns={5}
+                message="No cash movements yet — head to the cash ledger to add one"
+              />
+            )}
+          </tbody>
+        </DataTable>
       </div>
-    </div>
+
+      <ManualTradeModal open={tradeModalOpen} onClose={() => setTradeModalOpen(false)} />
+    </>
   );
 }
 
@@ -199,20 +246,18 @@ function ExposureList({
 }) {
   return (
     <div>
-      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-        {title}
-      </p>
-      <div className="mt-2 space-y-2">
-        {buckets.length === 0 && <p className="text-sm text-zinc-500">None</p>}
+      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{title}</p>
+      <div className="mt-3 space-y-3">
+        {buckets.length === 0 && <p className="text-sm text-zinc-500">Nothing allocated yet</p>}
         {buckets.map((bucket) => (
           <div key={bucket.name}>
             <div className="flex items-center justify-between text-xs">
-              <span>{bucket.name}</span>
-              <span>{pct(bucket.exposure_pct)}</span>
+              <span className="font-medium text-zinc-700 dark:text-zinc-300">{bucket.name}</span>
+              <span className="tabular-nums text-zinc-500">{pct(bucket.exposure_pct)}</span>
             </div>
-            <div className="mt-1 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
               <div
-                className="h-1.5 rounded-full bg-zinc-950 dark:bg-zinc-100"
+                className="h-full rounded-full bg-zinc-900 dark:bg-zinc-100"
                 style={{ width: `${Math.min(Number(bucket.exposure_pct), 100)}%` }}
               />
             </div>
@@ -235,17 +280,15 @@ function DataTable({
   children: React.ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              {eyebrow}
-            </p>
-            <h3 className="text-sm font-semibold">{title}</h3>
-          </div>
-          {action}
+    <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-900">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+            {eyebrow}
+          </p>
+          <h3 className="mt-1 text-sm font-semibold">{title}</h3>
         </div>
+        {action}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[520px] text-left text-sm">{children}</table>
@@ -254,12 +297,12 @@ function DataTable({
   );
 }
 
-const linkClassName =
-  "rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900";
+const ghostButtonClassName =
+  "rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-900";
 
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
+    <th className="border-b border-zinc-100 bg-zinc-50/80 px-5 py-3 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-900 dark:bg-zinc-900/50">
       {children}
     </th>
   );
@@ -269,27 +312,35 @@ function Td({
   align = "left",
   children,
   emphasis = false,
+  muted = false,
 }: {
   align?: "left" | "right";
   children: React.ReactNode;
   emphasis?: boolean;
+  muted?: boolean;
 }) {
   return (
     <td
-      className={`border-b border-zinc-100 px-4 py-3 text-zinc-700 dark:border-zinc-900 dark:text-zinc-300 ${
+      className={`border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-900 ${
         align === "right" ? "text-right" : "text-left"
-      } ${emphasis ? "font-medium text-zinc-950 dark:text-zinc-50" : ""}`}
+      } ${
+        emphasis
+          ? "font-medium text-zinc-950 dark:text-zinc-50"
+          : muted
+            ? "text-zinc-500"
+            : "text-zinc-700 dark:text-zinc-300"
+      }`}
     >
       {children}
     </td>
   );
 }
 
-function EmptyRow({ columns }: { columns: number }) {
+function EmptyRow({ columns, message }: { columns: number; message: string }) {
   return (
     <tr>
-      <td colSpan={columns} className="px-4 py-6 text-center text-sm text-zinc-500">
-        Empty
+      <td colSpan={columns} className="px-5 py-8 text-center text-sm text-zinc-500">
+        {message}
       </td>
     </tr>
   );
@@ -305,12 +356,12 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="border-b border-zinc-100 pb-3 dark:border-zinc-900">
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="border-b border-zinc-100 pb-4 dark:border-zinc-900">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
           {eyebrow}
         </p>
-        <h3 className="text-sm font-semibold">{title}</h3>
+        <h3 className="mt-1 text-sm font-semibold">{title}</h3>
       </div>
       <div className="pt-1">{children}</div>
     </div>
@@ -320,38 +371,14 @@ function Panel({
 function StatusPill({ passed }: { passed: boolean }) {
   return (
     <span
-      className={`shrink-0 rounded-md px-2 py-1 text-xs font-medium ${
+      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${
         passed
-          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-          : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
+          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
+          : "bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300"
       }`}
     >
       {passed ? "Pass" : "Breach"}
     </span>
-  );
-}
-
-function NextBuildPanel() {
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-        Next Build
-      </p>
-      <h3 className="mt-1 text-sm font-semibold">Ticker Intelligence</h3>
-      <div className="mt-4 space-y-3">
-        {[
-          "Instrument profile",
-          "Fundamental scoring",
-          "Valuation snapshot",
-          "Portfolio suitability",
-        ].map((item) => (
-          <div key={item} className="flex items-center gap-3 text-sm">
-            <span className="h-1.5 w-1.5 rounded-full bg-zinc-950 dark:bg-zinc-100" />
-            <span className="text-zinc-700 dark:text-zinc-300">{item}</span>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 

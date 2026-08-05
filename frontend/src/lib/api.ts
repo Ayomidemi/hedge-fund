@@ -26,7 +26,18 @@ async function postApi<TResponse, TPayload>(
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    let detail = `Request failed (${response.status})`;
+    try {
+      const body = (await response.json()) as { detail?: string | { msg?: string }[] };
+      if (typeof body.detail === "string") {
+        detail = body.detail;
+      } else if (Array.isArray(body.detail) && body.detail[0]?.msg) {
+        detail = body.detail[0].msg;
+      }
+    } catch {
+      // keep default message
+    }
+    throw new Error(detail);
   }
 
   return response.json() as Promise<TResponse>;
@@ -70,6 +81,7 @@ export type CashLedgerEntry = {
   amount: string;
   currency: string;
   entry_type: string;
+  platform: string;
   description: string | null;
   source_reference: string | null;
 };
@@ -141,11 +153,40 @@ export type OperatingCoreDashboard = {
   sector_exposure: ExposureBucket[];
 };
 
-export type CashLedgerEntryInput = {
+export type CashMovementInput = {
   amount: string;
-  entry_type: string;
+  platform: string;
   description?: string;
 };
+
+export type CashLedgerEntryInput = CashMovementInput & {
+  entry_type: string;
+};
+
+export function createCashDeposit(payload: CashMovementInput) {
+  return postApi<CashLedgerEntry, CashMovementInput>(
+    "/api/operating-core/cash-ledger/deposits",
+    payload,
+  );
+}
+
+export function createCashWithdrawal(payload: CashMovementInput) {
+  return postApi<CashLedgerEntry, CashMovementInput>(
+    "/api/operating-core/cash-ledger/withdrawals",
+    payload,
+  );
+}
+
+export function createCashAdjustment(payload: CashMovementInput & { description: string }) {
+  return postApi<CashLedgerEntry, CashMovementInput & { description: string }>(
+    "/api/operating-core/cash-ledger/adjustments",
+    payload,
+  );
+}
+
+export function createCashLedgerEntry(payload: CashLedgerEntryInput) {
+  return createCashDeposit(payload);
+}
 
 export type ManualTradeInput = {
   instrument: {
@@ -165,6 +206,112 @@ export type ManualTradeInput = {
   risk_notes?: string;
 };
 
+export type TickerMetricsInput = {
+  current_price?: string | null;
+  market_cap_billion?: string | null;
+  pe_ratio?: string | null;
+  forward_pe?: string | null;
+  revenue_growth_pct?: string | null;
+  earnings_growth_pct?: string | null;
+  free_cash_flow_yield_pct?: string | null;
+  net_margin_pct?: string | null;
+  debt_to_equity?: string | null;
+  price_vs_200d_pct?: string | null;
+  relative_strength_6m_pct?: string | null;
+  volatility_30d_pct?: string | null;
+};
+
+export type TickerAnalysisInput = {
+  instrument: {
+    ticker: string;
+    name: string;
+    asset_class: "equity" | "etf" | "bond" | "commodity" | "cash_equivalent" | "other";
+    exchange?: string;
+    currency: string;
+    sector?: string;
+    industry?: string;
+  };
+  metrics: TickerMetricsInput;
+  time_horizon: string;
+  investment_question?: string;
+  thesis: string;
+  bull_case?: string;
+  base_case?: string;
+  bear_case?: string;
+  thesis_breakers?: string;
+  risk_notes?: string;
+  source_reference?: string;
+};
+
+export type TickerScore = {
+  name: string;
+  score: string;
+  weight: string;
+  notes: string;
+};
+
+export type TickerMemo = {
+  id: string;
+  instrument: Instrument;
+  recommendation_id: string | null;
+  memo_date: string;
+  classification: string;
+  time_horizon: string | null;
+  executive_view: string;
+  thesis: string;
+  bull_case: string | null;
+  base_case: string | null;
+  bear_case: string | null;
+  thesis_breakers: string | null;
+  risk_assessment: string | null;
+  scores: Record<string, unknown>;
+  data_timestamp: string;
+  model_version_label: string | null;
+};
+
+export type TickerAnalysis = {
+  memo: TickerMemo;
+  action: string;
+  confidence_score: string;
+  conviction_score: string;
+  recommended_weight: string;
+  composite_score: string;
+  classification: string;
+  scorecard: TickerScore[];
+  evidence_summary: string;
+};
+
+export type TickerMemoSummary = {
+  id: string;
+  ticker: string;
+  name: string;
+  asset_class: string;
+  memo_date: string;
+  classification: string;
+  executive_view: string;
+  composite_score: string | null;
+  action: string | null;
+  confidence_score: string | null;
+};
+
+export type TickerPrefill = {
+  instrument: {
+    ticker: string;
+    name: string;
+    asset_class: TickerAnalysisInput["instrument"]["asset_class"];
+    exchange: string | null;
+    currency: string;
+    sector: string | null;
+    industry: string | null;
+  };
+  metrics: TickerMetricsInput;
+  provider: string;
+  source_reference: string;
+  data_timestamp: string;
+  source_warnings: string[];
+  raw_sources: Record<string, unknown>;
+};
+
 export function getOperatingCoreDashboard() {
   return fetchApi<OperatingCoreDashboard>("/api/operating-core/dashboard");
 }
@@ -173,13 +320,23 @@ export function getCashLedgerHistory() {
   return fetchApi<CashLedgerEntry[]>("/api/operating-core/cash-ledger/history");
 }
 
-export function createCashLedgerEntry(payload: CashLedgerEntryInput) {
-  return postApi<CashLedgerEntry, CashLedgerEntryInput>(
-    "/api/operating-core/cash-ledger",
-    payload,
+export function createManualTrade(payload: ManualTradeInput) {
+  return postApi<Trade, ManualTradeInput>("/api/operating-core/trades", payload);
+}
+
+export function getRecentTickerMemos() {
+  return fetchApi<TickerMemoSummary[]>("/api/ticker-intelligence/memos");
+}
+
+export function getTickerPrefill(ticker: string) {
+  return fetchApi<TickerPrefill>(
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill`,
   );
 }
 
-export function createManualTrade(payload: ManualTradeInput) {
-  return postApi<Trade, ManualTradeInput>("/api/operating-core/trades", payload);
+export function createTickerAnalysis(payload: TickerAnalysisInput) {
+  return postApi<TickerAnalysis, TickerAnalysisInput>(
+    "/api/ticker-intelligence/analyze",
+    payload,
+  );
 }

@@ -7,8 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.schemas.operating_core import (
+    CashAdjustmentCreate,
+    CashDepositCreate,
     CashLedgerEntryCreate,
     CashLedgerEntryResponse,
+    CashMovementCreate,
+    CashWithdrawalCreate,
     ExposureBucketResponse,
     InstrumentCreate,
     InstrumentResponse,
@@ -139,7 +143,10 @@ async def get_or_create_default_portfolio(session: AsyncSession) -> Portfolio:
         await session.commit()
         return portfolio
 
-    logger.info("default_portfolio_seed_started", extra={"name": DEFAULT_PORTFOLIO_NAME})
+    logger.info(
+        "default_portfolio_seed_started",
+        extra={"portfolio_name": DEFAULT_PORTFOLIO_NAME},
+    )
 
     portfolio = Portfolio(
         name=DEFAULT_PORTFOLIO_NAME,
@@ -157,6 +164,7 @@ async def get_or_create_default_portfolio(session: AsyncSession) -> Portfolio:
             amount=DEFAULT_INITIAL_CAPITAL,
             currency="USD",
             entry_type="initial_capital",
+            platform="manual",
             description="Initial Pease Capital funding.",
             source_reference="system_seed",
         )
@@ -172,17 +180,64 @@ async def get_or_create_default_portfolio(session: AsyncSession) -> Portfolio:
     return portfolio
 
 
+async def create_cash_deposit(
+    session: AsyncSession,
+    payload: CashDepositCreate | CashLedgerEntryCreate,
+) -> CashLedgerEntryResponse:
+    return await _create_cash_entry(
+        session,
+        payload,
+        entry_type="deposit",
+        amount=payload.amount,
+    )
+
+
+async def create_cash_withdrawal(
+    session: AsyncSession,
+    payload: CashWithdrawalCreate,
+) -> CashLedgerEntryResponse:
+    return await _create_cash_entry(
+        session,
+        payload,
+        entry_type="withdrawal",
+        amount=-abs(payload.amount),
+    )
+
+
+async def create_cash_adjustment(
+    session: AsyncSession,
+    payload: CashAdjustmentCreate,
+) -> CashLedgerEntryResponse:
+    return await _create_cash_entry(
+        session,
+        payload,
+        entry_type="adjustment",
+        amount=payload.amount,
+    )
+
+
 async def create_cash_entry(
     session: AsyncSession,
     payload: CashLedgerEntryCreate,
+) -> CashLedgerEntryResponse:
+    return await create_cash_deposit(session, payload)
+
+
+async def _create_cash_entry(
+    session: AsyncSession,
+    payload: CashMovementCreate,
+    *,
+    entry_type: str,
+    amount: Decimal,
 ) -> CashLedgerEntryResponse:
     portfolio = await get_or_create_default_portfolio(session)
     entry = CashLedgerEntry(
         portfolio_id=portfolio.id,
         entry_date=payload.entry_date,
-        amount=payload.amount,
+        amount=amount,
         currency=payload.currency,
-        entry_type=payload.entry_type,
+        entry_type=entry_type,
+        platform=payload.platform,
         description=payload.description,
         source_reference=payload.source_reference,
     )
@@ -196,6 +251,7 @@ async def create_cash_entry(
             "portfolio_id": str(portfolio.id),
             "entry_id": str(entry.id),
             "entry_type": entry.entry_type,
+            "platform": entry.platform,
             "amount": str(entry.amount),
             "currency": entry.currency,
         },
@@ -301,6 +357,7 @@ async def create_manual_trade(
             amount=cash_amount,
             currency=instrument.currency,
             entry_type=f"trade_{payload.side}",
+            platform=payload.broker_reference or "manual",
             description=f"{payload.side.upper()} {payload.quantity} {instrument.ticker} @ {payload.price}",
             source_reference="manual_trade",
         )

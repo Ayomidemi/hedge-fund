@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/hedge_fund"
     hf_supabase_database_url: str | None = None
 
+    hf_market_data_provider: str = "disabled"
+    hf_polygon_api_key: str | None = None
+    hf_polygon_base_url: str = "https://api.massive.com"
+
     @field_validator("debug", mode="before")
     @classmethod
     def parse_debug(cls, value: object) -> object:
@@ -101,6 +105,17 @@ class Settings(BaseSettings):
     @property
     def uses_database_pooler(self) -> bool:
         return self._uses_pooler_host(urlsplit(self.sqlalchemy_database_url).hostname)
+
+    @property
+    def market_data_provider(self) -> str:
+        return self.hf_market_data_provider.strip().lower()
+
+    @property
+    def polygon_base_url(self) -> str:
+        base_url = self.hf_polygon_base_url.strip().rstrip("/")
+        if base_url in {"https://massive.com", "http://massive.com"}:
+            return "https://api.massive.com"
+        return base_url
 
     @staticmethod
     def _uses_pooler_host(hostname: str | None) -> bool:

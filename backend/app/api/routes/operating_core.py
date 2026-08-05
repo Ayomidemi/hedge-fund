@@ -2,15 +2,20 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.operating_core import (
+    CashAdjustmentCreate,
+    CashDepositCreate,
     CashLedgerEntryCreate,
     CashLedgerEntryResponse,
+    CashWithdrawalCreate,
     ManualTradeCreate,
     PortfolioDashboardResponse,
     TradeResponse,
 )
 from app.db.session import get_session
 from app.services.portfolio.operating_core import (
-    create_cash_entry,
+    create_cash_adjustment,
+    create_cash_deposit,
+    create_cash_withdrawal,
     create_manual_trade,
     get_dashboard,
     list_cash_ledger_history,
@@ -35,7 +40,43 @@ async def add_cash_entry(
     payload: CashLedgerEntryCreate,
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_entry(session, payload)
+    return await create_cash_deposit(session, payload)
+
+
+@router.post(
+    "/cash-ledger/deposits",
+    response_model=CashLedgerEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_cash_deposit(
+    payload: CashDepositCreate,
+    session: AsyncSession = Depends(get_session),
+) -> CashLedgerEntryResponse:
+    return await create_cash_deposit(session, payload)
+
+
+@router.post(
+    "/cash-ledger/withdrawals",
+    response_model=CashLedgerEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_cash_withdrawal(
+    payload: CashWithdrawalCreate,
+    session: AsyncSession = Depends(get_session),
+) -> CashLedgerEntryResponse:
+    return await create_cash_withdrawal(session, payload)
+
+
+@router.post(
+    "/cash-ledger/adjustments",
+    response_model=CashLedgerEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_cash_adjustment(
+    payload: CashAdjustmentCreate,
+    session: AsyncSession = Depends(get_session),
+) -> CashLedgerEntryResponse:
+    return await create_cash_adjustment(session, payload)
 
 
 @router.get("/cash-ledger/history", response_model=list[CashLedgerEntryResponse])

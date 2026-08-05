@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 const navigationItems = [
   { label: "Fund Dashboard", href: "/" },
   { label: "Cash Ledger", href: "/cash-ledger" },
-  { label: "Ticker Analyst" },
+  { label: "Ticker Analyst", href: "/ticker-analyst" },
   { label: "Research Lab" },
   { label: "Strategy Pods" },
   { label: "Risk Centre" },
@@ -20,6 +20,11 @@ const navigationItems = [
 type AppShellProps = {
   apiStatus: "connected" | "offline";
   children: React.ReactNode;
+};
+
+const pageTitles: Record<string, string> = {
+  "Cash Ledger": "Cash Ledger History",
+  "Ticker Analyst": "Ticker Research Desk",
 };
 
 export function AppShell({ apiStatus, children }: AppShellProps) {
@@ -80,7 +85,7 @@ export function AppShell({ apiStatus, children }: AppShellProps) {
                 {activeLabel}
               </p>
               <h1 className="mt-1 text-2xl font-semibold tracking-normal">
-                {activeLabel === "Cash Ledger" ? "Cash Ledger History" : "Portfolio Control Room"}
+                {pageTitles[activeLabel] ?? "Portfolio Control Room"}
               </h1>
             </div>
             <div className="flex items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">

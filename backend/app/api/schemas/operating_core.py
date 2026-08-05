@@ -20,11 +20,11 @@ class InstrumentCreate(BaseModel):
         return value.strip().upper()
 
 
-class CashLedgerEntryCreate(BaseModel):
+class CashMovementCreate(BaseModel):
     entry_date: date = Field(default_factory=date.today)
     amount: Decimal
     currency: str = Field(default="USD", min_length=3, max_length=3)
-    entry_type: str = Field(default="deposit", min_length=1, max_length=64)
+    platform: str = Field(min_length=1, max_length=64)
     description: str | None = None
     source_reference: str | None = None
 
@@ -32,6 +32,52 @@ class CashLedgerEntryCreate(BaseModel):
     @classmethod
     def uppercase_currency(cls, value: str) -> str:
         return value.strip().upper()
+
+    @field_validator("platform")
+    @classmethod
+    def normalize_platform(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Platform is required.")
+        return cleaned
+
+
+class CashDepositCreate(CashMovementCreate):
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("Deposit amount must be greater than zero.")
+        return value
+
+
+class CashWithdrawalCreate(CashMovementCreate):
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("Withdrawal amount must be greater than zero.")
+        return value
+
+
+class CashAdjustmentCreate(CashMovementCreate):
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_non_zero(cls, value: Decimal) -> Decimal:
+        if value == 0:
+            raise ValueError("Adjustment amount cannot be zero.")
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def description_is_required(cls, value: str | None) -> str:
+        if value is None or not value.strip():
+            raise ValueError("Adjustments require a description explaining the correction.")
+        return value.strip()
+
+
+class CashLedgerEntryCreate(CashDepositCreate):
+    entry_type: str = Field(default="deposit", min_length=1, max_length=64)
 
 
 class ManualTradeCreate(BaseModel):
@@ -78,6 +124,7 @@ class CashLedgerEntryResponse(BaseModel):
     amount: Decimal
     currency: str
     entry_type: str
+    platform: str
     description: str | None
     source_reference: str | None
 

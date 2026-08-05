@@ -123,6 +123,7 @@ class CashLedgerEntry(Base, TimestampMixin):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     entry_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
     description: Mapped[str | None] = mapped_column(Text)
     source_reference: Mapped[str | None] = mapped_column(String(255))
 
