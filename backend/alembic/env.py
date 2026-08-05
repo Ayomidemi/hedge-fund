@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+from uuid import uuid4
 
 from alembic import context
 from sqlalchemy import pool
@@ -9,7 +10,7 @@ from app.core.config import settings
 from app.db.base import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.sqlalchemy_database_url)
+config.set_main_option("sqlalchemy.url", settings.sqlalchemy_database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -37,10 +38,18 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_migrations_online() -> None:
+    connect_args = {}
+    if settings.uses_database_pooler:
+        connect_args = {
+            "statement_cache_size": 0,
+            "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+        }
+
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
 
     async with connectable.connect() as connection:
@@ -55,4 +64,3 @@ else:
     import asyncio
 
     asyncio.run(run_migrations_online())
-

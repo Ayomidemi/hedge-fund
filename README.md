@@ -44,7 +44,7 @@ API docs: http://localhost:8000/docs
 
 Database health: http://localhost:8000/api/health/db
 
-For Supabase, set `DATABASE_URL` in `backend/.env` to the Supabase Postgres connection string. The backend accepts `postgresql://`, `postgres://`, or `postgresql+asyncpg://` and normalizes Postgres URLs for async SQLAlchemy.
+For Supabase, set `HF_SUPABASE_DATABASE_URL` in the root `.env` or `backend/.env` to the Supabase Postgres pooler connection string. The backend accepts `postgresql://`, `postgres://`, or `postgresql+asyncpg://`, normalizes Postgres URLs for async SQLAlchemy, and applies Supabase pooler-safe connection options.
 
 ### 3. Frontend
 
