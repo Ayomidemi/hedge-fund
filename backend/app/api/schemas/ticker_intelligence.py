@@ -48,6 +48,30 @@ class TickerPrefillResponse(BaseModel):
     raw_sources: dict = Field(default_factory=dict)
 
 
+class TickerAIDraftCreate(BaseModel):
+    instrument: InstrumentCreate
+    metrics: TickerMetricsInput = Field(default_factory=TickerMetricsInput)
+    time_horizon: str = Field(default="6-18 months", min_length=1, max_length=64)
+    source_reference: str | None = Field(default=None, max_length=512)
+    source_warnings: list[str] = Field(default_factory=list)
+    user_notes: str | None = None
+
+
+class TickerAIDraftResponse(BaseModel):
+    prompt_version: str
+    model: str
+    investment_question: str
+    analyst_questions: list[str]
+    thesis: str
+    bull_case: str
+    base_case: str
+    bear_case: str
+    thesis_breakers: str
+    risk_notes: str
+    missing_data_warnings: list[str]
+    confidence_notes: str
+
+
 class TickerScoreResponse(BaseModel):
     name: str
     score: Decimal

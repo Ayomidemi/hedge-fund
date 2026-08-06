@@ -4,9 +4,12 @@ import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
 import {
+  createTickerAIDraft,
   createTickerAnalysis,
   getTickerMemo,
   getTickerPrefill,
+  type TickerAIDraft,
+  type TickerAIDraftInput,
   type TickerAnalysis,
   type TickerAnalysisInput,
   type TickerMemo,
@@ -40,8 +43,10 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
   const [error, setError] = useState<string | null>(isUnavailable ? "Backend unavailable." : null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPrefilling, setIsPrefilling] = useState(false);
+  const [isDrafting, setIsDrafting] = useState(false);
   const [selectedMemo, setSelectedMemo] = useState<TickerMemo | null>(null);
   const [memoLoadingId, setMemoLoadingId] = useState<string | null>(null);
+  const [aiDraft, setAiDraft] = useState<TickerAIDraft | null>(null);
   const [prefillWarnings, setPrefillWarnings] = useState<string[]>([]);
   const formRef = useRef<HTMLFormElement>(null);
   const router = useRouter();
@@ -73,6 +78,38 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     }
   }
 
+  async function handleGenerateDraft() {
+    const form = formRef.current;
+    if (!form) {
+      return;
+    }
+
+    const formData = new FormData(form);
+    const ticker = textValue(formData, "ticker");
+    const name = textValue(formData, "name");
+    if (!ticker || !name) {
+      setError("Fetch or enter ticker details before generating a draft.");
+      return;
+    }
+
+    setIsDrafting(true);
+    setError(null);
+
+    try {
+      const draft = await createTickerAIDraft(buildAIDraftPayload(formData, prefillWarnings));
+      fillFormFromDraft(form, draft);
+      setAiDraft(draft);
+    } catch (draftError) {
+      const message =
+        draftError instanceof Error && draftError.message
+          ? draftError.message
+          : "AI draft was not available.";
+      setError(message);
+    } finally {
+      setIsDrafting(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -84,6 +121,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
       const payload = buildPayload(formData);
       const result = await createTickerAnalysis(payload);
       setAnalysis(result);
+      setAiDraft(null);
       form.reset();
       router.refresh();
     } catch {
@@ -191,6 +229,24 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
               </div>
             )}
 
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 px-3 py-3 dark:border-zinc-900 dark:bg-zinc-900">
+              <div>
+                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  Draft Workspace
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerateDraft}
+                disabled={isDrafting || isPrefilling || isSubmitting}
+                className={secondaryButtonClassName}
+              >
+                {isDrafting ? "Drafting..." : "Generate Draft"}
+              </button>
+            </div>
+
+            {aiDraft && <AIDraftPanel draft={aiDraft} />}
+
             <div className="grid gap-4 lg:grid-cols-2">
               <Field label="Investment Question">
                 <textarea name="investment_question" rows={3} className={inputClassName} />
@@ -238,6 +294,42 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
       </aside>
 
       <TickerMemoModal memo={selectedMemo} onClose={() => setSelectedMemo(null)} />
+    </div>
+  );
+}
+
+function AIDraftPanel({ draft }: { draft: TickerAIDraft }) {
+  return (
+    <div className="grid gap-3 rounded-md border border-zinc-100 p-3 dark:border-zinc-900 lg:grid-cols-2">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Analyst Questions
+        </p>
+        <div className="mt-2 space-y-2">
+          {draft.analyst_questions.map((question) => (
+            <p key={question} className="text-sm leading-5 text-zinc-700 dark:text-zinc-300">
+              {question}
+            </p>
+          ))}
+        </div>
+      </div>
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          AI Notes
+        </p>
+        <p className="mt-2 text-sm leading-5 text-zinc-700 dark:text-zinc-300">
+          {draft.confidence_notes}
+        </p>
+        {draft.missing_data_warnings.length > 0 && (
+          <div className="mt-3 space-y-1">
+            {draft.missing_data_warnings.map((warning) => (
+              <p key={warning} className="text-xs leading-5 text-amber-700 dark:text-amber-300">
+                {warning}
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -469,12 +561,6 @@ function TickerMemoModal({
               ))}
             </div>
           </section>
-
-          <div className="mt-5 flex flex-wrap gap-2 text-xs text-zinc-500">
-            <span>{memo.memo_date}</span>
-            <span>{memo.model_version_label ?? "Unversioned model"}</span>
-            <span>{formatLabel(memo.classification)}</span>
-          </div>
         </div>
       )}
     </Modal>
@@ -630,6 +716,47 @@ function buildPayload(formData: FormData): TickerAnalysisInput {
   };
 }
 
+function buildAIDraftPayload(
+  formData: FormData,
+  sourceWarnings: string[],
+): TickerAIDraftInput {
+  return {
+    instrument: {
+      ticker: textValue(formData, "ticker"),
+      name: textValue(formData, "name"),
+      asset_class: textValue(formData, "asset_class") as TickerAnalysisInput["instrument"]["asset_class"],
+      exchange: optionalTextValue(formData, "exchange"),
+      currency: "USD",
+      sector: optionalTextValue(formData, "sector"),
+      industry: optionalTextValue(formData, "industry"),
+    },
+    metrics: {
+      current_price: optionalNumberValue(formData, "current_price"),
+      market_cap_billion: optionalNumberValue(formData, "market_cap_billion"),
+      pe_ratio: optionalNumberValue(formData, "pe_ratio"),
+      forward_pe: optionalNumberValue(formData, "forward_pe"),
+      revenue_growth_pct: optionalNumberValue(formData, "revenue_growth_pct"),
+      earnings_growth_pct: optionalNumberValue(formData, "earnings_growth_pct"),
+      free_cash_flow_yield_pct: optionalNumberValue(formData, "free_cash_flow_yield_pct"),
+      net_margin_pct: optionalNumberValue(formData, "net_margin_pct"),
+      debt_to_equity: optionalNumberValue(formData, "debt_to_equity"),
+      price_vs_200d_pct: optionalNumberValue(formData, "price_vs_200d_pct"),
+      relative_strength_6m_pct: optionalNumberValue(formData, "relative_strength_6m_pct"),
+      volatility_30d_pct: optionalNumberValue(formData, "volatility_30d_pct"),
+    },
+    time_horizon: textValue(formData, "time_horizon") || "6-18 months",
+    source_reference: optionalTextValue(formData, "source_reference"),
+    source_warnings: sourceWarnings,
+    user_notes: [
+      optionalTextValue(formData, "investment_question"),
+      optionalTextValue(formData, "thesis"),
+      optionalTextValue(formData, "risk_notes"),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  };
+}
+
 function fillFormFromPrefill(form: HTMLFormElement, prefill: TickerPrefill) {
   const values: Record<string, string | undefined | null> = {
     ticker: prefill.instrument.ticker,
@@ -651,6 +778,22 @@ function fillFormFromPrefill(form: HTMLFormElement, prefill: TickerPrefill) {
     price_vs_200d_pct: prefill.metrics.price_vs_200d_pct,
     relative_strength_6m_pct: prefill.metrics.relative_strength_6m_pct,
     volatility_30d_pct: prefill.metrics.volatility_30d_pct,
+  };
+
+  Object.entries(values).forEach(([name, value]) => {
+    setFormValue(form, name, value);
+  });
+}
+
+function fillFormFromDraft(form: HTMLFormElement, draft: TickerAIDraft) {
+  const values = {
+    investment_question: draft.investment_question,
+    thesis: draft.thesis,
+    bull_case: draft.bull_case,
+    base_case: draft.base_case,
+    bear_case: draft.bear_case,
+    thesis_breakers: draft.thesis_breakers,
+    risk_notes: draft.risk_notes,
   };
 
   Object.entries(values).forEach(([name, value]) => {

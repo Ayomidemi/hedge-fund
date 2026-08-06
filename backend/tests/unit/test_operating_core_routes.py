@@ -31,6 +31,8 @@ class OperatingCoreRouteTests(TestCase):
 
         self.assertIn("/api/ticker-intelligence/analyze", paths)
         self.assertIn("post", paths["/api/ticker-intelligence/analyze"])
+        self.assertIn("/api/ticker-intelligence/ai/draft", paths)
+        self.assertIn("post", paths["/api/ticker-intelligence/ai/draft"])
         self.assertIn("/api/ticker-intelligence/memos", paths)
         self.assertIn("get", paths["/api/ticker-intelligence/memos"])
         self.assertIn("/api/ticker-intelligence/memos/{memo_id}", paths)

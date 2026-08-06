@@ -243,6 +243,30 @@ export type TickerAnalysisInput = {
   source_reference?: string;
 };
 
+export type TickerAIDraftInput = {
+  instrument: TickerAnalysisInput["instrument"];
+  metrics: TickerMetricsInput;
+  time_horizon: string;
+  source_reference?: string;
+  source_warnings: string[];
+  user_notes?: string;
+};
+
+export type TickerAIDraft = {
+  prompt_version: string;
+  model: string;
+  investment_question: string;
+  analyst_questions: string[];
+  thesis: string;
+  bull_case: string;
+  base_case: string;
+  bear_case: string;
+  thesis_breakers: string;
+  risk_notes: string;
+  missing_data_warnings: string[];
+  confidence_notes: string;
+};
+
 export type TickerScore = {
   name: string;
   score: string;
@@ -337,6 +361,13 @@ export function getTickerMemo(memoId: string) {
 export function getTickerPrefill(ticker: string) {
   return fetchApi<TickerPrefill>(
     `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill`,
+  );
+}
+
+export function createTickerAIDraft(payload: TickerAIDraftInput) {
+  return postApi<TickerAIDraft, TickerAIDraftInput>(
+    "/api/ticker-intelligence/ai/draft",
+    payload,
   );
 }
 

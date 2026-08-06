@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
 
+    hf_ai_provider: str = "disabled"
+    hf_openai_api_key: str | None = None
+    hf_openai_model: str = "gpt-5"
+    hf_openai_base_url: str = "https://api.openai.com"
+    hf_openai_reasoning_effort: str = "low"
+
     @field_validator("debug", mode="before")
     @classmethod
     def parse_debug(cls, value: object) -> object:
@@ -111,6 +117,14 @@ class Settings(BaseSettings):
     @property
     def market_data_provider(self) -> str:
         return self.hf_market_data_provider.strip().lower()
+
+    @property
+    def ai_provider(self) -> str:
+        return self.hf_ai_provider.strip().lower()
+
+    @property
+    def openai_base_url(self) -> str:
+        return self.hf_openai_base_url.strip().rstrip("/")
 
     @property
     def polygon_base_url(self) -> str:

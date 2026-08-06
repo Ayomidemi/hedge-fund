@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.ticker_intelligence import (
+    TickerAIDraftCreate,
+    TickerAIDraftResponse,
     TickerAnalysisCreate,
     TickerAnalysisResponse,
     TickerMemoResponse,
@@ -11,6 +13,10 @@ from app.api.schemas.ticker_intelligence import (
     TickerPrefillResponse,
 )
 from app.db.session import get_session
+from app.services.ticker_intelligence.ai_draft import (
+    AIDraftUnavailableError,
+    generate_ticker_ai_draft,
+)
 from app.services.ticker_intelligence.analysis import (
     analyze_ticker,
     get_ticker_memo,
@@ -35,6 +41,17 @@ async def create_ticker_analysis(
     session: AsyncSession = Depends(get_session),
 ) -> TickerAnalysisResponse:
     return await analyze_ticker(session, payload)
+
+
+@router.post("/ai/draft", response_model=TickerAIDraftResponse)
+async def create_ticker_ai_draft(payload: TickerAIDraftCreate) -> TickerAIDraftResponse:
+    try:
+        return await generate_ticker_ai_draft(payload)
+    except AIDraftUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/memos", response_model=list[TickerMemoSummaryResponse])
