@@ -358,9 +358,11 @@ export function getTickerMemo(memoId: string) {
   );
 }
 
-export function getTickerPrefill(ticker: string) {
+export function getTickerPrefill(ticker: string, market?: string) {
+  const marketQuery =
+    market && market !== "auto" ? `?market=${encodeURIComponent(market)}` : "";
   return fetchApi<TickerPrefill>(
-    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill`,
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill${marketQuery}`,
   );
 }
 

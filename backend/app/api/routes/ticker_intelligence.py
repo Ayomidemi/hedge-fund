@@ -77,9 +77,12 @@ async def read_ticker_memo(
 
 
 @router.get("/{ticker}/prefill", response_model=TickerPrefillResponse)
-async def read_ticker_prefill(ticker: str) -> TickerPrefillResponse:
+async def read_ticker_prefill(
+    ticker: str,
+    market: str | None = Query(default=None, max_length=16),
+) -> TickerPrefillResponse:
     try:
-        return await prefill_ticker(ticker)
+        return await prefill_ticker(ticker, market_hint=market)
     except MarketDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

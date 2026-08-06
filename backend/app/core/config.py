@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     hf_market_data_provider: str = "disabled"
     hf_polygon_api_key: str | None = None
     hf_polygon_base_url: str = "https://api.massive.com"
+    hf_ngnmarket_api_key: str | None = None
+    hf_ngnmarket_base_url: str = "https://api.ngnmarket.com/v1"
+    hf_fmp_api_key: str | None = None
+    hf_fmp_base_url: str = "https://financialmodelingprep.com/api"
+    hf_tiingo_api_key: str | None = None
+    hf_tiingo_base_url: str = "https://api.tiingo.com"
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
 
@@ -132,6 +138,18 @@ class Settings(BaseSettings):
         if base_url in {"https://massive.com", "http://massive.com"}:
             return "https://api.massive.com"
         return base_url
+
+    @property
+    def ngnmarket_base_url(self) -> str:
+        return self.hf_ngnmarket_base_url.strip().rstrip("/")
+
+    @property
+    def fmp_base_url(self) -> str:
+        return self.hf_fmp_base_url.strip().rstrip("/")
+
+    @property
+    def tiingo_base_url(self) -> str:
+        return self.hf_tiingo_base_url.strip().rstrip("/")
 
     @staticmethod
     def _uses_pooler_host(hostname: str | None) -> bool:
