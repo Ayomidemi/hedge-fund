@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   backtests,
   datasets,
@@ -15,6 +15,10 @@ import {
   type LabSection,
 } from "@/components/research/research-lab-data";
 import { buttonPrimaryClassName, buttonSecondaryClassName } from "@/components/ui/form-styles";
+import {
+  getPredictiveModelComparison,
+  type ModelComparisonRow,
+} from "@/lib/api";
 
 const sections: LabSection[] = [
   "overview",
@@ -28,6 +32,27 @@ const sections: LabSection[] = [
 
 export function ResearchLab() {
   const [activeSection, setActiveSection] = useState<LabSection>("overview");
+  const [modelComparison, setModelComparison] = useState<ModelComparisonRow[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+
+    getPredictiveModelComparison()
+      .then((rows) => {
+        if (active) setModelComparison(rows);
+      })
+      .catch(() => {
+        if (active) setModelComparison([]);
+      })
+      .finally(() => {
+        if (active) setModelsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-6">
@@ -95,7 +120,9 @@ export function ResearchLab() {
           {activeSection === "features" && <FeaturesPanel />}
           {activeSection === "experiments" && <ExperimentsPanel />}
           {activeSection === "backtests" && <BacktestsPanel />}
-          {activeSection === "models" && <ModelsPanel />}
+          {activeSection === "models" && (
+            <ModelsPanel liveRows={modelComparison} loading={modelsLoading} />
+          )}
         </div>
       </div>
     </div>
@@ -280,33 +307,71 @@ function BacktestsPanel() {
   );
 }
 
-function ModelsPanel() {
+function ModelsPanel({
+  liveRows,
+  loading,
+}: {
+  liveRows: ModelComparisonRow[];
+  loading: boolean;
+}) {
+  const hasLiveRows = liveRows.length > 0;
+
   return (
     <div className="space-y-6">
       <Panel title="Model comparison" subtitle="Registry entries with validation progress">
-        <DataTable
-          headers={[
-            "Model",
-            "Version",
-            "Stage",
-            "Sharpe",
-            "OOS Sharpe",
-            "Validation",
-            "Confidence",
-          ]}
-          rows={models.map((item) => [
-            <div key={item.id}>
-              <p className="font-medium">{item.name}</p>
-              <p className="mt-0.5 text-xs text-zinc-500">{item.purpose}</p>
-            </div>,
-            item.version,
-            <StatusBadge key={`${item.id}-stage`} label={item.stage} />,
-            item.sharpe,
-            item.oosSharpe,
-            `${item.validationsPassed}/${item.validationsTotal}`,
-            <StatusBadge key={`${item.id}-conf`} label={item.confidence} />,
-          ])}
-        />
+        {hasLiveRows ? (
+          <DataTable
+            headers={[
+              "Model",
+              "Horizon",
+              "Rows",
+              "Val MAE",
+              "Val R2",
+              "Direction",
+              "P05 Residual",
+            ]}
+            rows={liveRows.map((item) => [
+              <div key={item.model_version_id}>
+                <p className="font-medium">{item.model_name}</p>
+                <p className="mt-0.5 text-xs text-zinc-500">{item.model_version}</p>
+              </div>,
+              item.horizon_days ? `${item.horizon_days}D` : "-",
+              `${item.training_rows ?? 0}/${item.validation_rows ?? 0}`,
+              formatNumber(item.validation_mae),
+              formatNumber(item.validation_r2),
+              item.validation_directional_accuracy
+                ? `${(Number(item.validation_directional_accuracy) * 100).toFixed(1)}%`
+                : "-",
+              formatNumber(item.residual_p05_pct),
+            ])}
+          />
+        ) : loading ? (
+          <p className="text-sm text-zinc-500">Loading models</p>
+        ) : (
+          <DataTable
+            headers={[
+              "Model",
+              "Version",
+              "Stage",
+              "Sharpe",
+              "OOS Sharpe",
+              "Validation",
+              "Confidence",
+            ]}
+            rows={models.map((item) => [
+              <div key={item.id}>
+                <p className="font-medium">{item.name}</p>
+                <p className="mt-0.5 text-xs text-zinc-500">{item.purpose}</p>
+              </div>,
+              item.version,
+              <StatusBadge key={`${item.id}-stage`} label={item.stage} />,
+              item.sharpe,
+              item.oosSharpe,
+              `${item.validationsPassed}/${item.validationsTotal}`,
+              <StatusBadge key={`${item.id}-conf`} label={item.confidence} />,
+            ])}
+          />
+        )}
       </Panel>
 
       <Panel title="Validation requirements" subtitle="From model governance — all must pass before promotion">
@@ -445,4 +510,9 @@ function StatusBadge({ label }: { label: string }) {
       {formatted}
     </span>
   );
+}
+
+function formatNumber(value: string | null) {
+  if (value === null) return "-";
+  return Number(value).toFixed(3);
 }

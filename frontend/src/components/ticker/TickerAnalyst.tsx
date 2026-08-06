@@ -7,11 +7,13 @@ import {
   createTickerAIDraft,
   createTickerAnalysis,
   getTickerMemo,
+  getTickerMLReport,
   getTickerPrefill,
   type TickerAIDraft,
   type TickerAIDraftInput,
   type TickerAnalysis,
   type TickerAnalysisInput,
+  type TickerMLReport,
   type TickerMemo,
   type TickerMemoSummary,
   type TickerPrefill,
@@ -45,12 +47,18 @@ function weight(value: string) {
   return `${(Number(value) * 100).toFixed(2)}%`;
 }
 
+function ratioPercent(value: string | null | undefined) {
+  if (!value) return "-";
+  return `${(Number(value) * 100).toFixed(1)}%`;
+}
+
 export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [mode, setMode] = useState<"history" | "workflow">("history");
   const [step, setStep] = useState<WorkflowStep>("ticker");
   const [analysis, setAnalysis] = useState<TickerAnalysis | null>(null);
+  const [mlReport, setMlReport] = useState<TickerMLReport | null>(null);
   const [aiDraft, setAiDraft] = useState<TickerAIDraft | null>(null);
   const [baseAnalysisInput, setBaseAnalysisInput] =
     useState<TickerAnalysisInput | null>(null);
@@ -69,6 +77,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     setMode("workflow");
     setStep("ticker");
     setAnalysis(null);
+    setMlReport(null);
     setAiDraft(null);
     setBaseAnalysisInput(null);
     setPrefillData(null);
@@ -81,6 +90,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     setMode("history");
     setStep("ticker");
     setAnalysis(null);
+    setMlReport(null);
     setAiDraft(null);
     setBaseAnalysisInput(null);
     setPrefillData(null);
@@ -179,10 +189,15 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     setError(null);
 
     try {
-      const result = await createTickerAnalysis(
-        buildPayloadFromDraftStep(baseAnalysisInput, formData),
-      );
+      const payload = buildPayloadFromDraftStep(baseAnalysisInput, formData);
+      const result = await createTickerAnalysis(payload);
       setAnalysis(result);
+      try {
+        const report = await getTickerMLReport(payload.instrument.ticker);
+        setMlReport(report);
+      } catch {
+        setMlReport(null);
+      }
       setStep("output");
       router.refresh();
     } catch {
@@ -302,7 +317,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
 
         {step === "output" && (
           <WorkflowPanel eyebrow="Step 4" title="Model Output">
-            <AnalysisPanel analysis={analysis} />
+            <AnalysisPanel analysis={analysis} mlReport={mlReport} />
             <WorkflowActions
               backLabel="Previous Analyses"
               nextLabel="New Analysis"
@@ -691,7 +706,13 @@ function AIDraftPanel({ draft }: { draft: TickerAIDraft }) {
   );
 }
 
-function AnalysisPanel({ analysis }: { analysis: TickerAnalysis | null }) {
+function AnalysisPanel({
+  analysis,
+  mlReport,
+}: {
+  analysis: TickerAnalysis | null;
+  mlReport: TickerMLReport | null;
+}) {
   if (!analysis) {
     return (
       <div className="rounded-lg border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-900">
@@ -756,6 +777,128 @@ function AnalysisPanel({ analysis }: { analysis: TickerAnalysis | null }) {
       <p className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
         {analysis.evidence_summary}
       </p>
+
+      <MLReportPanel report={mlReport} />
+    </div>
+  );
+}
+
+function MLReportPanel({ report }: { report: TickerMLReport | null }) {
+  if (!report) {
+    return (
+      <div className="rounded-lg border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-900">
+        <p className="text-sm text-zinc-500">ML report unavailable</p>
+      </div>
+    );
+  }
+
+  const prediction = report.prediction;
+  const portfolioFit = report.portfolio_fit;
+  const comparisonMetrics = report.comparative?.metrics.slice(0, 5) ?? [];
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+      <section className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Comparative
+        </p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left text-xs">
+            <thead>
+              <tr>
+                <Th>Metric</Th>
+                <Th>Value</Th>
+                <Th>History</Th>
+                <Th>Sector</Th>
+                <Th>Universe</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparisonMetrics.map((metric) => (
+                <tr key={metric.metric}>
+                  <Td>{formatFeature(metric.metric)}</Td>
+                  <Td>{score(metric.value)}</Td>
+                  <Td>{score(metric.history_percentile)}</Td>
+                  <Td>{score(metric.sector_percentile)}</Td>
+                  <Td>{score(metric.universe_percentile)}</Td>
+                </tr>
+              ))}
+              {comparisonMetrics.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-5 py-6 text-center text-zinc-500">
+                    No comparative ranks
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Predictive
+        </p>
+        {prediction ? (
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <MetricCard label="Expected relative" value={`${score(prediction.expected_relative_return_pct)}%`} />
+            <MetricCard label="Downside p05" value={`${score(prediction.downside_p05_relative_return_pct)}%`} />
+            <MetricCard label="Outperform prob." value={ratioPercent(prediction.probability_outperform)} />
+            <MetricCard label="ML confidence" value={`${score(prediction.confidence_score)}%`} />
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-zinc-500">Prediction pending</p>
+        )}
+
+        {portfolioFit && (
+          <div className="mt-4 rounded-lg bg-zinc-50 p-3 dark:bg-zinc-900">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium">
+                {portfolioFit.improves_portfolio ? "Improves portfolio" : "Does not improve portfolio"}
+              </p>
+              <span className="font-mono text-sm">
+                {score(portfolioFit.portfolio_fit_score)}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 text-xs text-zinc-500 sm:grid-cols-3">
+              <span>Current {score(portfolioFit.current_position_weight)}%</span>
+              <span>Pro forma {score(portfolioFit.pro_forma_weight)}%</span>
+              <span>Sector {score(portfolioFit.sector_exposure_after)}%</span>
+            </div>
+          </div>
+        )}
+
+        {prediction?.drivers && prediction.drivers.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {prediction.drivers.map((driver) => (
+              <div
+                key={driver.feature}
+                className="flex items-center justify-between gap-3 text-xs text-zinc-500"
+              >
+                <span>{formatFeature(driver.feature)}</span>
+                <span className="font-mono">{driver.contribution_pct.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {report.warnings.length > 0 && (
+        <div className="xl:col-span-2">
+          <WarningNotice warnings={report.warnings} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-100 bg-zinc-50 px-3 py-2.5 dark:border-zinc-900 dark:bg-zinc-900">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+        {label}
+      </p>
+      <p className="mt-1 text-lg font-semibold">{value}</p>
     </div>
   );
 }
@@ -1203,6 +1346,13 @@ function formatLabel(value: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function formatFeature(value: string) {
+  return value
+    .replace(/_pct$/, " %")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 const inputClassName =

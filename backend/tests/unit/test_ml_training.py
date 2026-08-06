@@ -4,6 +4,8 @@ from unittest import TestCase
 
 from app.services.ticker_intelligence.ml_training import (
     PriceBarPoint,
+    compute_portfolio_fit_score,
+    compute_price_feature_snapshots,
     compute_forward_labels,
 )
 
@@ -54,3 +56,40 @@ class MLTrainingTests(TestCase):
         labels = compute_forward_labels(bars, horizons=[3])
 
         self.assertEqual(labels, [])
+
+    def test_compute_price_feature_snapshots_uses_only_available_history(self) -> None:
+        start_date = date(2025, 1, 1)
+        bars = [
+            PriceBarPoint(
+                start_date + timedelta(days=index),
+                Decimal("100") + Decimal(index) / Decimal("10"),
+            )
+            for index in range(230)
+        ]
+
+        snapshots = compute_price_feature_snapshots(bars)
+
+        self.assertEqual(snapshots[0]["as_of_date"], start_date + timedelta(days=200))
+        self.assertIn("return_21d_pct", snapshots[0]["features"])
+        self.assertIn("realized_volatility_63d_pct", snapshots[0]["features"])
+        self.assertEqual(snapshots[0]["quality_score"], Decimal("100.00"))
+
+    def test_portfolio_fit_score_penalizes_downside_and_concentration(self) -> None:
+        strong_fit = compute_portfolio_fit_score(
+            expected_relative_return_pct=Decimal("5"),
+            downside_p05_relative_return_pct=Decimal("-8"),
+            confidence_score=Decimal("70"),
+            concentration_after_pct=Decimal("8"),
+            sector_exposure_after_pct=Decimal("20"),
+        )
+        weak_fit = compute_portfolio_fit_score(
+            expected_relative_return_pct=Decimal("-2"),
+            downside_p05_relative_return_pct=Decimal("-25"),
+            confidence_score=Decimal("40"),
+            concentration_after_pct=Decimal("30"),
+            sector_exposure_after_pct=Decimal("45"),
+        )
+
+        self.assertGreater(strong_fit, weak_fit)
+        self.assertGreaterEqual(strong_fit, Decimal("60"))
+        self.assertLess(weak_fit, Decimal("50"))

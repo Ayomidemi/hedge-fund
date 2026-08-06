@@ -4,17 +4,25 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.ticker_intelligence import (
+    PriceBackfillResponse,
+    PriceFeatureBuildCreate,
+    PriceFeatureBuildResponse,
+    ModelComparisonRowResponse,
+    PredictiveModelPredictCreate,
+    PredictiveModelPredictionResponse,
+    PredictiveModelTrainCreate,
+    PredictiveModelTrainResponse,
     TickerAIDraftCreate,
     TickerAIDraftResponse,
     TickerAnalysisCreate,
     TickerAnalysisResponse,
     TickerDatasetRowResponse,
+    TickerMLReportResponse,
     TickerMemoResponse,
     TickerMemoSummaryResponse,
     TickerPrefillResponse,
     TrainingLabelGenerateCreate,
     TrainingLabelResponse,
-    PriceBackfillResponse,
     YahooPriceBackfillCreate,
 )
 from app.db.session import get_session
@@ -35,8 +43,13 @@ from app.services.ticker_intelligence.market_data import (
 from app.services.ticker_intelligence.ml_training import (
     MLTrainingDataUnavailableError,
     backfill_yahoo_prices,
+    build_price_feature_snapshots,
+    build_ticker_ml_report,
     generate_training_labels,
+    list_predictive_model_comparison,
     list_ticker_dataset_rows,
+    predict_with_latest_model,
+    train_predictive_model,
 )
 
 router = APIRouter(prefix="/ticker-intelligence")
@@ -91,6 +104,65 @@ async def create_training_labels(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+
+@router.post("/ml/features/price", response_model=PriceFeatureBuildResponse)
+async def create_price_feature_snapshots(
+    payload: PriceFeatureBuildCreate,
+    session: AsyncSession = Depends(get_session),
+) -> PriceFeatureBuildResponse:
+    try:
+        return await build_price_feature_snapshots(session, payload)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/ml/train", response_model=PredictiveModelTrainResponse)
+async def create_predictive_model_training_run(
+    payload: PredictiveModelTrainCreate,
+    session: AsyncSession = Depends(get_session),
+) -> PredictiveModelTrainResponse:
+    try:
+        return await train_predictive_model(session, payload)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/ml/predict", response_model=PredictiveModelPredictionResponse)
+async def create_predictive_model_prediction(
+    payload: PredictiveModelPredictCreate,
+    session: AsyncSession = Depends(get_session),
+) -> PredictiveModelPredictionResponse:
+    try:
+        return await predict_with_latest_model(session, payload)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/ml/models", response_model=list[ModelComparisonRowResponse])
+async def read_predictive_model_comparison(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+) -> list[ModelComparisonRowResponse]:
+    return await list_predictive_model_comparison(session, limit=limit)
+
+
+@router.get("/ml/report/{ticker}", response_model=TickerMLReportResponse)
+async def read_ticker_ml_report(
+    ticker: str,
+    horizon_days: int = Query(default=63, ge=1, le=756),
+    session: AsyncSession = Depends(get_session),
+) -> TickerMLReportResponse:
+    return await build_ticker_ml_report(session, ticker, horizon_days=horizon_days)
 
 
 @router.get("/ml/dataset/{ticker}", response_model=list[TickerDatasetRowResponse])

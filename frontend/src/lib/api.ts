@@ -336,6 +336,77 @@ export type TickerPrefill = {
   raw_sources: Record<string, unknown>;
 };
 
+export type ComparativeMetric = {
+  metric: string;
+  value: string;
+  history_percentile: string | null;
+  sector_percentile: string | null;
+  universe_percentile: string | null;
+  peer_count: number;
+};
+
+export type TickerComparative = {
+  ticker: string;
+  as_of_date: string;
+  feature_version: string;
+  sector: string | null;
+  metrics: ComparativeMetric[];
+};
+
+export type TickerPrediction = {
+  ticker: string;
+  model_version_id: string;
+  model_version: string;
+  as_of_date: string;
+  horizon_days: number;
+  expected_relative_return_pct: string;
+  downside_p05_relative_return_pct: string;
+  probability_outperform: string;
+  confidence_score: string;
+  feature_version: string;
+  drivers: {
+    feature: string;
+    value_zscore: number;
+    contribution_pct: number;
+  }[];
+};
+
+export type PortfolioFit = {
+  ticker: string;
+  portfolio_fit_score: string;
+  improves_portfolio: boolean;
+  current_position_weight: string;
+  proposed_weight: string;
+  pro_forma_weight: string;
+  concentration_after: string;
+  sector_exposure_after: string;
+  notes: string[];
+};
+
+export type ModelComparisonRow = {
+  model_version_id: string;
+  model_name: string;
+  model_version: string;
+  horizon_days: number | null;
+  feature_version: string | null;
+  training_rows: number | null;
+  validation_rows: number | null;
+  validation_mae: string | null;
+  validation_r2: string | null;
+  validation_directional_accuracy: string | null;
+  residual_p05_pct: string | null;
+  created_at: string;
+};
+
+export type TickerMLReport = {
+  ticker: string;
+  comparative: TickerComparative | null;
+  prediction: TickerPrediction | null;
+  portfolio_fit: PortfolioFit | null;
+  model_comparison: ModelComparisonRow[];
+  warnings: string[];
+};
+
 export function getOperatingCoreDashboard() {
   return fetchApi<OperatingCoreDashboard>("/api/operating-core/dashboard");
 }
@@ -378,4 +449,14 @@ export function createTickerAnalysis(payload: TickerAnalysisInput) {
     "/api/ticker-intelligence/analyze",
     payload,
   );
+}
+
+export function getTickerMLReport(ticker: string, horizonDays = 63) {
+  return fetchApi<TickerMLReport>(
+    `/api/ticker-intelligence/ml/report/${encodeURIComponent(ticker)}?horizon_days=${horizonDays}`,
+  );
+}
+
+export function getPredictiveModelComparison() {
+  return fetchApi<ModelComparisonRow[]>("/api/ticker-intelligence/ml/models");
 }

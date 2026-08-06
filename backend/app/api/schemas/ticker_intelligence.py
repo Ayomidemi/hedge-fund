@@ -171,3 +171,113 @@ class TickerDatasetRowResponse(BaseModel):
     feature_version: str
     features: dict
     labels: list[dict] = Field(default_factory=list)
+
+
+class PriceFeatureBuildCreate(BaseModel):
+    tickers: list[str] = Field(min_length=1, max_length=500)
+    source: str = Field(default="yahoo", max_length=64)
+    feature_version: str = Field(default="price_features_v1", max_length=64)
+
+
+class PriceFeatureBuildResponse(BaseModel):
+    feature_version: str
+    source: str
+    tickers: list[str]
+    snapshots_saved: int
+    first_as_of_date: date | None
+    last_as_of_date: date | None
+
+
+class PredictiveModelTrainCreate(BaseModel):
+    tickers: list[str] = Field(min_length=1, max_length=500)
+    horizon_days: int = Field(default=63, ge=1, le=756)
+    benchmark_ticker: str | None = Field(default="SPY", max_length=32)
+    feature_version: str = Field(default="price_features_v1", max_length=64)
+    label_source: str = Field(default="yahoo", max_length=64)
+    ridge_alpha: Decimal = Field(default=Decimal("1.0"), ge=0)
+
+
+class PredictiveModelTrainResponse(BaseModel):
+    model_version_id: UUID
+    model_name: str
+    model_version: str
+    horizon_days: int
+    feature_version: str
+    training_rows: int
+    validation_rows: int
+    feature_names: list[str]
+    metrics: dict
+
+
+class PredictiveModelPredictCreate(BaseModel):
+    ticker: str = Field(min_length=1, max_length=32)
+    horizon_days: int = Field(default=63, ge=1, le=756)
+    model_version_id: UUID | None = None
+    feature_version: str = Field(default="price_features_v1", max_length=64)
+
+
+class PredictiveModelPredictionResponse(BaseModel):
+    ticker: str
+    model_version_id: UUID
+    model_version: str
+    as_of_date: date
+    horizon_days: int
+    expected_relative_return_pct: Decimal
+    downside_p05_relative_return_pct: Decimal
+    probability_outperform: Decimal
+    confidence_score: Decimal
+    feature_version: str
+    drivers: list[dict]
+
+
+class ComparativeMetricResponse(BaseModel):
+    metric: str
+    value: Decimal
+    history_percentile: Decimal | None = None
+    sector_percentile: Decimal | None = None
+    universe_percentile: Decimal | None = None
+    peer_count: int = 0
+
+
+class TickerComparativeResponse(BaseModel):
+    ticker: str
+    as_of_date: date
+    feature_version: str
+    sector: str | None = None
+    metrics: list[ComparativeMetricResponse]
+
+
+class PortfolioFitResponse(BaseModel):
+    ticker: str
+    portfolio_fit_score: Decimal
+    improves_portfolio: bool
+    current_position_weight: Decimal
+    proposed_weight: Decimal
+    pro_forma_weight: Decimal
+    concentration_after: Decimal
+    sector_exposure_after: Decimal
+    notes: list[str]
+
+
+class ModelComparisonRowResponse(BaseModel):
+    model_version_id: UUID
+    model_name: str
+    model_version: str
+    horizon_days: int | None = None
+    feature_version: str | None = None
+    training_rows: int | None = None
+    validation_rows: int | None = None
+    validation_mae: Decimal | None = None
+    validation_r2: Decimal | None = None
+    validation_directional_accuracy: Decimal | None = None
+    residual_p05_pct: Decimal | None = None
+    created_at: datetime
+
+
+class TickerMLReportResponse(BaseModel):
+    ticker: str
+    comparative: TickerComparativeResponse | None = None
+    prediction: PredictiveModelPredictionResponse | None = None
+    portfolio_fit: PortfolioFitResponse | None = None
+    model_comparison: list[ModelComparisonRowResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
