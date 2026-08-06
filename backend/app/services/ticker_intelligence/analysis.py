@@ -24,6 +24,7 @@ from app.models import (
     TickerMemo,
 )
 from app.services.portfolio.operating_core import upsert_instrument
+from app.services.ticker_intelligence.ml_training import save_ticker_feature_snapshot
 from app.services.ticker_intelligence.scoring import score_payload, score_ticker
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ async def analyze_ticker(
 ) -> TickerAnalysisResponse:
     instrument = await upsert_instrument(session, payload.instrument)
     scorecard = score_ticker(payload.metrics, instrument.asset_class)
+    score_data = score_payload(scorecard)
+    await save_ticker_feature_snapshot(session, instrument, payload, score_data)
     model_version = await _get_or_create_model_version(session)
 
     recommendation = ModelRecommendation(
@@ -50,7 +53,7 @@ async def analyze_ticker(
         recommended_weight=scorecard.recommended_weight,
         time_horizon=payload.time_horizon,
         thesis=payload.thesis,
-        scores=score_payload(scorecard),
+        scores=score_data,
         evidence_summary=scorecard.evidence_summary,
     )
     session.add(recommendation)
@@ -82,7 +85,7 @@ async def analyze_ticker(
         bear_case=payload.bear_case,
         thesis_breakers=payload.thesis_breakers,
         risk_assessment=payload.risk_notes,
-        scores=score_payload(scorecard),
+        scores=score_data,
         data_timestamp=payload.data_timestamp,
         model_version_label=f"{TICKER_MODEL_NAME} {TICKER_MODEL_VERSION}",
     )

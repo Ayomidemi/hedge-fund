@@ -6,3 +6,4 @@ asyncpg>=0.30.0
 alembic>=1.14.0
 python-dotenv>=1.0.1
 httpx>=0.28.0
+yfinance>=0.2.54

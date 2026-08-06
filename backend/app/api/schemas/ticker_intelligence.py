@@ -128,3 +128,46 @@ class TickerMemoSummaryResponse(BaseModel):
     @classmethod
     def uppercase_ticker(cls, value: str) -> str:
         return value.upper()
+
+
+class YahooPriceBackfillCreate(BaseModel):
+    ticker: str = Field(min_length=1, max_length=32)
+    name: str | None = Field(default=None, max_length=255)
+    asset_class: str = Field(default="equity", max_length=32)
+    exchange: str | None = Field(default=None, max_length=64)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    yahoo_symbol: str | None = Field(default=None, max_length=64)
+    start_date: date
+    end_date: date = Field(default_factory=date.today)
+
+
+class PriceBackfillResponse(BaseModel):
+    ticker: str
+    source: str
+    start_date: date
+    end_date: date
+    rows_fetched: int
+    rows_saved: int
+
+
+class TrainingLabelGenerateCreate(BaseModel):
+    ticker: str = Field(min_length=1, max_length=32)
+    benchmark_ticker: str | None = Field(default="SPY", max_length=32)
+    horizons: list[int] = Field(default_factory=lambda: [21, 63, 126])
+    source: str = Field(default="yahoo", max_length=64)
+
+
+class TrainingLabelResponse(BaseModel):
+    ticker: str
+    benchmark_ticker: str | None
+    horizons: list[int]
+    labels_generated: int
+    first_as_of_date: date | None
+    last_as_of_date: date | None
+
+
+class TickerDatasetRowResponse(BaseModel):
+    as_of_date: date
+    feature_version: str
+    features: dict
+    labels: list[dict] = Field(default_factory=list)

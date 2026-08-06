@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, String, Text, func
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -97,6 +97,12 @@ class Instrument(Base, TimestampMixin):
     trades: Mapped[list["Trade"]] = relationship(back_populates="instrument")
     recommendations: Mapped[list["ModelRecommendation"]] = relationship(back_populates="instrument")
     ticker_memos: Mapped[list["TickerMemo"]] = relationship(back_populates="instrument")
+    market_price_bars: Mapped[list["MarketPriceBar"]] = relationship(back_populates="instrument")
+    feature_snapshots: Mapped[list["TickerFeatureSnapshot"]] = relationship(back_populates="instrument")
+    training_labels: Mapped[list["TickerTrainingLabel"]] = relationship(
+        back_populates="instrument",
+        foreign_keys="TickerTrainingLabel.instrument_id",
+    )
 
 
 class Portfolio(Base, TimestampMixin):
@@ -300,3 +306,85 @@ class HumanModelDecision(Base, TimestampMixin):
     outcome_notes: Mapped[str | None] = mapped_column(Text)
 
     recommendation: Mapped["ModelRecommendation"] = relationship(back_populates="decisions")
+
+
+class MarketPriceBar(Base, TimestampMixin):
+    __tablename__ = "market_price_bars"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    bar_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    open_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    high_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    low_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    close_price: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    adjusted_close_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    instrument: Mapped["Instrument"] = relationship(back_populates="market_price_bars")
+
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "bar_date", "source", name="uq_market_price_bars_instrument_date_source"),
+        Index("ix_market_price_bars_instrument_date", "instrument_id", "bar_date"),
+    )
+
+
+class TickerFeatureSnapshot(Base, TimestampMixin):
+    __tablename__ = "ticker_feature_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_reference: Mapped[str | None] = mapped_column(String(512))
+    features: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    quality_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+
+    instrument: Mapped["Instrument"] = relationship(back_populates="feature_snapshots")
+
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "as_of_date", "feature_version", name="uq_ticker_feature_snapshots_instrument_date_version"),
+        Index("ix_ticker_feature_snapshots_instrument_date", "instrument_id", "as_of_date"),
+    )
+
+
+class TickerTrainingLabel(Base, TimestampMixin):
+    __tablename__ = "ticker_training_labels"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    benchmark_instrument_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("instruments.id"), index=True)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    forward_return_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    benchmark_forward_return_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    relative_return_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    max_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    realized_volatility_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    label_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    instrument: Mapped["Instrument"] = relationship(
+        back_populates="training_labels",
+        foreign_keys=[instrument_id],
+    )
+    benchmark_instrument: Mapped["Instrument | None"] = relationship(
+        foreign_keys=[benchmark_instrument_id],
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id",
+            "benchmark_instrument_id",
+            "as_of_date",
+            "horizon_days",
+            "label_version",
+            "source",
+            name="uq_ticker_training_labels_identity",
+        ),
+        Index("ix_ticker_training_labels_instrument_date", "instrument_id", "as_of_date"),
+    )

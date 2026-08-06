@@ -8,9 +8,14 @@ from app.api.schemas.ticker_intelligence import (
     TickerAIDraftResponse,
     TickerAnalysisCreate,
     TickerAnalysisResponse,
+    TickerDatasetRowResponse,
     TickerMemoResponse,
     TickerMemoSummaryResponse,
     TickerPrefillResponse,
+    TrainingLabelGenerateCreate,
+    TrainingLabelResponse,
+    PriceBackfillResponse,
+    YahooPriceBackfillCreate,
 )
 from app.db.session import get_session
 from app.services.ticker_intelligence.ai_draft import (
@@ -26,6 +31,12 @@ from app.services.ticker_intelligence.analysis import (
 from app.services.ticker_intelligence.market_data import (
     MarketDataUnavailableError,
     prefill_ticker,
+)
+from app.services.ticker_intelligence.ml_training import (
+    MLTrainingDataUnavailableError,
+    backfill_yahoo_prices,
+    generate_training_labels,
+    list_ticker_dataset_rows,
 )
 
 router = APIRouter(prefix="/ticker-intelligence")
@@ -52,6 +63,43 @@ async def create_ticker_ai_draft(payload: TickerAIDraftCreate) -> TickerAIDraftR
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+
+@router.post("/ml/prices/yahoo/backfill", response_model=PriceBackfillResponse)
+async def create_yahoo_price_backfill(
+    payload: YahooPriceBackfillCreate,
+    session: AsyncSession = Depends(get_session),
+) -> PriceBackfillResponse:
+    try:
+        return await backfill_yahoo_prices(session, payload)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/ml/labels", response_model=TrainingLabelResponse)
+async def create_training_labels(
+    payload: TrainingLabelGenerateCreate,
+    session: AsyncSession = Depends(get_session),
+) -> TrainingLabelResponse:
+    try:
+        return await generate_training_labels(session, payload)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/ml/dataset/{ticker}", response_model=list[TickerDatasetRowResponse])
+async def read_ticker_dataset_rows(
+    ticker: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+) -> list[TickerDatasetRowResponse]:
+    return await list_ticker_dataset_rows(session, ticker, limit=limit)
 
 
 @router.get("/memos", response_model=list[TickerMemoSummaryResponse])
