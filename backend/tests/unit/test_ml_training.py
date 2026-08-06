@@ -7,7 +7,9 @@ from app.services.ticker_intelligence.ml_training import (
     compute_portfolio_fit_score,
     compute_price_feature_snapshots,
     compute_forward_labels,
+    _latest_fundamental_features_as_of,
 )
+from app.models import TickerFeatureSnapshot
 
 
 class MLTrainingTests(TestCase):
@@ -93,3 +95,25 @@ class MLTrainingTests(TestCase):
         self.assertGreater(strong_fit, weak_fit)
         self.assertGreaterEqual(strong_fit, Decimal("60"))
         self.assertLess(weak_fit, Decimal("50"))
+
+    def test_latest_fundamental_features_use_as_of_date(self) -> None:
+        snapshots = [
+            TickerFeatureSnapshot(
+                as_of_date=date(2026, 1, 1),
+                feature_version="ticker_features_v1",
+                features={"metrics": {"pe_ratio": "20", "net_margin_pct": "15"}},
+            ),
+            TickerFeatureSnapshot(
+                as_of_date=date(2026, 3, 1),
+                feature_version="ticker_features_v1",
+                features={"metrics": {"pe_ratio": "25", "net_margin_pct": "18"}},
+            ),
+        ]
+
+        features = _latest_fundamental_features_as_of(
+            snapshots,
+            as_of_date=date(2026, 2, 1),
+        )
+
+        self.assertEqual(features["pe_ratio"], "20")
+        self.assertEqual(features["net_margin_pct"], "15")

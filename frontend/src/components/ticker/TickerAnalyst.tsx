@@ -912,6 +912,45 @@ function TickerMemoModal({
 }) {
   const scoreData = parseMemoScores(memo);
   const modalTitle = memo ? `${memo.instrument.ticker} analysis` : "Ticker analysis";
+  const persistedReport = scoreData.ml_report;
+  const comparativeRows = persistedReport?.comparative?.metrics.length
+    ? persistedReport.comparative.metrics.slice(0, 4).map((metric) => [
+        formatFeature(metric.metric),
+        `History ${score(metric.history_percentile)}, sector ${score(metric.sector_percentile)}, universe ${score(metric.universe_percentile)}`,
+      ] as [string, string])
+    : ([
+        ["History", "No persisted comparative snapshot"],
+        ["Sector", "No persisted sector rank"],
+        ["Peers", "No persisted peer rank"],
+        ["Universe", "No persisted universe rank"],
+      ] as [string, string][]);
+  const predictiveRows: [string, string][] = persistedReport?.prediction
+    ? [
+        [
+          "Expected return",
+          `${score(persistedReport.prediction.expected_relative_return_pct)}% relative`,
+        ],
+        [
+          "Downside distribution",
+          `${score(persistedReport.prediction.downside_p05_relative_return_pct)}% p05`,
+        ],
+        [
+          "Model confidence",
+          `${score(persistedReport.prediction.confidence_score)}%`,
+        ],
+        [
+          "Portfolio improvement",
+          persistedReport.portfolio_fit?.improves_portfolio
+            ? `Yes, fit ${score(persistedReport.portfolio_fit.portfolio_fit_score)}`
+            : `No, fit ${score(persistedReport.portfolio_fit?.portfolio_fit_score)}`,
+        ],
+      ]
+    : [
+        ["Expected return", "No persisted prediction"],
+        ["Downside distribution", "No persisted downside estimate"],
+        ["Model confidence", score(scoreData.confidence_score)],
+        ["Portfolio improvement", "No persisted portfolio-fit result"],
+      ];
 
   return (
     <Modal
@@ -957,23 +996,19 @@ function TickerMemoModal({
             />
             <AnalysisLayer
               title="Comparative"
-              rows={[
-                ["History", "Price vs 200D and 6M trend are current proxies."],
-                ["Sector", "Sector-relative benchmark pending."],
-                ["Peers", "Peer set and percentile rank pending."],
-                ["Universe", "Cross-sectional rank pending."],
-              ]}
+              rows={comparativeRows}
             />
             <AnalysisLayer
               title="Predictive"
-              rows={[
-                ["Expected return", "Pending model training."],
-                ["Downside distribution", "Pending downside model."],
-                ["Model confidence", score(scoreData.confidence_score)],
-                ["Portfolio improvement", "Pending portfolio-fit model."],
-              ]}
+              rows={predictiveRows}
             />
           </section>
+
+          {persistedReport?.warnings && persistedReport.warnings.length > 0 && (
+            <div className="mt-5">
+              <WarningNotice warnings={persistedReport.warnings} />
+            </div>
+          )}
 
           <section className="mt-5 grid gap-4 lg:grid-cols-2">
             <MemoBlock title="Thesis" value={memo.thesis} />
@@ -1138,6 +1173,7 @@ type MemoScores = {
   composite_score?: string;
   confidence_score?: string;
   recommended_weight?: string;
+  ml_report?: TickerMLReport;
   scorecard: TickerAnalysis["scorecard"];
 };
 
@@ -1152,6 +1188,9 @@ function parseMemoScores(memo: TickerMemo | null): MemoScores {
     composite_score: stringScoreValue(memo.scores.composite_score),
     confidence_score: stringScoreValue(memo.scores.confidence_score),
     recommended_weight: stringScoreValue(memo.scores.recommended_weight),
+    ml_report: isTickerMLReport(memo.scores.ml_report)
+      ? memo.scores.ml_report
+      : undefined,
     scorecard,
   };
 }
@@ -1169,6 +1208,12 @@ function isTickerScore(value: unknown): value is TickerAnalysis["scorecard"][num
 
 function stringScoreValue(value: unknown) {
   return typeof value === "string" ? value : undefined;
+}
+
+function isTickerMLReport(value: unknown): value is TickerMLReport {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.ticker === "string" && Array.isArray(item.warnings);
 }
 
 function metricText(scores: MemoScores, metricName: string) {

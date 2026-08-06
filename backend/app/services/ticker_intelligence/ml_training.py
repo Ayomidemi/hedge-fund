@@ -30,8 +30,8 @@ from app.api.schemas.ticker_intelligence import (
     TrainingLabelResponse,
     YahooPriceBackfillCreate,
 )
-from app.models import CashLedgerEntry, Instrument, MarketPriceBar, ModelVersion, Position, TickerFeatureSnapshot, TickerTrainingLabel
-from app.services.portfolio.operating_core import get_or_create_default_portfolio, upsert_instrument
+from app.models import CashLedgerEntry, Instrument, MarketPriceBar, ModelVersion, Portfolio, Position, TickerFeatureSnapshot, TickerTrainingLabel
+from app.services.portfolio.operating_core import DEFAULT_PORTFOLIO_NAME, upsert_instrument
 
 logger = logging.getLogger(__name__)
 
@@ -157,14 +157,25 @@ async def generate_training_labels(
     benchmark_bars = None
     if payload.benchmark_ticker:
         benchmark = await _get_instrument(session, payload.benchmark_ticker)
-        if benchmark is not None:
-            benchmark_bars = await _load_price_points(session, benchmark.id, payload.source)
+        if benchmark is None:
+            raise MLTrainingDataUnavailableError(
+                f"Benchmark {payload.benchmark_ticker.upper()} is not in the instrument table."
+            )
+        benchmark_bars = await _load_price_points(session, benchmark.id, payload.source)
+        if not benchmark_bars:
+            raise MLTrainingDataUnavailableError(
+                f"No {payload.source} price bars found for benchmark {benchmark.ticker}."
+            )
 
     labels = compute_forward_labels(
         bars,
         horizons=payload.horizons,
         benchmark_bars=benchmark_bars,
     )
+    if benchmark is not None and not any(label.relative_return_pct is not None for label in labels):
+        raise MLTrainingDataUnavailableError(
+            f"No benchmark-aligned labels could be generated for {instrument.ticker} vs {benchmark.ticker}."
+        )
     rows_saved = await upsert_training_labels(
         session,
         instrument=instrument,
@@ -351,7 +362,7 @@ async def train_predictive_model(
         features=artifact,
         metrics=metrics,
         assumptions="Historical price behavior contains useful signal for future benchmark-relative returns.",
-        limitations="Price-only model. It does not yet include fundamentals, sector ranks, macro regime, liquidity, or transaction costs.",
+        limitations="Price-first model. It includes point-in-time fundamentals when enough aligned rows exist, but does not yet include macro regime, liquidity, or transaction costs.",
         approved_use="Research forecasting, model comparison, and analyst decision support.",
         prohibited_use="Automatic trading, unrestricted sizing, or production deployment without out-of-sample review.",
         shutdown_criteria="Disable if validation accuracy deteriorates, residuals become unstable, or model disagrees persistently with realized outcomes.",
@@ -605,7 +616,11 @@ async def build_portfolio_fit(
     if instrument is None:
         return None
 
-    portfolio = await get_or_create_default_portfolio(session)
+    portfolio = await session.scalar(
+        select(Portfolio).where(Portfolio.name == DEFAULT_PORTFOLIO_NAME)
+    )
+    if portfolio is None:
+        return None
     cash_balance = await session.scalar(
         select(func.sum(CashLedgerEntry.amount)).where(
             CashLedgerEntry.portfolio_id == portfolio.id
@@ -1168,12 +1183,7 @@ async def _load_model_dataset(
         for snapshot in snapshots
         if _has_model_features(snapshot.features)
     }
-    fundamentals_by_key = {
-        (snapshot.instrument_id, snapshot.as_of_date): _extract_fundamental_features(
-            snapshot.features
-        )
-        for snapshot in fundamental_snapshots
-    }
+    fundamentals_by_instrument = _group_fundamentals_by_instrument(fundamental_snapshots)
     label_query = (
         select(TickerTrainingLabel)
         .where(TickerTrainingLabel.instrument_id.in_(instrument_ids))
@@ -1200,9 +1210,13 @@ async def _load_model_dataset(
         snapshot = snapshot_by_key.get((label.instrument_id, label.as_of_date))
         if snapshot is None:
             continue
+        fundamental_features = _latest_fundamental_features_as_of(
+            fundamentals_by_instrument.get(label.instrument_id, []),
+            label.as_of_date,
+        )
         features = {
             **snapshot.features,
-            **fundamentals_by_key.get((label.instrument_id, label.as_of_date), {}),
+            **fundamental_features,
         }
         dataset.append(
             {
@@ -1273,6 +1287,31 @@ def _extract_fundamental_features(snapshot_features: dict) -> dict[str, str]:
         if _decimal(value) is not None:
             extracted[feature_name] = str(value)
     return extracted
+
+
+def _group_fundamentals_by_instrument(
+    snapshots: list[TickerFeatureSnapshot],
+) -> dict:
+    grouped: dict = {}
+    for snapshot in snapshots:
+        grouped.setdefault(snapshot.instrument_id, []).append(snapshot)
+    for instrument_snapshots in grouped.values():
+        instrument_snapshots.sort(key=lambda snapshot: snapshot.as_of_date)
+    return grouped
+
+
+def _latest_fundamental_features_as_of(
+    snapshots: list[TickerFeatureSnapshot],
+    as_of_date: date,
+) -> dict[str, str]:
+    latest = None
+    for snapshot in snapshots:
+        if snapshot.as_of_date > as_of_date:
+            break
+        latest = snapshot
+    if latest is None:
+        return {}
+    return _extract_fundamental_features(latest.features)
 
 
 def _model_feature_names(dataset: list[dict]) -> list[str]:

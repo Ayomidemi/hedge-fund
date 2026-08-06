@@ -24,7 +24,10 @@ from app.models import (
     TickerMemo,
 )
 from app.services.portfolio.operating_core import upsert_instrument
-from app.services.ticker_intelligence.ml_training import save_ticker_feature_snapshot
+from app.services.ticker_intelligence.ml_training import (
+    build_ticker_ml_report,
+    save_ticker_feature_snapshot,
+)
 from app.services.ticker_intelligence.scoring import score_payload, score_ticker
 
 logger = logging.getLogger(__name__)
@@ -41,6 +44,8 @@ async def analyze_ticker(
     scorecard = score_ticker(payload.metrics, instrument.asset_class)
     score_data = score_payload(scorecard)
     await save_ticker_feature_snapshot(session, instrument, payload, score_data)
+    await session.flush()
+    score_data["ml_report"] = await _ml_report_snapshot(session, instrument.ticker)
     model_version = await _get_or_create_model_version(session)
 
     recommendation = ModelRecommendation(
@@ -127,6 +132,27 @@ async def analyze_ticker(
         ],
         evidence_summary=scorecard.evidence_summary,
     )
+
+
+async def _ml_report_snapshot(session: AsyncSession, ticker: str) -> dict:
+    try:
+        report = await build_ticker_ml_report(session, ticker)
+        snapshot = report.model_dump(mode="json")
+        snapshot.pop("model_comparison", None)
+        return snapshot
+    except Exception as exc:  # pragma: no cover - defensive audit preservation
+        logger.warning(
+            "ticker_ml_report_snapshot_failed",
+            extra={"ticker": ticker, "error": str(exc)},
+            exc_info=True,
+        )
+        return {
+            "ticker": ticker,
+            "comparative": None,
+            "prediction": None,
+            "portfolio_fit": None,
+            "warnings": ["ML report could not be generated at save time."],
+        }
 
 
 async def list_recent_ticker_memos(
