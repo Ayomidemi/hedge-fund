@@ -407,6 +407,103 @@ export type TickerMLReport = {
   warnings: string[];
 };
 
+export type RegimeState = {
+  state_id: number;
+  label: string;
+  probability: string;
+  mean_return_pct: string;
+  volatility_pct: string;
+  observation_count: number;
+};
+
+export type RegimeModel = {
+  model_version_id: string;
+  model_name: string;
+  model_version: string;
+  ticker: string;
+  as_of_date: string;
+  current_regime: string;
+  confidence_score: string;
+  state_probabilities: RegimeState[];
+  transition_matrix: string[][];
+  warnings: string[];
+};
+
+export type BacktestPeriod = {
+  as_of_date: string;
+  selected_tickers: string[];
+  strategy_return_pct: string;
+  benchmark_return_pct: string | null;
+  alpha_pct: string | null;
+  turnover_pct: string;
+  cost_drag_pct: string;
+};
+
+export type BacktestRunInput = {
+  tickers: string[];
+  benchmark_ticker?: string | null;
+  horizon_days?: number;
+  feature_version?: string;
+  label_source?: string;
+  top_n?: number;
+  min_names_per_period?: number;
+  transaction_cost_bps?: string;
+};
+
+export type BacktestRun = {
+  backtest_id: string;
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+  horizon_days: number;
+  rebalance_count: number;
+  selected_count_avg: string;
+  cumulative_return_pct: string;
+  benchmark_return_pct: string | null;
+  alpha_pct: string | null;
+  annualized_return_pct: string;
+  annualized_volatility_pct: string;
+  sharpe_ratio: string;
+  max_drawdown_pct: string;
+  hit_rate_pct: string;
+  turnover_pct: string;
+  cost_drag_pct: string;
+  periods: BacktestPeriod[];
+  warnings: string[];
+};
+
+export type MonthlyReport = {
+  month: string;
+  generated_at: string;
+  portfolio_name: string;
+  nav: string;
+  cash_balance: string;
+  invested_value: string;
+  monthly_cash_flow: string;
+  monthly_trade_count: number;
+  monthly_memo_count: number;
+  risk_warning_count: number;
+  metrics: { label: string; value: string }[];
+  top_positions: {
+    ticker: string;
+    name: string;
+    asset_class: string;
+    market_value: string;
+    portfolio_weight_pct: string;
+    unrealized_pnl: string;
+  }[];
+  recent_memos: {
+    ticker: string;
+    memo_date: string;
+    classification: string;
+    action: string | null;
+    composite_score: string | null;
+  }[];
+  risk_warnings: string[];
+  model_registry_summary: { label: string; value: string }[];
+  commentary: string;
+};
+
 export function getOperatingCoreDashboard() {
   return fetchApi<OperatingCoreDashboard>("/api/operating-core/dashboard");
 }
@@ -459,4 +556,19 @@ export function getTickerMLReport(ticker: string, horizonDays = 63) {
 
 export function getPredictiveModelComparison() {
   return fetchApi<ModelComparisonRow[]>("/api/ticker-intelligence/ml/models");
+}
+
+export function getLatestRegimeModel() {
+  return fetchApi<RegimeModel>("/api/ticker-intelligence/ml/regime/latest");
+}
+
+export function createFactorBacktest(payload: BacktestRunInput) {
+  return postApi<BacktestRun, BacktestRunInput>(
+    "/api/ticker-intelligence/ml/backtests/factor",
+    payload,
+  );
+}
+
+export function getCurrentMonthlyReport() {
+  return fetchApi<MonthlyReport>("/api/reports/monthly");
 }

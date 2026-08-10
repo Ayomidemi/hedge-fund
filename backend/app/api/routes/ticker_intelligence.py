@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.ticker_intelligence import (
+    BacktestRunCreate,
+    BacktestRunResponse,
     PriceBackfillResponse,
     PriceFeatureBuildCreate,
     PriceFeatureBuildResponse,
@@ -12,6 +14,10 @@ from app.api.schemas.ticker_intelligence import (
     PredictiveModelPredictionResponse,
     PredictiveModelTrainCreate,
     PredictiveModelTrainResponse,
+    RegimeModelFitCreate,
+    RegimeModelResponse,
+    ResearchPipelineRunCreate,
+    ResearchPipelineRunResponse,
     TickerAIDraftCreate,
     TickerAIDraftResponse,
     TickerAnalysisCreate,
@@ -45,10 +51,14 @@ from app.services.ticker_intelligence.ml_training import (
     backfill_yahoo_prices,
     build_price_feature_snapshots,
     build_ticker_ml_report,
+    fit_market_regime_model,
     generate_training_labels,
+    get_latest_market_regime_model,
     list_predictive_model_comparison,
     list_ticker_dataset_rows,
     predict_with_latest_model,
+    run_factor_backtest,
+    run_research_data_pipeline,
     train_predictive_model,
 )
 
@@ -92,6 +102,14 @@ async def create_yahoo_price_backfill(
         ) from exc
 
 
+@router.post("/ml/pipeline/run", response_model=ResearchPipelineRunResponse)
+async def create_research_pipeline_run(
+    payload: ResearchPipelineRunCreate,
+    session: AsyncSession = Depends(get_session),
+) -> ResearchPipelineRunResponse:
+    return await run_research_data_pipeline(session, payload)
+
+
 @router.post("/ml/labels", response_model=TrainingLabelResponse)
 async def create_training_labels(
     payload: TrainingLabelGenerateCreate,
@@ -113,6 +131,47 @@ async def create_price_feature_snapshots(
 ) -> PriceFeatureBuildResponse:
     try:
         return await build_price_feature_snapshots(session, payload)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/ml/regime/hmm", response_model=RegimeModelResponse)
+async def create_hmm_regime_model(
+    payload: RegimeModelFitCreate,
+    session: AsyncSession = Depends(get_session),
+) -> RegimeModelResponse:
+    try:
+        return await fit_market_regime_model(session, payload)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/ml/regime/latest", response_model=RegimeModelResponse)
+async def read_latest_hmm_regime_model(
+    session: AsyncSession = Depends(get_session),
+) -> RegimeModelResponse:
+    try:
+        return await get_latest_market_regime_model(session)
+    except MLTrainingDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/ml/backtests/factor", response_model=BacktestRunResponse)
+async def create_factor_backtest(
+    payload: BacktestRunCreate,
+    session: AsyncSession = Depends(get_session),
+) -> BacktestRunResponse:
+    try:
+        return await run_factor_backtest(session, payload)
     except MLTrainingDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

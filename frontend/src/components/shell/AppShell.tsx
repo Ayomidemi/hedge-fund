@@ -13,7 +13,7 @@ const navigationItems = [
   { label: "Opportunity Queue" },
   { label: "Trade Journal" },
   { label: "Attribution" },
-  { label: "Reports" },
+  { label: "Reports", href: "/reports" },
   { label: "Administration" },
 ];
 
@@ -26,6 +26,7 @@ const pageTitles: Record<string, string> = {
   "Cash Ledger": "Cash Ledger History",
   "Ticker Analyst": "Ticker Research Desk",
   "Research Lab": "Research Lab",
+  Reports: "Monthly Reports",
 };
 
 export function AppShell({ apiStatus, children }: AppShellProps) {

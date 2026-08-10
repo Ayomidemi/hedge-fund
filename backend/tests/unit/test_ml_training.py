@@ -4,10 +4,13 @@ from unittest import TestCase
 
 from app.services.ticker_intelligence.ml_training import (
     PriceBarPoint,
+    compute_hmm_regime_artifact,
     compute_portfolio_fit_score,
     compute_price_feature_snapshots,
     compute_forward_labels,
+    _compound_return_pct,
     _latest_fundamental_features_as_of,
+    _max_drawdown_from_returns,
 )
 from app.models import TickerFeatureSnapshot
 
@@ -117,3 +120,35 @@ class MLTrainingTests(TestCase):
 
         self.assertEqual(features["pe_ratio"], "20")
         self.assertEqual(features["net_margin_pct"], "15")
+
+    def test_hmm_regime_artifact_returns_state_probabilities(self) -> None:
+        start_date = date(2025, 1, 1)
+        price = Decimal("100")
+        bars = []
+        for index in range(140):
+            drift = Decimal("0.004") if index < 70 else Decimal("-0.006")
+            shock = Decimal("0.002") if index % 5 == 0 else Decimal("-0.001")
+            price = price * (Decimal("1") + drift + shock)
+            bars.append(
+                PriceBarPoint(
+                    start_date + timedelta(days=index),
+                    price.quantize(Decimal("0.0001")),
+                )
+            )
+
+        artifact = compute_hmm_regime_artifact("SPY", bars, state_count=3)
+
+        self.assertEqual(artifact["ticker"], "SPY")
+        self.assertEqual(len(artifact["state_probabilities"]), 3)
+        self.assertIn(artifact["current_regime"], {"risk-on", "fragile", "stress"})
+        total_probability = sum(
+            Decimal(state["probability"])
+            for state in artifact["state_probabilities"]
+        )
+        self.assertAlmostEqual(float(total_probability), 1.0, places=3)
+
+    def test_backtest_return_helpers_compound_and_track_drawdown(self) -> None:
+        returns = [Decimal("10"), Decimal("-5"), Decimal("2")]
+
+        self.assertEqual(_compound_return_pct(returns), Decimal("6.5900"))
+        self.assertEqual(_max_drawdown_from_returns(returns), Decimal("-5.0000"))

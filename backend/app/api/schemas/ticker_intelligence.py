@@ -281,3 +281,103 @@ class TickerMLReportResponse(BaseModel):
     portfolio_fit: PortfolioFitResponse | None = None
     model_comparison: list[ModelComparisonRowResponse] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class PipelineStepResponse(BaseModel):
+    name: str
+    status: str
+    message: str
+    rows: int | None = None
+
+
+class ResearchPipelineRunCreate(BaseModel):
+    tickers: list[str] = Field(min_length=1, max_length=100)
+    benchmark_ticker: str = Field(default="SPY", min_length=1, max_length=32)
+    start_date: date
+    end_date: date = Field(default_factory=date.today)
+    horizon_days: int = Field(default=63, ge=1, le=756)
+    source: str = Field(default="yahoo", max_length=64)
+    train_model: bool = True
+
+
+class ResearchPipelineRunResponse(BaseModel):
+    tickers: list[str]
+    benchmark_ticker: str
+    start_date: date
+    end_date: date
+    horizon_days: int
+    steps: list[PipelineStepResponse]
+    model_version_id: UUID | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RegimeModelFitCreate(BaseModel):
+    ticker: str = Field(default="SPY", min_length=1, max_length=32)
+    source: str = Field(default="yahoo", max_length=64)
+    state_count: int = Field(default=4, ge=2, le=6)
+    lookback_days: int = Field(default=756, ge=60, le=5000)
+
+
+class RegimeStateResponse(BaseModel):
+    state_id: int
+    label: str
+    probability: Decimal
+    mean_return_pct: Decimal
+    volatility_pct: Decimal
+    observation_count: int
+
+
+class RegimeModelResponse(BaseModel):
+    model_version_id: UUID
+    model_name: str
+    model_version: str
+    ticker: str
+    as_of_date: date
+    current_regime: str
+    confidence_score: Decimal
+    state_probabilities: list[RegimeStateResponse]
+    transition_matrix: list[list[Decimal]]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BacktestRunCreate(BaseModel):
+    tickers: list[str] = Field(min_length=1, max_length=500)
+    benchmark_ticker: str | None = Field(default="SPY", max_length=32)
+    horizon_days: int = Field(default=63, ge=1, le=756)
+    feature_version: str = Field(default="price_features_v1", max_length=64)
+    label_source: str = Field(default="yahoo", max_length=64)
+    top_n: int = Field(default=5, ge=1, le=50)
+    min_names_per_period: int = Field(default=3, ge=1, le=100)
+    transaction_cost_bps: Decimal = Field(default=Decimal("10"), ge=0, le=250)
+
+
+class BacktestPeriodResponse(BaseModel):
+    as_of_date: date
+    selected_tickers: list[str]
+    strategy_return_pct: Decimal
+    benchmark_return_pct: Decimal | None = None
+    alpha_pct: Decimal | None = None
+    turnover_pct: Decimal
+    cost_drag_pct: Decimal
+
+
+class BacktestRunResponse(BaseModel):
+    backtest_id: UUID
+    name: str
+    start_date: date | None = None
+    end_date: date | None = None
+    horizon_days: int
+    rebalance_count: int
+    selected_count_avg: Decimal
+    cumulative_return_pct: Decimal
+    benchmark_return_pct: Decimal | None = None
+    alpha_pct: Decimal | None = None
+    annualized_return_pct: Decimal
+    annualized_volatility_pct: Decimal
+    sharpe_ratio: Decimal
+    max_drawdown_pct: Decimal
+    hit_rate_pct: Decimal
+    turnover_pct: Decimal
+    cost_drag_pct: Decimal
+    periods: list[BacktestPeriodResponse]
+    warnings: list[str] = Field(default_factory=list)

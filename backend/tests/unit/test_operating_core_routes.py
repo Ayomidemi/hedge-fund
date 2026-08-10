@@ -39,10 +39,18 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("get", paths["/api/ticker-intelligence/memos/{memo_id}"])
         self.assertIn("/api/ticker-intelligence/ml/prices/yahoo/backfill", paths)
         self.assertIn("post", paths["/api/ticker-intelligence/ml/prices/yahoo/backfill"])
+        self.assertIn("/api/ticker-intelligence/ml/pipeline/run", paths)
+        self.assertIn("post", paths["/api/ticker-intelligence/ml/pipeline/run"])
         self.assertIn("/api/ticker-intelligence/ml/labels", paths)
         self.assertIn("post", paths["/api/ticker-intelligence/ml/labels"])
         self.assertIn("/api/ticker-intelligence/ml/features/price", paths)
         self.assertIn("post", paths["/api/ticker-intelligence/ml/features/price"])
+        self.assertIn("/api/ticker-intelligence/ml/regime/hmm", paths)
+        self.assertIn("post", paths["/api/ticker-intelligence/ml/regime/hmm"])
+        self.assertIn("/api/ticker-intelligence/ml/regime/latest", paths)
+        self.assertIn("get", paths["/api/ticker-intelligence/ml/regime/latest"])
+        self.assertIn("/api/ticker-intelligence/ml/backtests/factor", paths)
+        self.assertIn("post", paths["/api/ticker-intelligence/ml/backtests/factor"])
         self.assertIn("/api/ticker-intelligence/ml/train", paths)
         self.assertIn("post", paths["/api/ticker-intelligence/ml/train"])
         self.assertIn("/api/ticker-intelligence/ml/predict", paths)
@@ -57,3 +65,9 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("get", paths["/api/ticker-intelligence/{ticker}/prefill"])
         self.assertIn("/api/ticker-intelligence/{ticker}/memos", paths)
         self.assertIn("get", paths["/api/ticker-intelligence/{ticker}/memos"])
+
+    def test_monthly_report_route_is_registered(self) -> None:
+        paths = app.openapi()["paths"]
+
+        self.assertIn("/api/reports/monthly", paths)
+        self.assertIn("get", paths["/api/reports/monthly"])

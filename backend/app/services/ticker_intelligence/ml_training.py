@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -12,6 +13,9 @@ from sqlalchemy.orm import selectinload
 
 from app.api.schemas.operating_core import InstrumentCreate
 from app.api.schemas.ticker_intelligence import (
+    BacktestPeriodResponse,
+    BacktestRunCreate,
+    BacktestRunResponse,
     ComparativeMetricResponse,
     ModelComparisonRowResponse,
     PriceBackfillResponse,
@@ -22,6 +26,12 @@ from app.api.schemas.ticker_intelligence import (
     PredictiveModelPredictionResponse,
     PredictiveModelTrainCreate,
     PredictiveModelTrainResponse,
+    PipelineStepResponse,
+    RegimeModelFitCreate,
+    RegimeModelResponse,
+    RegimeStateResponse,
+    ResearchPipelineRunCreate,
+    ResearchPipelineRunResponse,
     TickerAnalysisCreate,
     TickerComparativeResponse,
     TickerDatasetRowResponse,
@@ -40,6 +50,9 @@ PRICE_FEATURE_VERSION = "price_features_v1"
 LABEL_VERSION = "forward_returns_v1"
 PREDICTIVE_MODEL_NAME = "Ticker Relative Return ML"
 PREDICTIVE_MODEL_POD = "Quantitative Equity Pod"
+HMM_REGIME_MODEL_NAME = "HMM Market Regime Model"
+HMM_REGIME_MODEL_POD = "Macro Regime Pod"
+BACKTEST_ENGINE_VERSION = "factor_backtest_v1"
 PRICE_FEATURE_NAMES = [
     "return_21d_pct",
     "return_63d_pct",
@@ -530,6 +543,375 @@ async def build_ticker_ml_report(
         prediction=prediction,
         portfolio_fit=portfolio_fit,
         model_comparison=model_comparison,
+        warnings=warnings,
+    )
+
+
+async def run_research_data_pipeline(
+    session: AsyncSession,
+    payload: ResearchPipelineRunCreate,
+) -> ResearchPipelineRunResponse:
+    normalized_tickers = sorted(
+        {ticker.strip().upper() for ticker in payload.tickers if ticker.strip()}
+    )
+    benchmark_ticker = payload.benchmark_ticker.strip().upper()
+    price_tickers = sorted(set(normalized_tickers + [benchmark_ticker]))
+    steps: list[PipelineStepResponse] = []
+    warnings: list[str] = []
+    successful_price_tickers: list[str] = []
+
+    for ticker in price_tickers:
+        try:
+            backfill = await backfill_yahoo_prices(
+                session,
+                YahooPriceBackfillCreate(
+                    ticker=ticker,
+                    name=ticker,
+                    yahoo_symbol=ticker,
+                    start_date=payload.start_date,
+                    end_date=payload.end_date,
+                ),
+            )
+            successful_price_tickers.append(ticker)
+            steps.append(
+                PipelineStepResponse(
+                    name=f"price_backfill:{ticker}",
+                    status="completed",
+                    message=f"Saved {backfill.rows_saved} daily bars.",
+                    rows=backfill.rows_saved,
+                )
+            )
+        except Exception as exc:
+            message = f"{ticker} price backfill failed: {exc}"
+            warnings.append(message)
+            steps.append(
+                PipelineStepResponse(
+                    name=f"price_backfill:{ticker}",
+                    status="failed",
+                    message=message,
+                )
+            )
+
+    label_ready_tickers = [
+        ticker
+        for ticker in normalized_tickers
+        if ticker in successful_price_tickers and benchmark_ticker in successful_price_tickers
+    ]
+    for ticker in label_ready_tickers:
+        try:
+            labels = await generate_training_labels(
+                session,
+                TrainingLabelGenerateCreate(
+                    ticker=ticker,
+                    benchmark_ticker=benchmark_ticker,
+                    horizons=[payload.horizon_days],
+                    source=payload.source,
+                ),
+            )
+            steps.append(
+                PipelineStepResponse(
+                    name=f"labels:{ticker}",
+                    status="completed",
+                    message=f"Saved {labels.labels_generated} forward labels.",
+                    rows=labels.labels_generated,
+                )
+            )
+        except Exception as exc:
+            message = f"{ticker} label generation failed: {exc}"
+            warnings.append(message)
+            steps.append(
+                PipelineStepResponse(
+                    name=f"labels:{ticker}",
+                    status="failed",
+                    message=message,
+                )
+            )
+
+    if successful_price_tickers:
+        try:
+            features = await build_price_feature_snapshots(
+                session,
+                PriceFeatureBuildCreate(
+                    tickers=successful_price_tickers,
+                    source=payload.source,
+                ),
+            )
+            steps.append(
+                PipelineStepResponse(
+                    name="price_features",
+                    status="completed",
+                    message=f"Saved {features.snapshots_saved} feature snapshots.",
+                    rows=features.snapshots_saved,
+                )
+            )
+        except Exception as exc:
+            message = f"Price feature build failed: {exc}"
+            warnings.append(message)
+            steps.append(
+                PipelineStepResponse(
+                    name="price_features",
+                    status="failed",
+                    message=message,
+                )
+            )
+
+    model_version_id = None
+    if payload.train_model and label_ready_tickers:
+        try:
+            trained = await train_predictive_model(
+                session,
+                PredictiveModelTrainCreate(
+                    tickers=label_ready_tickers,
+                    benchmark_ticker=benchmark_ticker,
+                    horizon_days=payload.horizon_days,
+                    label_source=payload.source,
+                ),
+            )
+            model_version_id = trained.model_version_id
+            steps.append(
+                PipelineStepResponse(
+                    name="predictive_model",
+                    status="completed",
+                    message=(
+                        f"Trained {trained.model_version} with "
+                        f"{trained.training_rows + trained.validation_rows} rows."
+                    ),
+                    rows=trained.training_rows + trained.validation_rows,
+                )
+            )
+        except Exception as exc:
+            message = f"Predictive model training failed: {exc}"
+            warnings.append(message)
+            steps.append(
+                PipelineStepResponse(
+                    name="predictive_model",
+                    status="failed",
+                    message=message,
+                )
+            )
+
+    logger.info(
+        "research_data_pipeline_completed",
+        extra={
+            "ticker_count": len(normalized_tickers),
+            "benchmark_ticker": benchmark_ticker,
+            "step_count": len(steps),
+            "warning_count": len(warnings),
+        },
+    )
+
+    return ResearchPipelineRunResponse(
+        tickers=normalized_tickers,
+        benchmark_ticker=benchmark_ticker,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        horizon_days=payload.horizon_days,
+        steps=steps,
+        model_version_id=model_version_id,
+        warnings=warnings,
+    )
+
+
+async def fit_market_regime_model(
+    session: AsyncSession,
+    payload: RegimeModelFitCreate,
+) -> RegimeModelResponse:
+    instrument = await _get_instrument(session, payload.ticker)
+    if instrument is None:
+        raise MLTrainingDataUnavailableError(f"{payload.ticker.upper()} is not in the instrument table.")
+
+    bars = await _load_price_points(session, instrument.id, payload.source)
+    if len(bars) < payload.lookback_days:
+        bars = bars[-len(bars):]
+    else:
+        bars = bars[-payload.lookback_days:]
+
+    artifact = compute_hmm_regime_artifact(
+        instrument.ticker,
+        bars,
+        state_count=payload.state_count,
+    )
+    model_version = ModelVersion(
+        name=HMM_REGIME_MODEL_NAME,
+        version=_regime_model_version_label(instrument.ticker),
+        pod=HMM_REGIME_MODEL_POD,
+        purpose="Classify the current market regime from price return and volatility states.",
+        training_data={
+            "ticker": instrument.ticker,
+            "source": payload.source,
+            "lookback_days": payload.lookback_days,
+            "state_count": payload.state_count,
+            "observation_count": artifact["observation_count"],
+        },
+        features=artifact,
+        metrics={
+            "current_regime": artifact["current_regime"],
+            "confidence_score": artifact["confidence_score"],
+            "as_of_date": artifact["as_of_date"],
+        },
+        assumptions="Daily returns and realized volatility expose persistent market states.",
+        limitations="Lightweight phase-one Gaussian HMM approximation; not macro-data enriched yet.",
+        approved_use="Research regime context, risk discussion, and model diagnostics.",
+        prohibited_use="Automatic defensive mode or trading halt without central risk review.",
+        shutdown_criteria="Disable if state assignments become unstable or conflict with validated macro evidence.",
+    )
+    session.add(model_version)
+    await session.commit()
+    await session.refresh(model_version)
+
+    logger.info(
+        "market_regime_model_fit",
+        extra={
+            "model_version_id": str(model_version.id),
+            "ticker": instrument.ticker,
+            "current_regime": artifact["current_regime"],
+            "confidence_score": artifact["confidence_score"],
+        },
+    )
+
+    return _regime_response_from_artifact(model_version, artifact)
+
+
+async def get_latest_market_regime_model(
+    session: AsyncSession,
+) -> RegimeModelResponse:
+    model_version = await session.scalar(
+        select(ModelVersion)
+        .where(ModelVersion.name == HMM_REGIME_MODEL_NAME)
+        .order_by(ModelVersion.created_at.desc())
+    )
+    if model_version is None:
+        raise MLTrainingDataUnavailableError("No HMM market-regime model has been fit yet.")
+
+    return _regime_response_from_artifact(model_version, model_version.features or {})
+
+
+async def run_factor_backtest(
+    session: AsyncSession,
+    payload: BacktestRunCreate,
+) -> BacktestRunResponse:
+    dataset = await _load_backtest_dataset(session, payload)
+    if not dataset:
+        raise MLTrainingDataUnavailableError("No labeled feature rows are available for this backtest.")
+
+    rows_by_date: dict[date, list[dict]] = {}
+    for row in dataset:
+        rows_by_date.setdefault(row["as_of_date"], []).append(row)
+
+    periods: list[BacktestPeriodResponse] = []
+    previous_selection: set[str] = set()
+    warnings: list[str] = []
+    selected_counts: list[int] = []
+
+    for as_of_date in sorted(rows_by_date):
+        candidates = rows_by_date[as_of_date]
+        if len(candidates) < payload.min_names_per_period:
+            warnings.append(
+                f"{as_of_date.isoformat()} skipped; only {len(candidates)} candidates."
+            )
+            continue
+
+        ranked = sorted(
+            candidates,
+            key=lambda item: _backtest_signal_score(item["features"]),
+            reverse=True,
+        )
+        selected = ranked[: payload.top_n]
+        selected_tickers = [item["ticker"] for item in selected]
+        selection_set = set(selected_tickers)
+        turnover = _selection_turnover(previous_selection, selection_set)
+        cost_drag = _cost_drag_pct(turnover, payload.transaction_cost_bps)
+        gross_return = _average_decimal(
+            [item["forward_return_pct"] for item in selected]
+        )
+        strategy_return = _quantize(gross_return - cost_drag)
+        benchmark_return = _period_benchmark_return(selected)
+        alpha = (
+            _quantize(strategy_return - benchmark_return)
+            if benchmark_return is not None
+            else None
+        )
+        periods.append(
+            BacktestPeriodResponse(
+                as_of_date=as_of_date,
+                selected_tickers=selected_tickers,
+                strategy_return_pct=strategy_return,
+                benchmark_return_pct=benchmark_return,
+                alpha_pct=alpha,
+                turnover_pct=turnover,
+                cost_drag_pct=cost_drag,
+            )
+        )
+        selected_counts.append(len(selected))
+        previous_selection = selection_set
+
+    if not periods:
+        raise MLTrainingDataUnavailableError("No rebalance periods met the backtest requirements.")
+
+    strategy_returns = [period.strategy_return_pct for period in periods]
+    benchmark_returns = [
+        period.benchmark_return_pct
+        for period in periods
+        if period.benchmark_return_pct is not None
+    ]
+    cumulative_return = _compound_return_pct(strategy_returns)
+    benchmark_cumulative = (
+        _compound_return_pct(benchmark_returns)
+        if len(benchmark_returns) == len(periods)
+        else None
+    )
+    alpha = (
+        _quantize(cumulative_return - benchmark_cumulative)
+        if benchmark_cumulative is not None
+        else None
+    )
+    annualized_return = _annualized_return_pct(
+        cumulative_return,
+        len(periods),
+        payload.horizon_days,
+    )
+    annualized_volatility = _annualized_volatility_pct(
+        strategy_returns,
+        payload.horizon_days,
+    )
+    sharpe = (
+        _quantize(annualized_return / annualized_volatility)
+        if annualized_volatility != 0
+        else Decimal("0.0000")
+    )
+    hit_rate = _backtest_hit_rate(periods)
+    turnover = _average_decimal([period.turnover_pct for period in periods])
+    cost_drag = sum((period.cost_drag_pct for period in periods), Decimal("0"))
+
+    logger.info(
+        "factor_backtest_completed",
+        extra={
+            "ticker_count": len(payload.tickers),
+            "rebalance_count": len(periods),
+            "horizon_days": payload.horizon_days,
+            "cumulative_return_pct": str(cumulative_return),
+        },
+    )
+
+    return BacktestRunResponse(
+        backtest_id=uuid.uuid4(),
+        name=f"{BACKTEST_ENGINE_VERSION}:{payload.horizon_days}d",
+        start_date=periods[0].as_of_date,
+        end_date=periods[-1].as_of_date,
+        horizon_days=payload.horizon_days,
+        rebalance_count=len(periods),
+        selected_count_avg=_average_decimal([Decimal(count) for count in selected_counts]),
+        cumulative_return_pct=cumulative_return,
+        benchmark_return_pct=benchmark_cumulative,
+        alpha_pct=alpha,
+        annualized_return_pct=annualized_return,
+        annualized_volatility_pct=annualized_volatility,
+        sharpe_ratio=sharpe,
+        max_drawdown_pct=_max_drawdown_from_returns(strategy_returns),
+        hit_rate_pct=hit_rate,
+        turnover_pct=turnover,
+        cost_drag_pct=_quantize(cost_drag),
+        periods=periods,
         warnings=warnings,
     )
 
@@ -1108,6 +1490,411 @@ def compute_price_feature_snapshots(
     return snapshots
 
 
+def compute_hmm_regime_artifact(
+    ticker: str,
+    bars: list[PriceBarPoint],
+    state_count: int = 4,
+) -> dict:
+    observations = _regime_observations(bars)
+    if len(observations) < state_count * 8:
+        raise MLTrainingDataUnavailableError(
+            f"At least {state_count * 8} regime observations are required. Found {len(observations)}."
+        )
+
+    import numpy as np
+
+    points = np.array(
+        [
+            [
+                float(observation["daily_return_pct"]),
+                float(observation["realized_volatility_pct"]),
+            ]
+            for observation in observations
+        ]
+    )
+    assignments, means, standard_deviations = _cluster_regime_points(points, state_count)
+    transition_matrix = _regime_transition_matrix(assignments, state_count)
+    previous_state = int(assignments[-2]) if len(assignments) > 1 else None
+    probabilities = _regime_state_probabilities(
+        points[-1],
+        previous_state,
+        means,
+        standard_deviations,
+        transition_matrix,
+    )
+    labels = _regime_labels(means)
+    observation_counts = {
+        state_id: int((assignments == state_id).sum())
+        for state_id in range(state_count)
+    }
+    states = []
+    for state_id in range(state_count):
+        states.append(
+            {
+                "state_id": state_id,
+                "label": labels[state_id],
+                "probability": str(_decimal4(float(probabilities[state_id]))),
+                "mean_return_pct": str(_decimal4(float(means[state_id][0]))),
+                "volatility_pct": str(_decimal4(float(means[state_id][1]))),
+                "observation_count": observation_counts[state_id],
+            }
+        )
+
+    current_state = int(np.argmax(probabilities))
+    confidence = _decimal4(float(probabilities[current_state] * 100))
+
+    return {
+        "ticker": ticker,
+        "as_of_date": observations[-1]["as_of_date"].isoformat(),
+        "current_regime": labels[current_state],
+        "confidence_score": str(confidence),
+        "state_probabilities": states,
+        "transition_matrix": [
+            [str(_decimal4(float(value))) for value in row]
+            for row in transition_matrix
+        ],
+        "observation_count": len(observations),
+        "warnings": [
+            "Phase-one HMM uses price and volatility only; macro variables are not included yet."
+        ],
+    }
+
+
+def _regime_observations(bars: list[PriceBarPoint]) -> list[dict]:
+    sorted_bars = sorted(bars, key=lambda bar: bar.bar_date)
+    observations: list[dict] = []
+    for index in range(21, len(sorted_bars)):
+        previous = sorted_bars[index - 1]
+        current = sorted_bars[index]
+        volatility = _realized_volatility_pct(sorted_bars[index - 21 : index + 1])
+        if volatility is None:
+            continue
+        observations.append(
+            {
+                "as_of_date": current.bar_date,
+                "daily_return_pct": _return_pct(previous.label_price, current.label_price),
+                "realized_volatility_pct": volatility,
+            }
+        )
+    return observations
+
+
+def _cluster_regime_points(points, state_count: int):
+    import numpy as np
+
+    mean = points.mean(axis=0)
+    standard_deviation = points.std(axis=0)
+    standard_deviation = np.where(standard_deviation == 0, 1.0, standard_deviation)
+    standardized = (points - mean) / standard_deviation
+    risk_score = standardized[:, 0] - standardized[:, 1]
+    ordered_indexes = np.argsort(risk_score)
+    seed_positions = np.linspace(0, len(ordered_indexes) - 1, state_count).astype(int)
+    centroids = standardized[ordered_indexes[seed_positions]]
+    assignments = np.zeros(len(points), dtype=int)
+
+    for _ in range(40):
+        distances = np.linalg.norm(
+            standardized[:, None, :] - centroids[None, :, :],
+            axis=2,
+        )
+        next_assignments = np.argmin(distances, axis=1)
+        if np.array_equal(assignments, next_assignments):
+            break
+        assignments = next_assignments
+        for state_id in range(state_count):
+            state_points = standardized[assignments == state_id]
+            if len(state_points) > 0:
+                centroids[state_id] = state_points.mean(axis=0)
+
+    raw_means = np.zeros((state_count, points.shape[1]))
+    raw_standard_deviations = np.ones((state_count, points.shape[1]))
+    for state_id in range(state_count):
+        state_points = points[assignments == state_id]
+        if len(state_points) == 0:
+            raw_means[state_id] = mean
+            raw_standard_deviations[state_id] = standard_deviation
+            continue
+        raw_means[state_id] = state_points.mean(axis=0)
+        raw_standard_deviations[state_id] = np.where(
+            state_points.std(axis=0) == 0,
+            standard_deviation,
+            state_points.std(axis=0),
+        )
+    return assignments, raw_means, raw_standard_deviations
+
+
+def _regime_transition_matrix(assignments, state_count: int):
+    import numpy as np
+
+    matrix = np.ones((state_count, state_count)) * 0.1
+    for previous, current in zip(assignments[:-1], assignments[1:]):
+        matrix[int(previous), int(current)] += 1
+    row_sums = matrix.sum(axis=1)
+    return matrix / row_sums[:, None]
+
+
+def _regime_state_probabilities(
+    latest_point,
+    previous_state: int | None,
+    means,
+    standard_deviations,
+    transition_matrix,
+):
+    import numpy as np
+
+    safe_deviations = np.where(standard_deviations <= 1e-6, 1.0, standard_deviations)
+    z_scores = (latest_point - means) / safe_deviations
+    likelihood = np.exp(-0.5 * np.sum(z_scores**2, axis=1)) / np.prod(
+        safe_deviations,
+        axis=1,
+    )
+    if previous_state is None:
+        prior = np.ones(len(means)) / len(means)
+    else:
+        prior = transition_matrix[previous_state]
+    posterior = prior * likelihood
+    total = posterior.sum()
+    if total <= 0:
+        return np.ones(len(means)) / len(means)
+    return posterior / total
+
+
+def _regime_labels(means) -> dict[int, str]:
+    labels_by_count = {
+        2: ["risk-on", "stress"],
+        3: ["risk-on", "fragile", "stress"],
+        4: ["risk-on", "constructive", "fragile", "stress"],
+        5: ["risk-on", "constructive", "neutral", "fragile", "stress"],
+        6: ["risk-on", "constructive", "neutral", "fragile", "stress", "shock"],
+    }
+    state_count = len(means)
+    ordered_states = sorted(
+        range(state_count),
+        key=lambda state_id: means[state_id][0] - (means[state_id][1] * 0.20),
+        reverse=True,
+    )
+    rank_labels = labels_by_count.get(state_count, labels_by_count[4])
+    return {
+        state_id: rank_labels[rank]
+        for rank, state_id in enumerate(ordered_states)
+    }
+
+
+def _regime_response_from_artifact(
+    model_version: ModelVersion,
+    artifact: dict,
+) -> RegimeModelResponse:
+    return RegimeModelResponse(
+        model_version_id=model_version.id,
+        model_name=model_version.name,
+        model_version=model_version.version,
+        ticker=str(artifact.get("ticker") or ""),
+        as_of_date=date.fromisoformat(str(artifact.get("as_of_date"))),
+        current_regime=str(artifact.get("current_regime") or "unknown"),
+        confidence_score=_required_decimal(artifact.get("confidence_score")),
+        state_probabilities=[
+            RegimeStateResponse(
+                state_id=int(state["state_id"]),
+                label=str(state["label"]),
+                probability=_required_decimal(state["probability"]),
+                mean_return_pct=_required_decimal(state["mean_return_pct"]),
+                volatility_pct=_required_decimal(state["volatility_pct"]),
+                observation_count=int(state["observation_count"]),
+            )
+            for state in artifact.get("state_probabilities", [])
+        ],
+        transition_matrix=[
+            [_required_decimal(value) for value in row]
+            for row in artifact.get("transition_matrix", [])
+        ],
+        warnings=[
+            str(warning)
+            for warning in artifact.get("warnings", [])
+        ],
+    )
+
+
+def _regime_model_version_label(ticker: str) -> str:
+    from datetime import datetime, timezone
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    return f"hmm-{ticker.lower()}-{timestamp}"
+
+
+async def _load_backtest_dataset(
+    session: AsyncSession,
+    payload: BacktestRunCreate,
+) -> list[dict]:
+    normalized_tickers = sorted(
+        {ticker.strip().upper() for ticker in payload.tickers if ticker.strip()}
+    )
+    instruments = list(
+        await session.scalars(
+            select(Instrument).where(Instrument.ticker.in_(normalized_tickers))
+        )
+    )
+    if not instruments:
+        return []
+
+    benchmark = None
+    if payload.benchmark_ticker:
+        benchmark = await _get_instrument(session, payload.benchmark_ticker)
+        if benchmark is None:
+            raise MLTrainingDataUnavailableError(
+                f"Benchmark {payload.benchmark_ticker.upper()} is not in the instrument table."
+            )
+
+    instruments_by_id = {instrument.id: instrument for instrument in instruments}
+    instrument_ids = set(instruments_by_id)
+    snapshots = list(
+        await session.scalars(
+            select(TickerFeatureSnapshot)
+            .where(TickerFeatureSnapshot.instrument_id.in_(instrument_ids))
+            .where(TickerFeatureSnapshot.feature_version == payload.feature_version)
+            .order_by(TickerFeatureSnapshot.as_of_date)
+        )
+    )
+    snapshots_by_key = {
+        (snapshot.instrument_id, snapshot.as_of_date): snapshot
+        for snapshot in snapshots
+        if _has_model_features(snapshot.features)
+    }
+
+    label_query = (
+        select(TickerTrainingLabel)
+        .where(TickerTrainingLabel.instrument_id.in_(instrument_ids))
+        .where(TickerTrainingLabel.horizon_days == payload.horizon_days)
+        .where(TickerTrainingLabel.source == payload.label_source)
+        .where(TickerTrainingLabel.label_version == LABEL_VERSION)
+        .order_by(TickerTrainingLabel.as_of_date)
+    )
+    if benchmark is not None:
+        label_query = label_query.where(
+            TickerTrainingLabel.benchmark_instrument_id == benchmark.id
+        )
+    else:
+        label_query = label_query.where(TickerTrainingLabel.benchmark_instrument_id.is_(None))
+
+    rows = []
+    for label in await session.scalars(label_query):
+        snapshot = snapshots_by_key.get((label.instrument_id, label.as_of_date))
+        if snapshot is None:
+            continue
+        instrument = instruments_by_id[label.instrument_id]
+        rows.append(
+            {
+                "as_of_date": label.as_of_date,
+                "ticker": instrument.ticker,
+                "features": snapshot.features,
+                "forward_return_pct": label.forward_return_pct,
+                "benchmark_return_pct": label.benchmark_forward_return_pct,
+            }
+        )
+    return rows
+
+
+def _backtest_signal_score(features: dict) -> float:
+    return_63d = float(_decimal(features.get("return_63d_pct")) or Decimal("0"))
+    return_126d = float(_decimal(features.get("return_126d_pct")) or Decimal("0"))
+    trend = float(_decimal(features.get("price_vs_200d_pct")) or Decimal("0"))
+    volatility = float(_decimal(features.get("realized_volatility_63d_pct")) or Decimal("0"))
+    drawdown = float(_decimal(features.get("max_drawdown_63d_pct")) or Decimal("0"))
+    return (return_63d * 0.35) + (return_126d * 0.25) + (trend * 0.25) + (drawdown * 0.10) - (volatility * 0.15)
+
+
+def _selection_turnover(
+    previous_selection: set[str],
+    current_selection: set[str],
+) -> Decimal:
+    if not current_selection:
+        return Decimal("0.0000")
+    if not previous_selection:
+        return Decimal("100.0000")
+    overlap = Decimal(len(previous_selection & current_selection)) / Decimal(len(current_selection))
+    return _quantize((Decimal("1") - overlap) * Decimal("100"))
+
+
+def _cost_drag_pct(turnover_pct: Decimal, transaction_cost_bps: Decimal) -> Decimal:
+    return _quantize((turnover_pct / Decimal("100")) * (transaction_cost_bps / Decimal("100")))
+
+
+def _average_decimal(values: list[Decimal]) -> Decimal:
+    if not values:
+        return Decimal("0.0000")
+    return _quantize(sum(values, Decimal("0")) / Decimal(len(values)))
+
+
+def _period_benchmark_return(rows: list[dict]) -> Decimal | None:
+    values = [
+        row["benchmark_return_pct"]
+        for row in rows
+        if row["benchmark_return_pct"] is not None
+    ]
+    if not values:
+        return None
+    return _average_decimal(values)
+
+
+def _compound_return_pct(returns: list[Decimal]) -> Decimal:
+    equity = Decimal("1")
+    for value in returns:
+        equity *= Decimal("1") + (value / Decimal("100"))
+    return _quantize((equity - Decimal("1")) * Decimal("100"))
+
+
+def _annualized_return_pct(
+    cumulative_return_pct: Decimal,
+    period_count: int,
+    horizon_days: int,
+) -> Decimal:
+    if period_count <= 0:
+        return Decimal("0.0000")
+    annual_factor = 252 / horizon_days
+    cumulative = 1 + (float(cumulative_return_pct) / 100)
+    annualized = (cumulative ** (annual_factor / period_count) - 1) * 100
+    return _decimal4(annualized)
+
+
+def _annualized_volatility_pct(
+    returns: list[Decimal],
+    horizon_days: int,
+) -> Decimal:
+    if len(returns) < 2:
+        return Decimal("0.0000")
+    mean = sum(returns, Decimal("0")) / Decimal(len(returns))
+    variance = sum((value - mean) ** 2 for value in returns) / Decimal(len(returns) - 1)
+    annualized = sqrt(float(variance)) * sqrt(252 / horizon_days)
+    return _decimal4(annualized)
+
+
+def _max_drawdown_from_returns(returns: list[Decimal]) -> Decimal:
+    equity = Decimal("1")
+    peak = Decimal("1")
+    worst = Decimal("0")
+    for value in returns:
+        equity *= Decimal("1") + (value / Decimal("100"))
+        if equity > peak:
+            peak = equity
+        if peak == 0:
+            continue
+        drawdown = ((equity - peak) / peak) * Decimal("100")
+        if drawdown < worst:
+            worst = drawdown
+    return _quantize(worst)
+
+
+def _backtest_hit_rate(periods: list[BacktestPeriodResponse]) -> Decimal:
+    if not periods:
+        return Decimal("0.0000")
+    wins = 0
+    for period in periods:
+        if period.alpha_pct is not None:
+            wins += int(period.alpha_pct > 0)
+        else:
+            wins += int(period.strategy_return_pct > 0)
+    return _quantize((Decimal(wins) / Decimal(len(periods))) * Decimal("100"))
+
+
 async def _get_instrument(session: AsyncSession, ticker: str) -> Instrument | None:
     normalized_ticker = ticker.strip().upper()
     return await session.scalar(
@@ -1646,6 +2433,13 @@ def _optional_decimal(value: object) -> Decimal | None:
     if value_as_decimal is None:
         return None
     return _quantize(value_as_decimal)
+
+
+def _required_decimal(value: object) -> Decimal:
+    decimal_value = _decimal(value)
+    if decimal_value is None:
+        return Decimal("0.0000")
+    return _quantize(decimal_value)
 
 
 def _optional_string(value: object) -> str | None:

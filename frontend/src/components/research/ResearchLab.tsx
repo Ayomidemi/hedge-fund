@@ -16,8 +16,12 @@ import {
 } from "@/components/research/research-lab-data";
 import { buttonPrimaryClassName, buttonSecondaryClassName } from "@/components/ui/form-styles";
 import {
+  getCurrentMonthlyReport,
+  getLatestRegimeModel,
   getPredictiveModelComparison,
   type ModelComparisonRow,
+  type MonthlyReport,
+  type RegimeModel,
 } from "@/lib/api";
 
 const sections: LabSection[] = [
@@ -33,6 +37,8 @@ const sections: LabSection[] = [
 export function ResearchLab() {
   const [activeSection, setActiveSection] = useState<LabSection>("overview");
   const [modelComparison, setModelComparison] = useState<ModelComparisonRow[]>([]);
+  const [latestRegime, setLatestRegime] = useState<RegimeModel | null>(null);
+  const [monthlyReport, setMonthlyReport] = useState<MonthlyReport | null>(null);
   const [modelsLoading, setModelsLoading] = useState(true);
 
   useEffect(() => {
@@ -47,6 +53,22 @@ export function ResearchLab() {
       })
       .finally(() => {
         if (active) setModelsLoading(false);
+      });
+
+    getLatestRegimeModel()
+      .then((regime) => {
+        if (active) setLatestRegime(regime);
+      })
+      .catch(() => {
+        if (active) setLatestRegime(null);
+      });
+
+    getCurrentMonthlyReport()
+      .then((report) => {
+        if (active) setMonthlyReport(report);
+      })
+      .catch(() => {
+        if (active) setMonthlyReport(null);
       });
 
     return () => {
@@ -114,7 +136,9 @@ export function ResearchLab() {
         </nav>
 
         <div className="min-w-0 flex-1">
-          {activeSection === "overview" && <OverviewPanel />}
+          {activeSection === "overview" && (
+            <OverviewPanel latestRegime={latestRegime} monthlyReport={monthlyReport} />
+          )}
           {activeSection === "notebooks" && <NotebooksPanel />}
           {activeSection === "datasets" && <DatasetsPanel />}
           {activeSection === "features" && <FeaturesPanel />}
@@ -152,7 +176,13 @@ function PipelineBar() {
   );
 }
 
-function OverviewPanel() {
+function OverviewPanel({
+  latestRegime,
+  monthlyReport,
+}: {
+  latestRegime: RegimeModel | null;
+  monthlyReport: MonthlyReport | null;
+}) {
   return (
     <div className="grid gap-6 xl:grid-cols-2">
       <Panel title="Recent experiments" subtitle="Latest hypothesis runs">
@@ -176,6 +206,50 @@ function OverviewPanel() {
             <StatusBadge key={item.id} label={item.status} />,
           ])}
         />
+      </Panel>
+
+      <Panel title="Current regime" subtitle="Latest HMM market-state fit">
+        {latestRegime ? (
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">{formatLabel(latestRegime.current_regime)}</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {latestRegime.ticker} as of {latestRegime.as_of_date}
+                </p>
+              </div>
+              <StatusBadge label={`${Number(latestRegime.confidence_score).toFixed(1)}% confidence`} />
+            </div>
+            <CompactTable
+              headers={["State", "Prob.", "Return", "Vol."]}
+              rows={latestRegime.state_probabilities.map((state) => [
+                formatLabel(state.label),
+                `${(Number(state.probability) * 100).toFixed(1)}%`,
+                `${Number(state.mean_return_pct).toFixed(2)}%`,
+                `${Number(state.volatility_pct).toFixed(1)}%`,
+              ])}
+            />
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-500">Regime model pending</p>
+        )}
+      </Panel>
+
+      <Panel title="Monthly report" subtitle="Current generated investment summary">
+        {monthlyReport ? (
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+              {monthlyReport.commentary}
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <MiniMetric label="NAV" value={monthlyReport.nav} />
+              <MiniMetric label="Trades" value={String(monthlyReport.monthly_trade_count)} />
+              <MiniMetric label="Memos" value={String(monthlyReport.monthly_memo_count)} />
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-500">Monthly report pending</p>
+        )}
       </Panel>
 
       <Panel title="Data validation" subtitle="Point-in-time integrity checks" className="xl:col-span-2">
@@ -499,6 +573,17 @@ function CompactTable({
   );
 }
 
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
+      <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+        {label}
+      </p>
+      <p className="mt-1 text-base font-semibold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
 function StatusBadge({ label }: { label: string }) {
   const formatted = label
     .split("_")
@@ -510,6 +595,14 @@ function StatusBadge({ label }: { label: string }) {
       {formatted}
     </span>
   );
+}
+
+function formatLabel(value: string) {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function formatNumber(value: string | null) {
