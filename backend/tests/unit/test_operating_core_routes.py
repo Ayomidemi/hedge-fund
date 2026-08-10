@@ -4,6 +4,12 @@ from app.main import app
 
 
 class OperatingCoreRouteTests(TestCase):
+    def test_auth_route_is_registered(self) -> None:
+        paths = app.openapi()["paths"]
+
+        self.assertIn("/api/auth/me", paths)
+        self.assertIn("get", paths["/api/auth/me"])
+
     def test_cash_ledger_history_has_dedicated_get_route(self) -> None:
         paths = app.openapi()["paths"]
 
@@ -71,3 +77,26 @@ class OperatingCoreRouteTests(TestCase):
 
         self.assertIn("/api/reports/monthly", paths)
         self.assertIn("get", paths["/api/reports/monthly"])
+
+    def test_risk_centre_routes_are_registered(self) -> None:
+        paths = app.openapi()["paths"]
+
+        self.assertIn("/api/risk-centre/overview", paths)
+        self.assertIn("get", paths["/api/risk-centre/overview"])
+        self.assertIn("/api/risk-centre/snapshots", paths)
+        self.assertIn("post", paths["/api/risk-centre/snapshots"])
+        self.assertIn("/api/risk-centre/stress-tests", paths)
+        self.assertIn("post", paths["/api/risk-centre/stress-tests"])
+        self.assertIn("/api/risk-centre/pre-trade-check", paths)
+        self.assertIn("post", paths["/api/risk-centre/pre-trade-check"])
+
+    def test_strategy_pod_routes_are_registered(self) -> None:
+        paths = app.openapi()["paths"]
+
+        self.assertIn("/api/strategy-pods", paths)
+        self.assertIn("get", paths["/api/strategy-pods"])
+        self.assertIn("/api/strategy-pods/{code}", paths)
+        self.assertIn("get", paths["/api/strategy-pods/{code}"])
+        self.assertIn("patch", paths["/api/strategy-pods/{code}"])
+        self.assertIn("/api/strategy-pods/{code}/snapshots", paths)
+        self.assertIn("post", paths["/api/strategy-pods/{code}/snapshots"])

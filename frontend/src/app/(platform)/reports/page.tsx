@@ -1,11 +1,13 @@
 import { getCurrentMonthlyReport, type MonthlyReport } from "@/lib/api";
+import { getServerAccessToken } from "@/lib/supabase/server";
 
 export default async function ReportsPage() {
   let report: MonthlyReport | null = null;
   let unavailable = false;
+  const accessToken = await getServerAccessToken();
 
   try {
-    report = await getCurrentMonthlyReport();
+    report = await getCurrentMonthlyReport({ accessToken });
   } catch {
     unavailable = true;
   }

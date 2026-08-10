@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/hedge_fund"
     hf_supabase_database_url: str | None = None
+    hf_supabase_url: str | None = None
+    hf_supabase_jwt_secret: str | None = None
 
     hf_market_data_provider: str = "disabled"
     hf_polygon_api_key: str | None = None
@@ -150,6 +152,15 @@ class Settings(BaseSettings):
     @property
     def tiingo_base_url(self) -> str:
         return self.hf_tiingo_base_url.strip().rstrip("/")
+
+    @property
+    def supabase_url(self) -> str | None:
+        value = (self.hf_supabase_url or "").strip().rstrip("/")
+        return value or None
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.hf_supabase_jwt_secret)
 
     @staticmethod
     def _uses_pooler_host(hostname: str | None) -> bool:

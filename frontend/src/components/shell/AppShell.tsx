@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 
 const navigationItems = [
   { label: "Fund Dashboard", href: "/" },
   { label: "Cash Ledger", href: "/cash-ledger" },
   { label: "Ticker Analyst", href: "/ticker-analyst" },
   { label: "Research Lab", href: "/research-lab" },
-  { label: "Strategy Pods" },
-  { label: "Risk Centre" },
+  { label: "Strategy Pods", href: "/strategy-pods" },
+  { label: "Risk Centre", href: "/risk-centre" },
   { label: "Opportunity Queue" },
   { label: "Trade Journal" },
   { label: "Attribution" },
@@ -19,6 +20,7 @@ const navigationItems = [
 
 type AppShellProps = {
   apiStatus: "connected" | "offline";
+  userEmail: string | null;
   children: React.ReactNode;
 };
 
@@ -26,14 +28,32 @@ const pageTitles: Record<string, string> = {
   "Cash Ledger": "Cash Ledger History",
   "Ticker Analyst": "Ticker Research Desk",
   "Research Lab": "Research Lab",
+  "Strategy Pods": "Investment Pod Control",
+  "Risk Centre": "Central Risk Office",
   Reports: "Monthly Reports",
 };
 
-export function AppShell({ apiStatus, children }: AppShellProps) {
+function userInitials(email: string | null) {
+  if (!email) {
+    return "U";
+  }
+  const localPart = email.split("@")[0] ?? email;
+  return localPart.slice(0, 2).toUpperCase();
+}
+
+export function AppShell({ apiStatus, children, userEmail }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const activeLabel =
     navigationItems.find((item) => item.href === pathname)?.label ??
     "Fund Dashboard";
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.replace("/login");
+    router.refresh();
+  }
 
   return (
     <div className="flex min-h-screen bg-[#f6f7f4] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
@@ -90,14 +110,33 @@ export function AppShell({ apiStatus, children }: AppShellProps) {
                 {pageTitles[activeLabel] ?? "Portfolio Control Room"}
               </h1>
             </div>
-            <div className="flex items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-              <div
-                className={`h-2.5 w-2.5 rounded-full ${
-                  apiStatus === "connected" ? "bg-emerald-500" : "bg-red-500"
-                }`}
-              />
-              <span className="font-medium">Backend</span>
-              <span className="text-zinc-500">{apiStatus}</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                  {userInitials(userEmail)}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate font-medium">
+                    {userEmail ?? "Signed in"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+                <div
+                  className={`h-2.5 w-2.5 rounded-full ${
+                    apiStatus === "connected" ? "bg-emerald-500" : "bg-red-500"
+                  }`}
+                />
+                <span className="font-medium">Backend</span>
+                <span className="text-zinc-500">{apiStatus}</span>
+              </div>
             </div>
           </div>
         </header>

@@ -118,6 +118,7 @@ class Portfolio(Base, TimestampMixin):
     positions: Mapped[list["Position"]] = relationship(back_populates="portfolio")
     trades: Mapped[list["Trade"]] = relationship(back_populates="portfolio")
     risk_limits: Mapped[list["RiskLimit"]] = relationship(back_populates="portfolio")
+    risk_snapshots: Mapped[list["PortfolioRiskSnapshot"]] = relationship(back_populates="portfolio")
 
 
 class CashLedgerEntry(Base, TimestampMixin):
@@ -251,6 +252,181 @@ class RiskCheck(Base, TimestampMixin):
     message: Mapped[str | None] = mapped_column(Text)
 
     risk_limit: Mapped["RiskLimit"] = relationship(back_populates="risk_checks")
+
+
+class StrategyPod(Base, TimestampMixin):
+    __tablename__ = "strategy_pods"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    mandate: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="research")
+    lifecycle_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="research")
+    capital_allocation_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, default=0)
+    risk_budget_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, default=0)
+    volatility_target_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    max_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    turnover_ceiling_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    approved_instruments: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    current_signals: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    evaluation: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    shutdown_criteria: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    snapshots: Mapped[list["StrategyPodSnapshot"]] = relationship(back_populates="strategy_pod")
+
+
+class StrategyPodSnapshot(Base, TimestampMixin):
+    __tablename__ = "strategy_pod_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_pod_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("strategy_pods.id"), nullable=False, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    lifecycle_stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    capital_allocation_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    risk_budget_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    current_signal_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    model_confidence: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    allocation_recommendation: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    strategy_pod: Mapped["StrategyPod"] = relationship(back_populates="snapshots")
+
+    __table_args__ = (
+        Index("ix_strategy_pod_snapshots_pod_captured", "strategy_pod_id", "captured_at"),
+    )
+
+
+class RiskPolicyVersion(Base, TimestampMixin):
+    __tablename__ = "risk_policy_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    limits: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    hierarchy: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        Index("ix_risk_policy_versions_name_version", "name", "version", unique=True),
+    )
+
+
+class PortfolioRiskSnapshot(Base, TimestampMixin):
+    __tablename__ = "portfolio_risk_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
+    risk_policy_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("risk_policy_versions.id"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    nav: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    cash_balance: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    invested_value: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    gross_exposure_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    net_exposure_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    cash_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    top_position_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    top5_concentration_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    portfolio_volatility_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    beta_to_benchmark: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    max_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    var_95_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    expected_shortfall_95_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    liquidity_days: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    exposures: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    portfolio: Mapped["Portfolio"] = relationship(back_populates="risk_snapshots")
+
+    __table_args__ = (
+        Index("ix_portfolio_risk_snapshots_portfolio_captured", "portfolio_id", "captured_at"),
+    )
+
+
+class PositionRiskSnapshot(Base, TimestampMixin):
+    __tablename__ = "position_risk_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    portfolio_risk_snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolio_risk_snapshots.id"), nullable=False, index=True)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    asset_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    sector: Mapped[str | None] = mapped_column(String(128))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
+    market_value: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    weight_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    volatility_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    beta_to_benchmark: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    liquidity_days: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_position_risk_snapshots_snapshot_ticker", "portfolio_risk_snapshot_id", "ticker"),
+    )
+
+
+class RiskMeasurement(Base, TimestampMixin):
+    __tablename__ = "risk_measurements"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
+    portfolio_risk_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("portfolio_risk_snapshots.id"), index=True)
+    measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    measurement_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    threshold_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    passed: Mapped[bool] = mapped_column(nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_risk_measurements_portfolio_measured", "portfolio_id", "measured_at"),
+    )
+
+
+class StressScenario(Base, TimestampMixin):
+    __tablename__ = "stress_scenarios"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    scenario_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    shocks: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    is_system: Mapped[bool] = mapped_column(nullable=False, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class StressTestResult(Base, TimestampMixin):
+    __tablename__ = "stress_test_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
+    portfolio_risk_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("portfolio_risk_snapshots.id"), index=True)
+    stress_scenario_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("stress_scenarios.id"), index=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scenario_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    nav_before: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    nav_after: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    nav_impact_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False)
+    worst_positions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    result_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_stress_test_results_portfolio_run", "portfolio_id", "run_at"),
+    )
 
 
 class EvidenceSnapshot(Base, TimestampMixin):

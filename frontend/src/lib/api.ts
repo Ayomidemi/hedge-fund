@@ -1,9 +1,47 @@
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-async function fetchApi<T>(path: string): Promise<T> {
+export type ApiRequestOptions = {
+  accessToken?: string;
+};
+
+async function resolveAccessToken(
+  explicit?: string,
+): Promise<string | undefined> {
+  if (explicit) {
+    return explicit;
+  }
+
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  const { createClient, isSupabaseConfigured } = await import("@/lib/supabase/client");
+  if (!isSupabaseConfigured()) {
+    return undefined;
+  }
+
+  const supabase = createClient();
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token;
+}
+
+function buildAuthHeaders(accessToken?: string): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return headers;
+}
+
+async function fetchApi<T>(
+  path: string,
+  options?: ApiRequestOptions,
+): Promise<T> {
+  const accessToken = await resolveAccessToken(options?.accessToken);
   const response = await fetch(`${API_BASE_URL}${path}`, {
     next: { revalidate: 0 },
+    headers: buildAuthHeaders(accessToken),
   });
 
   if (!response.ok) {
@@ -16,11 +54,14 @@ async function fetchApi<T>(path: string): Promise<T> {
 async function postApi<TResponse, TPayload>(
   path: string,
   payload: TPayload,
+  options?: ApiRequestOptions,
 ): Promise<TResponse> {
+  const accessToken = await resolveAccessToken(options?.accessToken);
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...buildAuthHeaders(accessToken),
     },
     body: JSON.stringify(payload),
   });
@@ -47,8 +88,8 @@ export type HealthResponse = {
   status: string;
 };
 
-export function getHealth() {
-  return fetchApi<HealthResponse>("/api/health");
+export function getHealth(options?: ApiRequestOptions) {
+  return fetchApi<HealthResponse>("/api/health", options);
 }
 
 export function getApiInfo() {
@@ -504,20 +545,254 @@ export type MonthlyReport = {
   commentary: string;
 };
 
-export function getOperatingCoreDashboard() {
-  return fetchApi<OperatingCoreDashboard>("/api/operating-core/dashboard");
+export type RiskPolicyLimit = {
+  key: string;
+  label: string;
+  threshold_value: string;
+  unit: string;
+  scope: string;
+  severity: string;
+  direction: string;
+  description: string;
+};
+
+export type RiskPolicy = {
+  name: string;
+  version: string;
+  status: string;
+  hierarchy: string[];
+  limits: RiskPolicyLimit[];
+};
+
+export type RiskPosition = {
+  instrument_id: string | null;
+  ticker: string;
+  name: string;
+  asset_class: string;
+  sector: string | null;
+  quantity: string;
+  average_cost: string;
+  market_value: string;
+  unrealized_pnl: string;
+  weight_pct: string;
+  volatility_pct: string | null;
+  beta_to_benchmark: string | null;
+  liquidity_days: string | null;
+};
+
+export type RiskMeasurement = {
+  key: string;
+  name: string;
+  measurement_type: string;
+  value: string | null;
+  unit: string;
+  threshold_value: string | null;
+  passed: boolean;
+  severity: string;
+  message: string;
+};
+
+export type RiskExposureBucket = {
+  name: string;
+  exposure_pct: string;
+  market_value: string;
+};
+
+export type RiskSnapshot = {
+  snapshot_id: string | null;
+  portfolio_id: string;
+  portfolio_name: string;
+  calculated_at: string;
+  as_of_date: string;
+  nav: string;
+  cash_balance: string;
+  invested_value: string;
+  cash_pct: string;
+  gross_exposure_pct: string;
+  net_exposure_pct: string;
+  top_position_pct: string;
+  top5_concentration_pct: string;
+  portfolio_volatility_pct: string | null;
+  beta_to_benchmark: string | null;
+  max_drawdown_pct: string | null;
+  var_95_pct: string | null;
+  expected_shortfall_95_pct: string | null;
+  liquidity_days: string | null;
+  risk_level: string;
+  risk_level_label: string;
+};
+
+export type StressTestResult = {
+  scenario_name: string;
+  scenario_type: string;
+  nav_before: string;
+  nav_after: string;
+  nav_impact: string;
+  nav_impact_pct: string;
+  severity: string;
+  worst_positions: {
+    ticker: string;
+    shock_pct: string;
+    impact: string;
+    impact_pct_nav: string;
+  }[];
+  notes: string[];
+};
+
+export type CorrelationPair = {
+  ticker_a: string;
+  ticker_b: string;
+  correlation: string;
+};
+
+export type RiskCentreOverview = {
+  snapshot: RiskSnapshot;
+  policy: RiskPolicy;
+  positions: RiskPosition[];
+  measurements: RiskMeasurement[];
+  stress_tests: StressTestResult[];
+  correlation_pairs: CorrelationPair[];
+  asset_class_exposure: RiskExposureBucket[];
+  sector_exposure: RiskExposureBucket[];
+  notes: string[];
+};
+
+export type RiskSnapshotCapture = {
+  snapshot_id: string;
+  captured_at: string;
+  measurement_count: number;
+  position_count: number;
+  stress_result_count: number;
+};
+
+export type StressScenarioInput = {
+  name: string;
+  market_shock_pct: string;
+  sector_shocks_pct?: Record<string, string>;
+  ticker_shocks_pct?: Record<string, string>;
+  cash_shock_pct?: string;
+  notes?: string;
+};
+
+export type PreTradeRiskInput = {
+  instrument: ManualTradeInput["instrument"];
+  side: "buy" | "sell";
+  quantity: string;
+  price: string;
+  fees: string;
+  rationale?: string;
+};
+
+export type PreTradeRiskCheck = {
+  decision: string;
+  risk_level: string;
+  cash_impact: string;
+  pro_forma_snapshot: RiskSnapshot;
+  checks: RiskMeasurement[];
+  stress_tests: StressTestResult[];
+  messages: string[];
+};
+
+export type StrategyPodSignal = {
+  key: string;
+  label: string;
+  value: string;
+  status: string;
+  detail: string | null;
+  as_of_date: string | null;
+};
+
+export type StrategyPodLatestSnapshot = {
+  snapshot_id: string;
+  captured_at: string;
+  as_of_date: string;
+  current_signal_score: string | null;
+  model_confidence: string | null;
+  risk_level: string;
+  allocation_recommendation: string;
+};
+
+export type StrategyPod = {
+  id: string;
+  code: string;
+  name: string;
+  mandate: string;
+  status: string;
+  lifecycle_stage: string;
+  capital_allocation_pct: string;
+  risk_budget_pct: string;
+  volatility_target_pct: string | null;
+  max_drawdown_pct: string | null;
+  turnover_ceiling_pct: string | null;
+  approved_instruments: string[];
+  shutdown_criteria: string | null;
+  notes: string | null;
+  current_signals: Record<string, unknown>;
+  evaluation: Record<string, unknown>;
+  live_signals: StrategyPodSignal[];
+  current_signal_score: string | null;
+  model_confidence: string | null;
+  risk_level: string;
+  allocation_recommendation: string;
+  open_risk_warnings: string[];
+  latest_snapshot: StrategyPodLatestSnapshot | null;
+};
+
+export type StrategyPodsOverview = {
+  generated_at: string;
+  portfolio_name: string;
+  nav: string;
+  risk_level: string;
+  allocation_total_pct: string;
+  risk_budget_total_pct: string;
+  unallocated_pct: string;
+  pods: StrategyPod[];
+  warnings: string[];
+};
+
+export type StrategyPodUpdateInput = {
+  status?: string;
+  lifecycle_stage?: string;
+  capital_allocation_pct?: string;
+  risk_budget_pct?: string;
+  volatility_target_pct?: string | null;
+  max_drawdown_pct?: string | null;
+  turnover_ceiling_pct?: string | null;
+  approved_instruments?: string[];
+  shutdown_criteria?: string | null;
+  notes?: string | null;
+};
+
+export type StrategyPodSnapshot = {
+  snapshot_id: string;
+  strategy_pod_id: string;
+  code: string;
+  captured_at: string;
+  as_of_date: string;
+  status: string;
+  lifecycle_stage: string;
+  capital_allocation_pct: string;
+  risk_budget_pct: string;
+  current_signal_score: string | null;
+  model_confidence: string | null;
+  risk_level: string;
+  allocation_recommendation: string;
+};
+
+export function getOperatingCoreDashboard(options?: ApiRequestOptions) {
+  return fetchApi<OperatingCoreDashboard>("/api/operating-core/dashboard", options);
 }
 
-export function getCashLedgerHistory() {
-  return fetchApi<CashLedgerEntry[]>("/api/operating-core/cash-ledger/history");
+export function getCashLedgerHistory(options?: ApiRequestOptions) {
+  return fetchApi<CashLedgerEntry[]>("/api/operating-core/cash-ledger/history", options);
 }
 
 export function createManualTrade(payload: ManualTradeInput) {
   return postApi<Trade, ManualTradeInput>("/api/operating-core/trades", payload);
 }
 
-export function getRecentTickerMemos() {
-  return fetchApi<TickerMemoSummary[]>("/api/ticker-intelligence/memos");
+export function getRecentTickerMemos(options?: ApiRequestOptions) {
+  return fetchApi<TickerMemoSummary[]>("/api/ticker-intelligence/memos", options);
 }
 
 export function getTickerMemo(memoId: string) {
@@ -569,6 +844,72 @@ export function createFactorBacktest(payload: BacktestRunInput) {
   );
 }
 
-export function getCurrentMonthlyReport() {
-  return fetchApi<MonthlyReport>("/api/reports/monthly");
+export function getCurrentMonthlyReport(options?: ApiRequestOptions) {
+  return fetchApi<MonthlyReport>("/api/reports/monthly", options);
+}
+
+export function getRiskCentreOverview(options?: ApiRequestOptions) {
+  return fetchApi<RiskCentreOverview>("/api/risk-centre/overview", options);
+}
+
+export function captureRiskSnapshot() {
+  return postApi<RiskSnapshotCapture, Record<string, never>>(
+    "/api/risk-centre/snapshots",
+    {},
+  );
+}
+
+export function createCustomStressTest(payload: StressScenarioInput) {
+  return postApi<StressTestResult, StressScenarioInput>(
+    "/api/risk-centre/stress-tests",
+    payload,
+  );
+}
+
+export function createPreTradeRiskCheck(payload: PreTradeRiskInput) {
+  return postApi<PreTradeRiskCheck, PreTradeRiskInput>(
+    "/api/risk-centre/pre-trade-check",
+    payload,
+  );
+}
+
+export function getStrategyPods(options?: ApiRequestOptions) {
+  return fetchApi<StrategyPodsOverview>("/api/strategy-pods", options);
+}
+
+export function getStrategyPod(code: string) {
+  return fetchApi<StrategyPod>(`/api/strategy-pods/${encodeURIComponent(code)}`);
+}
+
+export function updateStrategyPod(code: string, payload: StrategyPodUpdateInput) {
+  return fetch(`${API_BASE_URL}/api/strategy-pods/${encodeURIComponent(code)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  }).then(async (response) => {
+    if (!response.ok) {
+      let detail = `Request failed (${response.status})`;
+      try {
+        const body = (await response.json()) as { detail?: string | { msg?: string }[] };
+        if (typeof body.detail === "string") {
+          detail = body.detail;
+        } else if (Array.isArray(body.detail) && body.detail[0]?.msg) {
+          detail = body.detail[0].msg;
+        }
+      } catch {
+        // keep default message
+      }
+      throw new Error(detail);
+    }
+    return response.json() as Promise<StrategyPod>;
+  });
+}
+
+export function captureStrategyPodSnapshot(code: string) {
+  return postApi<StrategyPodSnapshot, Record<string, never>>(
+    `/api/strategy-pods/${encodeURIComponent(code)}/snapshots`,
+    {},
+  );
 }

@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { AppShell } from "@/components/shell/AppShell";
-import { getHealth } from "@/lib/api";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,34 +13,21 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Hedge Fund Platform",
-  description: "Quantitative trading and portfolio operations platform",
+  title: "Pease Capital",
+  description: "Technology-driven hedge fund operating system",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  let apiStatus: "connected" | "offline" = "offline";
-
-  try {
-    const health = await getHealth();
-    if (health.status === "ok") {
-      apiStatus = "connected";
-    }
-  } catch {
-    apiStatus = "offline";
-  }
-
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full">
-        <AppShell apiStatus={apiStatus}>{children}</AppShell>
-      </body>
+      <body className="min-h-full font-sans">{children}</body>
     </html>
   );
 }
