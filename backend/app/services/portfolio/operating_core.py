@@ -638,9 +638,7 @@ async def _list_trades(
     if limit is not None:
         statement = statement.limit(limit)
 
-    result = await session.scalars(
-        statement
-    )
+    result = await session.scalars(statement)
     return list(result)
 
 
@@ -716,12 +714,8 @@ def _trade_journal_summary(
         sum((entry.notional_value for entry in entries), Decimal("0"))
     )
     total_fees = money(sum((entry.fees for entry in entries), Decimal("0")))
-    net_cash_impact = money(
-        sum((entry.cash_impact for entry in entries), Decimal("0"))
-    )
-    fee_bps_values = [
-        entry.fee_bps for entry in entries if entry.fee_bps is not None
-    ]
+    net_cash_impact = money(sum((entry.cash_impact for entry in entries), Decimal("0")))
+    fee_bps_values = [entry.fee_bps for entry in entries if entry.fee_bps is not None]
     average_fee_bps = None
     if fee_bps_values:
         average_fee_bps = (
@@ -730,7 +724,9 @@ def _trade_journal_summary(
 
     return TradeJournalSummaryResponse(
         total_trades=len(entries),
-        buy_count=len([entry for entry in entries if entry.side == TradeSide.BUY.value]),
+        buy_count=len(
+            [entry for entry in entries if entry.side == TradeSide.BUY.value]
+        ),
         sell_count=len(
             [entry for entry in entries if entry.side == TradeSide.SELL.value]
         ),

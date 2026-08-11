@@ -11,7 +11,7 @@ const navigationItems = [
   { label: "Strategy Pods", href: "/strategy-pods" },
   { label: "Risk Centre", href: "/risk-centre" },
   { label: "Opportunity Queue" },
-  { label: "Trade Journal" },
+  { label: "Trade Journal", href: "/trade-journal" },
   { label: "Attribution" },
   { label: "Reports", href: "/reports" },
   { label: "Settings", href: "/settings" },
@@ -28,6 +28,7 @@ const pageTitles: Record<string, string> = {
   "Research Lab": "Research Lab",
   "Strategy Pods": "Investment Pod Control",
   "Risk Centre": "Central Risk Office",
+  "Trade Journal": "Execution Journal",
   Reports: "Monthly Reports",
   Settings: "Account Settings",
 };

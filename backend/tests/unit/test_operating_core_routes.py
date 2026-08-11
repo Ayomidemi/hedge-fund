@@ -32,6 +32,12 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("/api/operating-core/cash-ledger/adjustments", paths)
         self.assertIn("post", paths["/api/operating-core/cash-ledger/adjustments"])
 
+    def test_trade_journal_route_accepts_get_and_post(self) -> None:
+        methods = app.openapi()["paths"]["/api/operating-core/trades"]
+
+        self.assertIn("get", methods)
+        self.assertIn("post", methods)
+
     def test_ticker_intelligence_routes_are_registered(self) -> None:
         paths = app.openapi()["paths"]
 

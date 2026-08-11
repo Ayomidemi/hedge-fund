@@ -180,6 +180,31 @@ export type Trade = {
   broker_reference: string | null;
 };
 
+export type TradeJournalEntry = Trade & {
+  notional_value: string;
+  cash_impact: string;
+  fee_bps: string | null;
+  has_risk_notes: boolean;
+};
+
+export type TradeJournalSummary = {
+  total_trades: number;
+  buy_count: number;
+  sell_count: number;
+  unique_tickers: number;
+  gross_traded_value: string;
+  net_cash_impact: string;
+  total_fees: string;
+  average_fee_bps: string | null;
+  last_trade_at: string | null;
+};
+
+export type TradeJournal = {
+  portfolio: Portfolio;
+  summary: TradeJournalSummary;
+  trades: TradeJournalEntry[];
+};
+
 export type RiskLimit = {
   id: string;
   name: string;
@@ -828,6 +853,10 @@ export function getCashLedgerHistory(options?: ApiRequestOptions) {
 
 export function createManualTrade(payload: ManualTradeInput, options?: ApiRequestOptions) {
   return postApi<Trade, ManualTradeInput>("/api/operating-core/trades", payload, options);
+}
+
+export function getTradeJournal(options?: ApiRequestOptions) {
+  return fetchApi<TradeJournal>("/api/operating-core/trades", options);
 }
 
 export function getRecentTickerMemos(options?: ApiRequestOptions) {

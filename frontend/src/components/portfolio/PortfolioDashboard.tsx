@@ -153,13 +153,18 @@ export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
             title="Trade journal"
             eyebrow="Recent"
             action={
-              <button
-                type="button"
-                onClick={() => setTradeModalOpen(true)}
-                className={ghostButtonClassName}
-              >
-                Record trade
-              </button>
+              <div className="flex items-center gap-2">
+                <Link href="/trade-journal" className={ghostButtonClassName}>
+                  View all
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setTradeModalOpen(true)}
+                  className={ghostButtonClassName}
+                >
+                  Record trade
+                </button>
+              </div>
             }
           >
             <thead>
