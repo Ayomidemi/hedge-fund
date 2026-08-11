@@ -43,6 +43,7 @@ from app.services.ticker_intelligence.analysis import (
     list_recent_ticker_memos,
     list_ticker_memos,
 )
+from app.services.market_data.quote_cache import get_cached_quote_price
 from app.services.ticker_intelligence.market_data import (
     MarketDataUnavailableError,
     prefill_ticker,
@@ -284,14 +285,22 @@ async def read_ticker_prefill(
     ticker: str,
     market: str | None = Query(default=None, max_length=16),
     _user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
 ) -> TickerPrefillResponse:
     try:
-        return await prefill_ticker(ticker, market_hint=market)
+        response = await prefill_ticker(ticker, market_hint=market)
     except MarketDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+    # Prefer the platform's live mark over the provider snapshot so the
+    # analyst sees the same price the portfolio is marked at.
+    live_price = await get_cached_quote_price(session, response.instrument.ticker)
+    if live_price is not None:
+        response.metrics.current_price = live_price
+    return response
 
 
 @router.get("/{ticker}/memos", response_model=list[TickerMemoResponse])

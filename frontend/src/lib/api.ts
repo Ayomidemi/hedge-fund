@@ -325,6 +325,7 @@ export type ExposureBucket = {
 
 export type OperatingCoreDashboard = {
   portfolio: Portfolio;
+  prices_as_of: string | null;
   cash_balance: string;
   nav: string;
   invested_value: string;
@@ -911,6 +912,34 @@ export type ResearchLabOverview = {
   notes: string[];
 };
 
+export type ResearchPipelineRunInput = {
+  tickers: string[];
+  benchmark_ticker?: string;
+  start_date: string;
+  end_date?: string;
+  horizon_days?: number;
+  source?: string;
+  train_model?: boolean;
+};
+
+export type ResearchPipelineRunStep = {
+  name: string;
+  status: string;
+  message: string;
+  rows: number | null;
+};
+
+export type ResearchPipelineRun = {
+  tickers: string[];
+  benchmark_ticker: string;
+  start_date: string;
+  end_date: string;
+  horizon_days: number;
+  steps: ResearchPipelineRunStep[];
+  model_version_id: string | null;
+  warnings: string[];
+};
+
 export type RiskPolicyLimit = {
   key: string;
   label: string;
@@ -1285,6 +1314,17 @@ export function getResearchLabOverview(options?: ApiRequestOptions) {
   return fetchApi<ResearchLabOverview>("/api/research-lab/overview", options);
 }
 
+export function runResearchDataPipeline(
+  payload: ResearchPipelineRunInput,
+  options?: ApiRequestOptions,
+) {
+  return postApi<ResearchPipelineRun, ResearchPipelineRunInput>(
+    "/api/ticker-intelligence/ml/pipeline/run",
+    payload,
+    options,
+  );
+}
+
 export function getRiskCentreOverview(options?: ApiRequestOptions) {
   return fetchApi<RiskCentreOverview>("/api/risk-centre/overview", options);
 }
@@ -1405,6 +1445,28 @@ export type AdministrationRiskPolicy = {
   notes: string | null;
 };
 
+export type PriceRefreshRun = {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  ticker_count: number;
+  success_count: number;
+  failure_count: number;
+  positions_marked: number;
+  interval_seconds: number;
+  errors: Array<{ ticker?: string; error: string }>;
+};
+
+export type FxRateSnapshot = {
+  base_currency: string;
+  quote_currency: string;
+  rate: string;
+  source: string;
+  as_of: string;
+  is_stale: boolean;
+};
+
 export type AdministrationOverview = {
   generated_at: string;
   portfolio_name: string;
@@ -1413,6 +1475,8 @@ export type AdministrationOverview = {
   data_versions: AdministrationDataVersion[];
   portfolio_rules: AdministrationPortfolioRule[];
   risk_policies: AdministrationRiskPolicy[];
+  price_refresh_runs: PriceRefreshRun[];
+  latest_fx_rate: FxRateSnapshot | null;
 };
 
 export function getAdministrationOverview(

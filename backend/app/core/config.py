@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
 
+    # Only timing knob for the live price platform. 300s on free API tiers,
+    # drop to 10s when testing penny stocks. All other tuning lives in
+    # app/core/market_constants.py.
+    hf_price_refresh_interval_seconds: int = 300
+    hf_redis_url: str = "redis://localhost:6379/0"
+
     hf_ai_provider: str = "disabled"
     hf_openai_api_key: str | None = None
     hf_openai_model: str = "gpt-5"
@@ -161,6 +167,14 @@ class Settings(BaseSettings):
     def supabase_url(self) -> str | None:
         value = (self.hf_supabase_url or "").strip().rstrip("/")
         return value or None
+
+    @property
+    def price_refresh_interval_seconds(self) -> int:
+        return max(int(self.hf_price_refresh_interval_seconds), 5)
+
+    @property
+    def redis_url(self) -> str:
+        return self.hf_redis_url.strip()
 
     @property
     def auth_enabled(self) -> bool:

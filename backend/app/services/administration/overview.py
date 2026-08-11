@@ -10,12 +10,16 @@ from app.api.schemas.administration import (
     AdministrationOverviewResponse,
     AdministrationPortfolioRuleResponse,
     AdministrationRiskPolicyResponse,
+    FxRateResponse,
+    PriceRefreshRunResponse,
     SystemLogEntryResponse,
 )
 from app.core.auth import AuthenticatedUser
 from app.models import (
+    FxRate,
     MarketPriceBar,
     ModelVersion,
+    PriceRefreshRun,
     RiskLimit,
     RiskPolicyVersion,
     SystemLogEntry,
@@ -77,6 +81,19 @@ async def build_administration_overview(
     )
     feature_count, feature_instruments, latest_feature_date = feature_stats.one()
 
+    refresh_runs = list(
+        await session.scalars(
+            select(PriceRefreshRun)
+            .order_by(PriceRefreshRun.started_at.desc())
+            .limit(10)
+        )
+    )
+    latest_fx = await session.scalar(
+        select(FxRate)
+        .where(FxRate.base_currency == "USD", FxRate.quote_currency == "NGN")
+        .where(FxRate.is_stale.is_(False))
+    )
+
     logger.info(
         "administration_overview_loaded",
         extra={
@@ -118,6 +135,10 @@ async def build_administration_overview(
             for limit in risk_limits
         ],
         risk_policies=[_risk_policy_response(item) for item in risk_policies],
+        price_refresh_runs=[
+            PriceRefreshRunResponse.model_validate(run) for run in refresh_runs
+        ],
+        latest_fx_rate=FxRateResponse.model_validate(latest_fx) if latest_fx else None,
     )
 
 

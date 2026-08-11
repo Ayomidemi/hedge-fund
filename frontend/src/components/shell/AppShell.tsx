@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LiveStatusIndicator } from "@/components/shell/LiveStatusIndicator";
 
 const navigationItems = [
   { label: "Fund Dashboard", href: "/" },
@@ -99,12 +100,15 @@ export function AppShell({ children, userOrgName }: AppShellProps) {
               </h1>
             </div>
 
-            <Link
-              href="/settings"
-              className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-            >
-              {userOrgName ?? "Your organization"}
-            </Link>
+            <div className="flex items-center gap-4">
+              <LiveStatusIndicator />
+              <Link
+                href="/settings"
+                className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              >
+                {userOrgName ?? "Your organization"}
+              </Link>
+            </div>
           </div>
         </header>
 

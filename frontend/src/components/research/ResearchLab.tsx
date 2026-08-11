@@ -1,8 +1,20 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { FormEvent, ReactNode } from "react";
+import { toast } from "@/components/ui/ToastProvider";
+import {
+  buttonPrimaryClassName,
+  buttonSecondaryClassName,
+  inputClassName,
+} from "@/components/ui/form-styles";
+import {
+  getResearchLabOverview,
+  runResearchDataPipeline,
+  type ResearchPipelineRun,
+} from "@/lib/api";
 import type {
   ResearchActionItem,
   ResearchBacktest,
@@ -57,13 +69,79 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) {
+  const searchParams = useSearchParams();
+  const [overview, setOverview] = useState(initialOverview);
   const [activeTab, setActiveTab] = useState<LabTab>("overview");
-  const overview = initialOverview;
+  const [pipelineRun, setPipelineRun] = useState<ResearchPipelineRun | null>(null);
+  const [pipelinePending, setPipelinePending] = useState(false);
+  const requestedTicker = searchParams.get("ticker") ?? "";
+  const requestedHorizon = searchParams.get("horizon") ?? "63";
 
   const highPriorityActions = useMemo(
     () => overview?.action_items.filter((item) => item.priority === "high") ?? [],
     [overview?.action_items],
   );
+  const defaultTrainingTickers = useMemo(
+    () => defaultTrainingUniverse(overview, requestedTicker),
+    [overview, requestedTicker],
+  );
+
+  async function reloadOverview() {
+    const nextOverview = await getResearchLabOverview();
+    setOverview(nextOverview);
+    return nextOverview;
+  }
+
+  async function handleRunPipeline(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const formData = new FormData(event.currentTarget);
+    const benchmark = textValue(formData, "benchmark_ticker").toUpperCase() || "SPY";
+    const tickers = parseTickerList(textValue(formData, "tickers")).filter(
+      (ticker) => ticker !== benchmark,
+    );
+    const startDate = textValue(formData, "start_date");
+    const endDate = textValue(formData, "end_date") || todayDateValue();
+    const horizonDays = Number(formData.get("horizon_days") ?? 63);
+
+    if (tickers.length === 0) {
+      toast.error("Add at least one training ticker.");
+      return;
+    }
+    if (!startDate) {
+      toast.error("Choose a training start date.");
+      return;
+    }
+
+    setPipelinePending(true);
+    setPipelineRun(null);
+    try {
+      const result = await runResearchDataPipeline({
+        tickers,
+        benchmark_ticker: benchmark,
+        start_date: startDate,
+        end_date: endDate,
+        horizon_days: horizonDays,
+        source: "yahoo",
+        train_model: formData.get("train_model") === "on",
+      });
+      setPipelineRun(result);
+      await reloadOverview();
+      if (result.model_version_id) {
+        toast.success(`ML model trained for ${result.horizon_days}d horizon.`);
+      } else if (result.warnings.length > 0) {
+        toast.error("Pipeline finished with items to review.");
+      } else {
+        toast.success("Research data pipeline completed.");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Research pipeline could not run.",
+      );
+    } finally {
+      setPipelinePending(false);
+    }
+  }
 
   if (!overview) {
     return (
@@ -129,6 +207,14 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
         </div>
       </section>
 
+      <TrainingRunPanel
+        defaultTickers={defaultTrainingTickers}
+        defaultHorizon={requestedHorizon}
+        pending={pipelinePending}
+        result={pipelineRun}
+        onSubmit={handleRunPipeline}
+      />
+
       <nav className="flex gap-2 overflow-x-auto">
         {tabs.map((tab) => (
           <button
@@ -185,6 +271,178 @@ function Pipeline({ stages }: { stages: ResearchLabOverview["pipeline"] }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function TrainingRunPanel({
+  defaultTickers,
+  defaultHorizon,
+  onSubmit,
+  pending,
+  result,
+}: {
+  defaultTickers: string[];
+  defaultHorizon: string;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  pending: boolean;
+  result: ResearchPipelineRun | null;
+}) {
+  const completedSteps =
+    result?.steps.filter((step) => step.status === "completed").length ?? 0;
+  const failedSteps = result?.steps.filter((step) => step.status === "failed").length ?? 0;
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Ticker ML Layer
+          </p>
+          <h3 className="mt-1 text-base font-semibold">Research Data Pipeline</h3>
+        </div>
+        {result && (
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge status={failedSteps > 0 ? "needs_review" : "ready"} />
+            {result.model_version_id && <StatusBadge status="validated" />}
+          </div>
+        )}
+      </div>
+
+      <form className="mt-5 grid gap-4 xl:grid-cols-[1fr_320px]" onSubmit={onSubmit}>
+        <Field label="Training universe">
+          <textarea
+            name="tickers"
+            rows={4}
+            defaultValue={defaultTickers.join(", ")}
+            placeholder="Add tickers from your research universe"
+            className={inputClassName}
+          />
+        </Field>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+          <Field label="Benchmark">
+            <input name="benchmark_ticker" defaultValue="SPY" className={inputClassName} />
+          </Field>
+          <Field label="Horizon">
+            <select name="horizon_days" defaultValue={defaultHorizon} className={inputClassName}>
+              <option value="21">21 days</option>
+              <option value="63">63 days</option>
+              <option value="126">126 days</option>
+              <option value="252">252 days</option>
+            </select>
+          </Field>
+          <Field label="Start date">
+            <input
+              name="start_date"
+              type="date"
+              defaultValue={dateYearsAgoValue(5)}
+              className={inputClassName}
+            />
+          </Field>
+          <Field label="End date">
+            <input
+              name="end_date"
+              type="date"
+              defaultValue={todayDateValue()}
+              className={inputClassName}
+            />
+          </Field>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 xl:col-span-2">
+          <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+            <input
+              name="train_model"
+              type="checkbox"
+              defaultChecked
+              className="h-4 w-4 rounded border-zinc-300 text-zinc-950"
+            />
+            Train predictive model after features and labels are ready
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button type="reset" disabled={pending} className={buttonSecondaryClassName}>
+              Reset
+            </button>
+            <button type="submit" disabled={pending} className={buttonPrimaryClassName}>
+              {pending ? "Running..." : "Run pipeline"}
+            </button>
+          </div>
+        </div>
+      </form>
+
+      {result && (
+        <div className="mt-5 rounded-lg border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-900/50">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <ResultMetric label="Tickers" value={String(result.tickers.length)} />
+            <ResultMetric label="Completed" value={String(completedSteps)} />
+            <ResultMetric label="Needs review" value={String(failedSteps)} />
+            <ResultMetric
+              label="Model"
+              value={result.model_version_id ? "Registered" : "Not trained"}
+            />
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Step
+                  </th>
+                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Rows
+                  </th>
+                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Message
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.steps.map((step) => (
+                  <tr
+                    key={step.name}
+                    className="border-b border-zinc-100 last:border-0 dark:border-zinc-900"
+                  >
+                    <td className="px-4 py-3 font-medium">{formatPipelineStep(step.name)}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={step.status} />
+                    </td>
+                    <td className="px-4 py-3 tabular-nums text-zinc-600 dark:text-zinc-300">
+                      {step.rows === null ? "-" : compact.format(step.rows)}
+                    </td>
+                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-300">
+                      {step.message}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {result.warnings.length > 0 && (
+            <div className="mt-4 space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              {result.warnings.map((warning) => (
+                <p key={warning}>{warning}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ResultMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+        {label}
+      </p>
+      <p className="mt-1 text-lg font-semibold">{value}</p>
     </div>
   );
 }
@@ -545,7 +803,7 @@ function PriorityBadge({ priority }: { priority: string }) {
 }
 
 function statusStyle(status: string) {
-  if (["passed", "validated", "ready", "candidate"].includes(status)) {
+  if (["completed", "passed", "validated", "ready", "candidate"].includes(status)) {
     return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
   }
   if (["warning", "needs_review", "blocked"].includes(status)) {
@@ -555,6 +813,68 @@ function statusStyle(status: string) {
     return "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300";
   }
   return "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300";
+}
+
+function defaultTrainingUniverse(
+  overview: ResearchLabOverview | null,
+  requestedTicker: string,
+) {
+  const requestedTickers = parseTickerList(requestedTicker);
+  const memoTickers =
+    overview?.notebooks.map((notebook) => notebook.ticker.toUpperCase()) ?? [];
+  return uniqueTickers([...requestedTickers, ...memoTickers])
+    .filter((ticker) => ticker !== "SPY")
+    .slice(0, 20);
+}
+
+function parseTickerList(value: string) {
+  return uniqueTickers(
+    value
+      .split(/[\s,]+/)
+      .map((ticker) => ticker.trim().toUpperCase())
+      .filter(Boolean),
+  );
+}
+
+function uniqueTickers(tickers: string[]) {
+  return Array.from(new Set(tickers));
+}
+
+function formatPipelineStep(value: string) {
+  return value
+    .replace("price_backfill:", "Price backfill / ")
+    .replace("labels:", "Labels / ")
+    .replace("price_features", "Price features")
+    .replace("predictive_model", "Predictive model");
+}
+
+function textValue(formData: FormData, key: string) {
+  return String(formData.get(key) ?? "").trim();
+}
+
+function todayDateValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dateYearsAgoValue(years: number) {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() - years);
+  return date.toISOString().slice(0, 10);
+}
+
+function Field({
+  children,
+  label,
+}: {
+  children: ReactNode;
+  label: string;
+}) {
+  return (
+    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+      {label}
+      {children}
+    </label>
+  );
 }
 
 function money(value: string) {

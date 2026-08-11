@@ -818,12 +818,21 @@ async def _load_price_histories(
         await session.scalars(
             select(MarketPriceBar)
             .where(MarketPriceBar.instrument_id.in_(instrument_by_id))
-            .where(MarketPriceBar.source == "yahoo")
+            .where(MarketPriceBar.source.in_(("yahoo", "live")))
             .order_by(MarketPriceBar.instrument_id, MarketPriceBar.bar_date)
         )
     )
-    histories: dict[str, list[MarketPriceBar]] = {}
+    # One bar per (instrument, date). Yahoo backfill wins where both exist;
+    # "live" bars (written by the price refresh job) fill in today.
+    deduped: dict[tuple, MarketPriceBar] = {}
     for bar in bars:
+        key = (bar.instrument_id, bar.bar_date)
+        existing = deduped.get(key)
+        if existing is None or (existing.source == "live" and bar.source == "yahoo"):
+            deduped[key] = bar
+
+    histories: dict[str, list[MarketPriceBar]] = {}
+    for bar in sorted(deduped.values(), key=lambda item: item.bar_date):
         instrument = instrument_by_id[bar.instrument_id]
         histories.setdefault(instrument.ticker, []).append(bar)
     return histories

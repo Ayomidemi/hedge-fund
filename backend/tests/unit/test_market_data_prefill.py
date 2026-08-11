@@ -104,6 +104,26 @@ class MarketDataPrefillTests(TestCase):
         self.assertEqual(response.metrics.pe_ratio, Decimal("24.1"))
         self.assertEqual(response.metrics.free_cash_flow_yield_pct, Decimal("3.90"))
 
+    def test_hides_provider_plan_warnings_when_fallback_data_prefills(self) -> None:
+        response = _build_prefill_response(
+            PrefillBuildContext(
+                ticker="NVDA",
+                provider_symbol="NVDA",
+                details={"name": "NVIDIA Corporation", "primary_exchange": "XNAS"},
+                bars=[{"c": "180.25"}],
+                warnings=[
+                    "/stocks/financials/v1/ratios not available for this API key or plan.",
+                    "/v3/profile/NVDA not available for this API key or plan.",
+                    "/v3/reference/tickers/NVDA returned 404: not found",
+                    "Temporary provider timeout.",
+                ],
+            )
+        )
+
+        self.assertEqual(response.instrument.name, "NVIDIA Corporation")
+        self.assertEqual(response.metrics.current_price, Decimal("180.25"))
+        self.assertEqual(response.source_warnings, ["Temporary provider timeout."])
+
     def test_builds_prefill_from_ngn_market_fields(self) -> None:
         response = _build_prefill_response(
             PrefillBuildContext(

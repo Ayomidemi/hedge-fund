@@ -56,6 +56,32 @@ class AdministrationRiskPolicyResponse(BaseModel):
     notes: str | None
 
 
+class PriceRefreshRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    started_at: datetime
+    finished_at: datetime | None
+    status: str
+    ticker_count: int
+    success_count: int
+    failure_count: int
+    positions_marked: int
+    interval_seconds: int
+    errors: list[dict[str, Any]]
+
+
+class FxRateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    base_currency: str
+    quote_currency: str
+    rate: Decimal
+    source: str
+    as_of: datetime
+    is_stale: bool
+
+
 class AdministrationOverviewResponse(BaseModel):
     generated_at: datetime
     portfolio_name: str
@@ -64,3 +90,5 @@ class AdministrationOverviewResponse(BaseModel):
     data_versions: list[AdministrationDataVersionResponse]
     portfolio_rules: list[AdministrationPortfolioRuleResponse]
     risk_policies: list[AdministrationRiskPolicyResponse]
+    price_refresh_runs: list[PriceRefreshRunResponse] = []
+    latest_fx_rate: FxRateResponse | None = None

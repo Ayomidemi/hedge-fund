@@ -69,6 +69,15 @@ export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
                 {dashboard.portfolio.name}
               </p>
               <h2 className="mt-1 text-2xl font-semibold tracking-tight">Fund overview</h2>
+              {dashboard.prices_as_of ? (
+                <p className="mt-1 text-xs text-zinc-500">
+                  Prices as of{" "}
+                  {new Intl.DateTimeFormat("en-US", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  }).format(new Date(dashboard.prices_as_of))}
+                </p>
+              ) : null}
             </div>
             <div
               className={`rounded-full px-3.5 py-1.5 text-sm font-medium ${

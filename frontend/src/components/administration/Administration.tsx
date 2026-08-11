@@ -9,10 +9,11 @@ type AdministrationProps = {
   isUnavailable: boolean;
 };
 
-type AdminTab = "logs" | "models" | "data" | "rules" | "policies";
+type AdminTab = "logs" | "live" | "models" | "data" | "rules" | "policies";
 
 const tabs: { key: AdminTab; label: string }[] = [
   { key: "logs", label: "System logs" },
+  { key: "live", label: "Live data" },
   { key: "models", label: "Model registry" },
   { key: "data", label: "Data versions" },
   { key: "rules", label: "Portfolio rules" },
@@ -22,6 +23,7 @@ const tabs: { key: AdminTab; label: string }[] = [
 const logCategories = [
   "all",
   "portfolio",
+  "market_data",
   "research",
   "risk",
   "strategy_pods",
@@ -55,6 +57,10 @@ export function Administration({
       { label: "Data sets", value: String(overview.data_versions.length) },
       { label: "Portfolio rules", value: String(overview.portfolio_rules.length) },
       { label: "Risk policies", value: String(overview.risk_policies.length) },
+      {
+        label: "Price refreshes",
+        value: String(overview.price_refresh_runs.length),
+      },
     ];
   }, [logCount, overview]);
 
@@ -104,7 +110,7 @@ export function Administration({
           </button>
         </div>
 
-        <div className="grid divide-y divide-zinc-200 sm:grid-cols-5 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
+        <div className="grid divide-y divide-zinc-200 sm:grid-cols-6 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
           {metrics.map((metric) => (
             <div key={metric.label} className="px-5 py-4">
               <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -142,6 +148,12 @@ export function Administration({
             setLogCategory(category);
             void refreshLogs(category);
           }}
+        />
+      )}
+      {activeTab === "live" && (
+        <LiveDataPanel
+          runs={overview.price_refresh_runs}
+          fxRate={overview.latest_fx_rate}
         />
       )}
       {activeTab === "models" && <ModelsPanel models={overview.model_versions} />}
@@ -221,6 +233,98 @@ function LogsPanel({
             No log entries yet. Actions like trades, ticker analysis, and risk checks will appear here.
           </p>
         )}
+      </div>
+    </section>
+  );
+}
+
+function LiveDataPanel({
+  runs,
+  fxRate,
+}: {
+  runs: AdministrationOverview["price_refresh_runs"];
+  fxRate: AdministrationOverview["latest_fx_rate"];
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+        <h3 className="text-sm font-semibold">FX rate</h3>
+        <p className="mt-1 text-sm text-zinc-500">
+          Refreshed on the same schedule as live prices (every 5 minutes by default).
+          Used to convert Nigerian (NGN) marks into USD.
+        </p>
+        {fxRate ? (
+          <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+            <Row
+              label="Pair"
+              value={`${fxRate.base_currency}/${fxRate.quote_currency}`}
+            />
+            <Row label="Rate" value={Number(fxRate.rate).toLocaleString()} />
+            <Row label="Source" value={fxRate.source} />
+            <Row label="As of" value={formatDateTime(fxRate.as_of)} />
+          </dl>
+        ) : (
+          <p className="mt-4 text-sm text-zinc-500">
+            No FX rate yet. Start the backend with{" "}
+            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-900">
+              ./scripts/dev-backend.sh
+            </code>{" "}
+            and wait for the first refresh cycle.
+          </p>
+        )}
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold">Price refresh runs</h3>
+          <p className="mt-1 text-sm text-zinc-500">
+            Audit trail for automated quote ingestion and mark-to-market cycles.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[880px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                <Th>Started</Th>
+                <Th>Status</Th>
+                <Th>Quotes</Th>
+                <Th>Marked</Th>
+                <Th>Interval</Th>
+                <Th>Errors</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <tr
+                  key={run.id}
+                  className="border-b border-zinc-100 last:border-0 dark:border-zinc-900"
+                >
+                  <Td>{formatDateTime(run.started_at)}</Td>
+                  <Td emphasis>{formatLabel(run.status)}</Td>
+                  <Td>
+                    {run.success_count}/{run.ticker_count}
+                  </Td>
+                  <Td>{run.positions_marked}</Td>
+                  <Td>{run.interval_seconds}s</Td>
+                  <Td className="text-zinc-500">
+                    {run.errors.length > 0
+                      ? run.errors
+                          .map((error) => error.ticker ?? error.error)
+                          .join(", ")
+                      : "—"}
+                  </Td>
+                </tr>
+              ))}
+              {runs.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-5 py-10 text-center text-sm text-zinc-500">
+                    No refresh runs recorded yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   );
@@ -395,15 +499,17 @@ function Th({ children }: { children: React.ReactNode }) {
 function Td({
   children,
   emphasis = false,
+  className = "",
 }: {
   children: React.ReactNode;
   emphasis?: boolean;
+  className?: string;
 }) {
   return (
     <td
       className={`px-5 py-3 ${
         emphasis ? "font-medium text-zinc-950 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-300"
-      }`}
+      } ${className}`}
     >
       {children}
     </td>

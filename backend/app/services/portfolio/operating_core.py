@@ -34,6 +34,7 @@ from app.api.schemas.operating_core import (
 from app.models import (
     CashLedgerEntry,
     Instrument,
+    InstrumentQuote,
     Portfolio,
     Position,
     RiskLimit,
@@ -42,6 +43,7 @@ from app.models import (
     TradeStatus,
 )
 from app.services.administration.system_log import record_system_log
+from app.services.market_data.quote_cache import get_mark_price, get_mark_prices
 from app.services.portfolio.calculations import (
     DEFAULT_RISK_LIMITS,
     PositionSnapshot,
@@ -115,6 +117,7 @@ async def get_dashboard(
 
     return PortfolioDashboardResponse(
         portfolio=PortfolioResponse.model_validate(portfolio),
+        prices_as_of=await _latest_price_timestamp(session, positions),
         cash_balance=cash_balance,
         nav=nav,
         invested_value=invested_value,
@@ -637,9 +640,15 @@ async def _apply_trade_to_position(
             position.quantity = Decimal("0")
             position.closed_at = now
 
-    position.market_value = money(position.quantity * payload.price)
+    # Mark from the live quote when one is fresh (NGN → USD via FX guard).
+    mark_price = await get_mark_price(
+        session, instrument=instrument, portfolio=portfolio
+    )
+    if mark_price is None:
+        mark_price = payload.price
+    position.market_value = money(position.quantity * mark_price)
     position.unrealized_pnl = money(
-        (payload.price - position.average_cost) * position.quantity
+        (mark_price - position.average_cost) * position.quantity
     )
 
     logger.info(
@@ -761,13 +770,24 @@ async def _rebuild_positions_from_filled_trades(
         if state["quantity"] == 0:
             state["average_cost"] = Decimal("0")
 
+    instruments_by_id = {
+        instrument_id: state["instrument"] for instrument_id, state in states.items()
+    }
+    marks = await get_mark_prices(
+        session,
+        instrument_ids=set(states),
+        portfolio=portfolio,
+        instruments_by_id=instruments_by_id,
+    )
+
     for instrument_id, state in states.items():
         if state["quantity"] <= 0:
             continue
 
-        market_value = money(state["quantity"] * state["last_price"])
+        mark_price = marks.get(instrument_id, state["last_price"])
+        market_value = money(state["quantity"] * mark_price)
         unrealized_pnl = money(
-            (state["last_price"] - state["average_cost"]) * state["quantity"]
+            (mark_price - state["average_cost"]) * state["quantity"]
         )
         session.add(
             Position(
@@ -898,6 +918,22 @@ async def _list_risk_limits(session: AsyncSession, portfolio_id) -> list[RiskLim
         .order_by(RiskLimit.scope.asc(), RiskLimit.name.asc())
     )
     return list(result)
+
+
+async def _latest_price_timestamp(
+    session: AsyncSession,
+    positions: list[Position],
+) -> datetime | None:
+    instrument_ids = {
+        position.instrument_id for position in positions if position.quantity > 0
+    }
+    if not instrument_ids:
+        return None
+    return await session.scalar(
+        select(func.max(InstrumentQuote.as_of)).where(
+            InstrumentQuote.instrument_id.in_(instrument_ids)
+        )
+    )
 
 
 def _position_response(position: Position) -> PositionResponse:

@@ -46,7 +46,36 @@ Database health: http://localhost:8000/api/health/db
 
 For Supabase, set `HF_SUPABASE_DATABASE_URL` in the root `.env` or `backend/.env` to the Supabase Postgres pooler connection string. The backend accepts `postgresql://`, `postgres://`, or `postgresql+asyncpg://`, normalizes Postgres URLs for async SQLAlchemy, and applies Supabase pooler-safe connection options.
 
-### 3. Frontend
+### 3. Live price platform (Celery worker)
+
+Prices are refreshed centrally by a Celery beat schedule, written to
+`instrument_quotes`, applied to every open position (mark-to-market), and
+pushed to the frontend over WebSocket (`/api/ws`) via Redis pub/sub.
+
+Start the full backend stack (Redis + API + Celery) with one command:
+
+```bash
+./scripts/dev-backend.sh
+```
+
+Stop API and Celery:
+
+```bash
+./scripts/stop-backend.sh
+```
+
+The only timing knob is in the root `.env`:
+
+```env
+HF_PRICE_REFRESH_INTERVAL_SECONDS=300   # 5 min on free API tiers; 10 for penny-stock testing
+```
+
+All other tuning (batch size, market-hours gating, staleness threshold,
+benchmark tickers) lives in `backend/app/core/market_constants.py`.
+Each refresh cycle is audited in `price_refresh_runs` and surfaced on the
+Administration page.
+
+### 4. Frontend
 
 ```bash
 cd frontend

@@ -12,6 +12,7 @@ from app.api.routes import (
     risk_centre,
     strategy_pods,
     ticker_intelligence,
+    websocket,
 )
 
 api_router = APIRouter()
@@ -26,3 +27,4 @@ api_router.include_router(reports.router, tags=["reports"])
 api_router.include_router(research_lab.router, tags=["research-lab"])
 api_router.include_router(risk_centre.router, tags=["risk-centre"])
 api_router.include_router(strategy_pods.router, tags=["strategy-pods"])
+api_router.include_router(websocket.router, tags=["realtime"])

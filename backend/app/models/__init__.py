@@ -125,6 +125,9 @@ class Instrument(Base, TimestampMixin):
         back_populates="instrument",
         foreign_keys="TickerTrainingLabel.instrument_id",
     )
+    quote: Mapped["InstrumentQuote | None"] = relationship(
+        back_populates="instrument", uselist=False
+    )
 
 
 class Portfolio(Base, TimestampMixin):
@@ -847,6 +850,88 @@ class TickerTrainingLabel(Base, TimestampMixin):
         Index(
             "ix_ticker_training_labels_instrument_date", "instrument_id", "as_of_date"
         ),
+    )
+
+
+class InstrumentQuote(Base, TimestampMixin):
+    """Latest live mark for an instrument. One row per instrument, updated in
+    place on every price refresh cycle. All modules that display or mark
+    prices read from this table instead of calling providers directly."""
+
+    __tablename__ = "instrument_quotes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, unique=True, index=True
+    )
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    previous_close: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    change_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    day_open: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    day_high: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    day_low: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_stale: Mapped[bool] = mapped_column(nullable=False, default=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    instrument: Mapped["Instrument"] = relationship(back_populates="quote")
+
+
+class FxRate(Base, TimestampMixin):
+    """Latest FX rate for a currency pair. Refreshed on the same schedule as
+    instrument quotes. Rate is quote_currency per 1 base_currency
+    (e.g. USD/NGN = 1363.18 means 1 USD = 1363.18 NGN)."""
+
+    __tablename__ = "fx_rates"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_stale: Mapped[bool] = mapped_column(nullable=False, default=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "base_currency",
+            "quote_currency",
+            name="uq_fx_rates_base_quote",
+        ),
+        Index("ix_fx_rates_base_quote", "base_currency", "quote_currency"),
+    )
+
+
+class PriceRefreshRun(Base, TimestampMixin):
+    """Audit trail of price refresh cycles, surfaced in Administration."""
+
+    __tablename__ = "price_refresh_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    ticker_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    positions_marked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+
+    __table_args__ = (
+        Index("ix_price_refresh_runs_started_at", "started_at"),
     )
 
 

@@ -217,6 +217,7 @@ class ExposureBucketResponse(BaseModel):
 
 class PortfolioDashboardResponse(BaseModel):
     portfolio: PortfolioResponse
+    prices_as_of: datetime | None = None
     cash_balance: Decimal
     nav: Decimal
     invested_value: Decimal

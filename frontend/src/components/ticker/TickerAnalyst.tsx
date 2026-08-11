@@ -1,14 +1,17 @@
 "use client";
 
 import { FormEvent, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
+import { toast } from "@/components/ui/ToastProvider";
 import {
   createTickerAIDraft,
   createTickerAnalysis,
   getTickerMemo,
   getTickerMLReport,
   getTickerPrefill,
+  runResearchDataPipeline,
   type TickerAIDraft,
   type TickerAIDraftInput,
   type TickerAnalysis,
@@ -67,7 +70,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
   const [selectedMemo, setSelectedMemo] = useState<TickerMemo | null>(null);
   const [memoLoadingId, setMemoLoadingId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<
-    "prefill" | "draft" | "model" | null
+    "prefill" | "draft" | "model" | "ml-pipeline" | null
   >(null);
   const [error, setError] = useState<string | null>(
     isUnavailable ? "Ticker workspace could not be loaded yet." : null,
@@ -133,7 +136,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
       const result = await getTickerPrefill(ticker, market);
       fillFormFromPrefill(form, result);
       setPrefillData(result);
-      setPrefillWarnings(result.source_warnings);
+      setPrefillWarnings(result.source_warnings.filter(isAnalystVisibleWarning));
       setStep("prefill");
     } catch {
       setError("Ticker prefill was not available.");
@@ -202,6 +205,45 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
       router.refresh();
     } catch {
       setError("Model output was not saved.");
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function handlePrepareMLLayer() {
+    const ticker = analysis?.memo.instrument.ticker ?? baseAnalysisInput?.instrument.ticker;
+    if (!ticker) {
+      toast.error("Run a ticker analysis before preparing the ML layer.");
+      return;
+    }
+
+    const horizonDays = mlReportHorizon(mlReport) ?? 63;
+    setPendingAction("ml-pipeline");
+    setError(null);
+
+    try {
+      const result = await runResearchDataPipeline({
+        tickers: analysisTrainingUniverse(ticker, recentMemos),
+        benchmark_ticker: "SPY",
+        start_date: dateYearsAgoValue(5),
+        end_date: todayDateValue(),
+        horizon_days: horizonDays,
+        source: "yahoo",
+        train_model: true,
+      });
+      const nextReport = await getTickerMLReport(ticker, horizonDays);
+      setMlReport(nextReport);
+      if (result.model_version_id) {
+        toast.success(`${ticker} ML layer prepared for ${horizonDays}d horizon.`);
+      } else if (result.warnings.length > 0) {
+        toast.error("ML pipeline finished with items to review.");
+      } else {
+        toast.success(`${ticker} ML data prepared.`);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "ML layer could not be prepared.",
+      );
     } finally {
       setPendingAction(null);
     }
@@ -317,7 +359,12 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
 
         {step === "output" && (
           <WorkflowPanel eyebrow="Step 4" title="Model Output">
-            <AnalysisPanel analysis={analysis} mlReport={mlReport} />
+            <AnalysisPanel
+              analysis={analysis}
+              mlReport={mlReport}
+              mlPipelinePending={pendingAction === "ml-pipeline"}
+              onPrepareMLLayer={handlePrepareMLLayer}
+            />
             <WorkflowActions
               backLabel="Previous Analyses"
               nextLabel="New Analysis"
@@ -708,10 +755,14 @@ function AIDraftPanel({ draft }: { draft: TickerAIDraft }) {
 
 function AnalysisPanel({
   analysis,
+  mlPipelinePending,
   mlReport,
+  onPrepareMLLayer,
 }: {
   analysis: TickerAnalysis | null;
+  mlPipelinePending: boolean;
   mlReport: TickerMLReport | null;
+  onPrepareMLLayer: () => void;
 }) {
   if (!analysis) {
     return (
@@ -778,12 +829,24 @@ function AnalysisPanel({
         {analysis.evidence_summary}
       </p>
 
-      <MLReportPanel report={mlReport} />
+      <MLReportPanel
+        onPrepareMLLayer={onPrepareMLLayer}
+        preparePending={mlPipelinePending}
+        report={mlReport}
+      />
     </div>
   );
 }
 
-function MLReportPanel({ report }: { report: TickerMLReport | null }) {
+function MLReportPanel({
+  onPrepareMLLayer,
+  preparePending,
+  report,
+}: {
+  onPrepareMLLayer: () => void;
+  preparePending: boolean;
+  report: TickerMLReport | null;
+}) {
   if (!report) {
     return (
       <div className="rounded-lg border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-900">
@@ -795,6 +858,8 @@ function MLReportPanel({ report }: { report: TickerMLReport | null }) {
   const prediction = report.prediction;
   const portfolioFit = report.portfolio_fit;
   const comparisonMetrics = report.comparative?.metrics.slice(0, 5) ?? [];
+  const needsPipeline = report.warnings.some(isMLPipelineWarning);
+  const horizonDays = mlReportHorizon(report) ?? 63;
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
@@ -885,7 +950,19 @@ function MLReportPanel({ report }: { report: TickerMLReport | null }) {
 
       {report.warnings.length > 0 && (
         <div className="xl:col-span-2">
-          <WarningNotice warnings={report.warnings} />
+          <WarningNotice
+            action={
+              needsPipeline
+                ? {
+                    href: `/research-lab?ticker=${encodeURIComponent(report.ticker)}&horizon=${horizonDays}`,
+                    label: preparePending ? "Preparing..." : "Prepare ML layer",
+                    onClick: onPrepareMLLayer,
+                    pending: preparePending,
+                  }
+                : undefined
+            }
+            warnings={report.warnings}
+          />
         </div>
       )}
     </div>
@@ -1083,11 +1160,137 @@ function MemoBlock({ title, value }: { title: string; value: string | null }) {
   );
 }
 
-function WarningNotice({ warnings }: { warnings: string[] }) {
+function WarningNotice({
+  action,
+  warnings,
+}: {
+  action?: {
+    href: string;
+    label: string;
+    onClick: () => void;
+    pending: boolean;
+  };
+  warnings: string[];
+}) {
+  const visibleWarnings = warnings
+    .map(formatAnalystWarning)
+    .filter((warning): warning is string => Boolean(warning));
+
+  if (visibleWarnings.length === 0) {
+    return null;
+  }
+
   return (
     <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-      {warnings.join(" ")}
+      <div className="space-y-1.5">
+        {visibleWarnings.map((warning, index) => (
+          <p key={`${warning}-${index}`}>{warning}</p>
+        ))}
+      </div>
+      {action && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={action.onClick}
+            disabled={action.pending}
+            className={buttonClassName}
+          >
+            {action.label}
+          </button>
+          <Link href={action.href} className={secondaryButtonClassName}>
+            Open Research Lab
+          </Link>
+        </div>
+      )}
     </div>
+  );
+}
+
+function formatAnalystWarning(warning: string) {
+  const trimmed = warning.trim();
+  if (!trimmed || !isAnalystVisibleWarning(trimmed)) {
+    return null;
+  }
+
+  if (trimmed === "Comparative analysis needs price feature snapshots.") {
+    return "Prepare the ML layer to build price-feature snapshots and unlock comparative ranks.";
+  }
+
+  const predictiveModelMatch = trimmed.match(
+    /^No predictive model found for (\d+)-day horizon\.$/,
+  );
+  if (predictiveModelMatch) {
+    return `Prepare the ML layer with ${predictiveModelMatch[1]}-day horizon to unlock predictive output.`;
+  }
+
+  if (trimmed === "Portfolio fit needs an instrument record and portfolio state.") {
+    return "Portfolio fit will appear after this ticker is linked to your portfolio state.";
+  }
+
+  return trimmed;
+}
+
+function isAnalystVisibleWarning(warning: string) {
+  const normalized = warning.trim().toLowerCase();
+  if (normalized.includes("not available for this api key or plan")) {
+    return false;
+  }
+  if (normalized.includes("was not found by provider")) {
+    return false;
+  }
+  if (normalized.includes("sec companyfacts skipped")) {
+    return false;
+  }
+  if (
+    normalized.includes(" returned 404") &&
+    ["/v2/", "/v3/", "/stocks/", "/tiingo/", "/companies", "/etfs"].some((prefix) =>
+      normalized.startsWith(prefix),
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isMLPipelineWarning(warning: string) {
+  return (
+    warning === "Comparative analysis needs price feature snapshots." ||
+    /^No predictive model found for \d+-day horizon\.$/.test(warning)
+  );
+}
+
+function mlReportHorizon(report: TickerMLReport | null) {
+  if (report?.prediction?.horizon_days) {
+    return report.prediction.horizon_days;
+  }
+
+  for (const warning of report?.warnings ?? []) {
+    const match = warning.match(/^No predictive model found for (\d+)-day horizon\.$/);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+
+  return null;
+}
+
+function analysisTrainingUniverse(
+  ticker: string,
+  recentMemos: TickerMemoSummary[],
+) {
+  return uniqueTickers([
+    ticker,
+    ...recentMemos.map((memo) => memo.ticker),
+  ]).filter((symbol) => symbol !== "SPY");
+}
+
+function uniqueTickers(tickers: string[]) {
+  return Array.from(
+    new Set(
+      tickers
+        .map((ticker) => ticker.trim().toUpperCase())
+        .filter(Boolean),
+    ),
   );
 }
 
@@ -1383,6 +1586,16 @@ function optionalTextValue(formData: FormData, key: string) {
 function optionalNumberValue(formData: FormData, key: string) {
   const value = textValue(formData, key);
   return value.length > 0 ? value : undefined;
+}
+
+function todayDateValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dateYearsAgoValue(years: number) {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() - years);
+  return date.toISOString().slice(0, 10);
 }
 
 function formatLabel(value: string) {

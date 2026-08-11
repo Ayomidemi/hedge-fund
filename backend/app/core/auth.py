@@ -136,6 +136,22 @@ def _starting_capital_from_metadata(metadata: dict) -> Decimal | None:
     return capital.quantize(Decimal("0.01"))
 
 
+def authenticate_token(token: str) -> AuthenticatedUser:
+    """Validate a raw JWT (used by the WebSocket handshake, where FastAPI's
+    HTTP bearer dependency is unavailable). Raises HTTPException on failure."""
+    if not settings.auth_enabled:
+        return AuthenticatedUser(id="anonymous", email=None, role="anonymous")
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    payload = _decode_supabase_token(token)
+    return _user_from_payload(payload)
+
+
 async def get_optional_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> AuthenticatedUser | None:

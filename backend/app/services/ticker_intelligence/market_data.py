@@ -378,6 +378,7 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
         relative_strength_6m_pct=_relative_strength(context.bars),
         volatility_30d_pct=_volatility_30d(context.bars),
     )
+    source_warnings = _client_source_warnings(context, instrument, metrics)
 
     return TickerPrefillResponse(
         instrument=instrument,
@@ -385,7 +386,7 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
         provider=_provider_label(context),
         source_reference=_source_reference(context),
         data_timestamp=datetime.now(timezone.utc),
-        source_warnings=context.warnings,
+        source_warnings=source_warnings,
         raw_sources={
             "massive_details": _redact_url_fields(context.details),
             "massive_ratios": context.ratios,
@@ -424,6 +425,54 @@ def _record_provider(
     context.warnings.extend(
         result.warning for result in results if result.warning is not None
     )
+
+
+def _client_source_warnings(
+    context: PrefillBuildContext,
+    instrument: InstrumentCreate,
+    metrics: TickerMetricsInput,
+) -> list[str]:
+    warnings = list(dict.fromkeys(context.warnings))
+    if not _has_prefill_coverage(context, instrument, metrics):
+        return warnings
+    return [
+        warning
+        for warning in warnings
+        if not _is_non_actionable_provider_warning(warning)
+    ]
+
+
+def _has_prefill_coverage(
+    context: PrefillBuildContext,
+    instrument: InstrumentCreate,
+    metrics: TickerMetricsInput,
+) -> bool:
+    ticker = context.ticker.strip().upper()
+    name = instrument.name.strip().upper()
+    has_identity = bool(name and name != ticker)
+    has_classification = any(
+        [instrument.exchange, instrument.sector, instrument.industry]
+    )
+    has_metric = any(
+        getattr(metrics, field_name) is not None
+        for field_name in TickerMetricsInput.model_fields
+    )
+    return has_identity or has_classification or has_metric
+
+
+def _is_non_actionable_provider_warning(warning: str) -> bool:
+    normalized = warning.strip().lower()
+    if "not available for this api key or plan" in normalized:
+        return True
+    if "was not found by provider" in normalized:
+        return True
+    if "sec companyfacts skipped" in normalized:
+        return True
+    if " returned 404" in normalized and normalized.startswith(
+        ("/v2/", "/v3/", "/stocks/", "/tiingo/", "/companies", "/etfs")
+    ):
+        return True
+    return False
 
 
 def _has_any_market_data_key() -> bool:
