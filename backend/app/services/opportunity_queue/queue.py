@@ -18,6 +18,7 @@ from app.api.schemas.opportunity_queue import (
 )
 from app.core.auth import AuthenticatedUser
 from app.models import Instrument, Opportunity, TickerMemo
+from app.services.administration.system_log import record_system_log
 from app.services.portfolio.operating_core import upsert_instrument
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,19 @@ async def create_opportunity(
         status_history=[_status_event(status, "Opportunity created.")],
     )
     session.add(opportunity)
+    await session.flush()
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="opportunity",
+        event="opportunity_created",
+        message=f"{instrument.ticker} added to the opportunity queue ({status}).",
+        context={
+            "opportunity_id": str(opportunity.id),
+            "ticker": instrument.ticker,
+            "status": status,
+        },
+    )
     await session.commit()
     opportunity = await _load_opportunity(session, user, opportunity.id)
     if opportunity is None:
@@ -206,6 +220,19 @@ async def update_opportunity(
     if opportunity.status not in CLOSED_STATUSES:
         opportunity.closed_at = None
 
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="opportunity",
+        event="opportunity_updated",
+        message=f"{opportunity.instrument.ticker} opportunity updated to {opportunity.status}.",
+        context={
+            "opportunity_id": str(opportunity.id),
+            "ticker": opportunity.instrument.ticker,
+            "status": opportunity.status,
+            "previous_status": previous_status,
+        },
+    )
     await session.commit()
     opportunity = await _load_opportunity(session, user, opportunity_id)
     if opportunity is None:

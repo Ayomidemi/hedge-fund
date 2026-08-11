@@ -24,6 +24,7 @@ from app.models import (
     ModelVersion,
     TickerMemo,
 )
+from app.services.administration.system_log import record_system_log
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.ml_training import (
     build_ticker_ml_report,
@@ -103,6 +104,20 @@ async def analyze_ticker(
         model_version_label=f"{TICKER_MODEL_NAME} {TICKER_MODEL_VERSION}",
     )
     session.add(memo)
+    await session.flush()
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="research",
+        event="ticker_analyzed",
+        message=f"{instrument.ticker} analyzed — {scorecard.classification} ({scorecard.action}).",
+        context={
+            "ticker": instrument.ticker,
+            "memo_id": str(memo.id),
+            "action": scorecard.action,
+            "composite_score": str(scorecard.composite_score),
+        },
+    )
     await session.commit()
 
     memo = await _load_memo(session, memo.id, user)

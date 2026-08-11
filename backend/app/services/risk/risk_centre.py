@@ -38,6 +38,7 @@ from app.models import (
     StressScenario,
     StressTestResult,
 )
+from app.services.administration.system_log import record_system_log
 from app.services.portfolio.calculations import money, percent
 from app.services.portfolio.operating_core import get_or_create_default_portfolio
 
@@ -315,6 +316,18 @@ async def capture_risk_snapshot(
             )
         )
 
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="risk",
+        event="risk_snapshot_captured",
+        message=f"Risk snapshot captured — {overview.snapshot.risk_level}.",
+        context={
+            "snapshot_id": str(snapshot_record.id),
+            "risk_level": overview.snapshot.risk_level,
+            "measurement_count": len(overview.measurements),
+        },
+    )
     await session.commit()
 
     logger.info(
@@ -371,6 +384,17 @@ async def run_custom_stress_test(
             result_payload=result.model_dump(mode="json"),
         )
     )
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="risk",
+        event="stress_test_completed",
+        message=f"Stress test \"{payload.name}\" completed ({result.nav_impact_pct}% NAV impact).",
+        context={
+            "scenario_name": payload.name,
+            "nav_impact_pct": str(result.nav_impact_pct),
+        },
+    )
     await session.commit()
 
     logger.info(
@@ -397,6 +421,21 @@ async def check_pre_trade_risk(
     decision = _pre_trade_decision(
         overview.snapshot.risk_level, failed_checks, messages
     )
+
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="risk",
+        event="pre_trade_check",
+        message=f"Pre-trade check for {payload.instrument.ticker}: {decision}.",
+        context={
+            "ticker": payload.instrument.ticker,
+            "side": payload.side,
+            "decision": decision,
+            "risk_level": overview.snapshot.risk_level,
+        },
+    )
+    await session.commit()
 
     logger.info(
         "pre_trade_risk_checked",

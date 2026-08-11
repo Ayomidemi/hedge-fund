@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.routes import (
+    administration,
     attribution,
     auth,
     health,
@@ -17,6 +18,7 @@ api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(auth.router, tags=["auth"])
 api_router.include_router(operating_core.router, tags=["operating-core"])
+api_router.include_router(administration.router, tags=["administration"])
 api_router.include_router(opportunity_queue.router, tags=["opportunity-queue"])
 api_router.include_router(attribution.router, tags=["attribution"])
 api_router.include_router(ticker_intelligence.router, tags=["ticker-intelligence"])

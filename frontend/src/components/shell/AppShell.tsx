@@ -14,6 +14,7 @@ const navigationItems = [
   { label: "Trade Journal", href: "/trade-journal" },
   { label: "Attribution", href: "/attribution" },
   { label: "Reports", href: "/reports" },
+  { label: "Administration", href: "/administration" },
   { label: "Settings", href: "/settings" },
 ];
 
@@ -32,6 +33,7 @@ const pageTitles: Record<string, string> = {
   "Trade Journal": "Execution Journal",
   Attribution: "Performance Attribution",
   Reports: "Monthly Reports",
+  Administration: "Fund Administration",
   Settings: "Account Settings",
 };
 

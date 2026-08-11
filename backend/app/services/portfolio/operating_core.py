@@ -1,8 +1,9 @@
 import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -19,6 +20,7 @@ from app.api.schemas.operating_core import (
     InstrumentCreate,
     InstrumentResponse,
     ManualTradeCreate,
+    ManualTradeUpdate,
     PortfolioDashboardResponse,
     PortfolioResponse,
     PositionResponse,
@@ -39,6 +41,7 @@ from app.models import (
     TradeSide,
     TradeStatus,
 )
+from app.services.administration.system_log import record_system_log
 from app.services.portfolio.calculations import (
     DEFAULT_RISK_LIMITS,
     PositionSnapshot,
@@ -54,6 +57,10 @@ DEFAULT_PORTFOLIO_NAME = "Operating Fund"
 DEFAULT_INITIAL_CAPITAL = Decimal("1000.00")
 
 logger = logging.getLogger(__name__)
+
+
+class TradeNotFoundError(RuntimeError):
+    pass
 
 
 async def get_dashboard(
@@ -325,6 +332,18 @@ async def _create_cash_entry(
         source_reference=payload.source_reference,
     )
     session.add(entry)
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="portfolio",
+        event="cash_entry_created",
+        message=f"{entry_type.title()} of {amount} {payload.currency} recorded.",
+        context={
+            "entry_type": entry_type,
+            "amount": str(amount),
+            "currency": payload.currency,
+        },
+    )
     await session.commit()
     await session.refresh(entry)
 
@@ -446,10 +465,6 @@ async def create_manual_trade(
 ) -> TradeResponse:
     portfolio = await get_or_create_default_portfolio(session, user)
     instrument = await upsert_instrument(session, payload.instrument)
-    trade_value = money(payload.quantity * payload.price)
-    cash_amount = -(trade_value + payload.fees)
-    if payload.side == TradeSide.SELL.value:
-        cash_amount = trade_value - payload.fees
 
     trade = Trade(
         portfolio_id=portfolio.id,
@@ -467,20 +482,24 @@ async def create_manual_trade(
         broker_reference=payload.broker_reference,
     )
     session.add(trade)
-    session.add(
-        CashLedgerEntry(
-            portfolio_id=portfolio.id,
-            entry_date=payload.trade_date.date(),
-            amount=cash_amount,
-            currency=instrument.currency,
-            entry_type=f"trade_{payload.side}",
-            platform=payload.broker_reference or "manual",
-            description=f"{payload.side.upper()} {payload.quantity} {instrument.ticker} @ {payload.price}",
-            source_reference="manual_trade",
-        )
-    )
+    await session.flush()
 
-    await _apply_trade_to_position(session, portfolio, instrument, payload)
+    cash_values = _trade_cash_ledger_values(trade, instrument)
+    session.add(CashLedgerEntry(portfolio_id=portfolio.id, **cash_values))
+
+    await _rebuild_positions_from_filled_trades(session, portfolio)
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="portfolio",
+        event="trade_created",
+        message=f"{trade.side.upper()} {trade.quantity} {instrument.ticker} recorded.",
+        context={
+            "trade_id": str(trade.id),
+            "ticker": instrument.ticker,
+            "side": trade.side,
+        },
+    )
     await session.commit()
 
     trade = await session.scalar(
@@ -501,7 +520,77 @@ async def create_manual_trade(
             "side": trade.side,
             "quantity": str(trade.quantity),
             "executed_price": str(trade.executed_price),
-            "cash_amount": str(cash_amount),
+            "cash_amount": str(cash_values["amount"]),
+        },
+    )
+
+    return _trade_response(trade)
+
+
+async def update_manual_trade(
+    session: AsyncSession,
+    trade_id: UUID,
+    payload: ManualTradeUpdate,
+    user: AuthenticatedUser,
+) -> TradeResponse:
+    portfolio = await get_or_create_default_portfolio(session, user)
+    trade = await session.scalar(
+        select(Trade)
+        .options(selectinload(Trade.instrument))
+        .where(Trade.id == trade_id, Trade.portfolio_id == portfolio.id)
+    )
+    if trade is None:
+        raise TradeNotFoundError("Trade was not found.")
+
+    old_cash_values = _trade_cash_ledger_values(trade, trade.instrument)
+    instrument = await upsert_instrument(session, payload.instrument)
+
+    trade.instrument_id = instrument.id
+    trade.instrument = instrument
+    trade.trade_date = payload.trade_date
+    trade.side = payload.side
+    trade.quantity = payload.quantity
+    trade.executed_price = payload.price
+    trade.fees = payload.fees
+    trade.rationale = payload.rationale
+    trade.risk_notes = payload.risk_notes
+    trade.broker_reference = payload.broker_reference
+    await session.flush()
+
+    await _sync_trade_cash_entry(session, portfolio, trade, instrument, old_cash_values)
+    await _rebuild_positions_from_filled_trades(session, portfolio)
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="portfolio",
+        event="trade_updated",
+        message=f"{trade.side.upper()} {trade.quantity} {trade.instrument.ticker} updated.",
+        context={
+            "trade_id": str(trade.id),
+            "ticker": trade.instrument.ticker,
+            "side": trade.side,
+        },
+    )
+    await session.commit()
+
+    trade = await session.scalar(
+        select(Trade)
+        .options(selectinload(Trade.instrument))
+        .where(Trade.id == trade_id, Trade.portfolio_id == portfolio.id)
+    )
+    if trade is None:
+        raise RuntimeError("Trade could not be loaded after update.")
+
+    logger.info(
+        "manual_trade_updated",
+        extra={
+            "portfolio_id": str(portfolio.id),
+            "owner_user_id": portfolio.owner_user_id,
+            "trade_id": str(trade.id),
+            "ticker": trade.instrument.ticker,
+            "side": trade.side,
+            "quantity": str(trade.quantity),
+            "executed_price": str(trade.executed_price),
         },
     )
 
@@ -564,6 +653,166 @@ async def _apply_trade_to_position(
             "market_value": str(position.market_value),
         },
     )
+
+
+async def _sync_trade_cash_entry(
+    session: AsyncSession,
+    portfolio: Portfolio,
+    trade: Trade,
+    instrument: Instrument,
+    old_cash_values: dict,
+) -> None:
+    entry = await session.scalar(
+        select(CashLedgerEntry).where(
+            CashLedgerEntry.portfolio_id == portfolio.id,
+            CashLedgerEntry.source_reference == _trade_source_reference(trade.id),
+        )
+    )
+    if entry is None:
+        entry = await _find_legacy_trade_cash_entry(
+            session,
+            portfolio.id,
+            old_cash_values,
+        )
+
+    new_values = _trade_cash_ledger_values(trade, instrument)
+    if entry is None:
+        session.add(CashLedgerEntry(portfolio_id=portfolio.id, **new_values))
+        logger.info(
+            "trade_cash_entry_recreated",
+            extra={"portfolio_id": str(portfolio.id), "trade_id": str(trade.id)},
+        )
+        return
+
+    for field_name, value in new_values.items():
+        setattr(entry, field_name, value)
+
+
+async def _find_legacy_trade_cash_entry(
+    session: AsyncSession,
+    portfolio_id: UUID,
+    values: dict,
+) -> CashLedgerEntry | None:
+    return await session.scalar(
+        select(CashLedgerEntry)
+        .where(
+            CashLedgerEntry.portfolio_id == portfolio_id,
+            CashLedgerEntry.entry_date == values["entry_date"],
+            CashLedgerEntry.amount == values["amount"],
+            CashLedgerEntry.entry_type == values["entry_type"],
+            CashLedgerEntry.description == values["description"],
+            CashLedgerEntry.source_reference == "manual_trade",
+        )
+        .order_by(CashLedgerEntry.created_at.desc())
+        .limit(1)
+    )
+
+
+async def _rebuild_positions_from_filled_trades(
+    session: AsyncSession,
+    portfolio: Portfolio,
+) -> None:
+    trades = list(
+        await session.scalars(
+            select(Trade)
+            .options(selectinload(Trade.instrument))
+            .where(
+                Trade.portfolio_id == portfolio.id,
+                Trade.status == TradeStatus.FILLED.value,
+                Trade.executed_price.is_not(None),
+            )
+            .order_by(Trade.trade_date.asc(), Trade.created_at.asc())
+        )
+    )
+    instrument_ids = {trade.instrument_id for trade in trades}
+    if not instrument_ids:
+        return
+
+    await session.execute(
+        delete(Position).where(
+            Position.portfolio_id == portfolio.id,
+            Position.instrument_id.in_(instrument_ids),
+        )
+    )
+
+    states: dict[UUID, dict] = {}
+    for trade in trades:
+        state = states.setdefault(
+            trade.instrument_id,
+            {
+                "instrument": trade.instrument,
+                "quantity": Decimal("0"),
+                "average_cost": Decimal("0"),
+                "last_price": trade.executed_price,
+                "opened_at": trade.trade_date,
+            },
+        )
+        state["last_price"] = trade.executed_price
+
+        if trade.side == TradeSide.BUY.value:
+            previous_cost = state["quantity"] * state["average_cost"]
+            new_cost = trade.quantity * trade.executed_price
+            new_quantity = state["quantity"] + trade.quantity
+            state["average_cost"] = (previous_cost + new_cost) / new_quantity
+            state["quantity"] = new_quantity
+            continue
+
+        state["quantity"] = max(Decimal("0"), state["quantity"] - trade.quantity)
+        if state["quantity"] == 0:
+            state["average_cost"] = Decimal("0")
+
+    for instrument_id, state in states.items():
+        if state["quantity"] <= 0:
+            continue
+
+        market_value = money(state["quantity"] * state["last_price"])
+        unrealized_pnl = money(
+            (state["last_price"] - state["average_cost"]) * state["quantity"]
+        )
+        session.add(
+            Position(
+                portfolio_id=portfolio.id,
+                instrument_id=instrument_id,
+                quantity=state["quantity"],
+                average_cost=state["average_cost"],
+                market_value=market_value,
+                unrealized_pnl=unrealized_pnl,
+                opened_at=state["opened_at"],
+            )
+        )
+
+    logger.info(
+        "positions_rebuilt_from_trades",
+        extra={
+            "portfolio_id": str(portfolio.id),
+            "instrument_count": len(instrument_ids),
+            "trade_count": len(trades),
+        },
+    )
+
+
+def _trade_cash_ledger_values(trade: Trade, instrument: Instrument) -> dict:
+    price = trade.executed_price or Decimal("0")
+    trade_value = money(trade.quantity * price)
+    amount = -(trade_value + trade.fees)
+    if trade.side == TradeSide.SELL.value:
+        amount = trade_value - trade.fees
+
+    return {
+        "entry_date": trade.trade_date.date(),
+        "amount": amount,
+        "currency": instrument.currency,
+        "entry_type": f"trade_{trade.side}",
+        "platform": trade.broker_reference or "manual",
+        "description": (
+            f"{trade.side.upper()} {trade.quantity} {instrument.ticker} @ {price}"
+        ),
+        "source_reference": _trade_source_reference(trade.id),
+    }
+
+
+def _trade_source_reference(trade_id: UUID) -> str:
+    return f"manual_trade:{trade_id}"
 
 
 async def _ensure_default_risk_limits(

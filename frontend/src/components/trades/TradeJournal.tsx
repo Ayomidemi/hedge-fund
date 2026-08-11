@@ -2,7 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { ManualTradeModal } from "@/components/portfolio/ManualTradeModal";
-import { buttonPrimaryClassName, inputClassName } from "@/components/ui/form-styles";
+import {
+  buttonPrimaryClassName,
+  buttonSecondaryClassName,
+  inputClassName,
+} from "@/components/ui/form-styles";
 import type { TradeJournal as TradeJournalData, TradeJournalEntry } from "@/lib/api";
 
 type TradeJournalProps = {
@@ -25,6 +29,7 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingTrade, setEditingTrade] = useState<TradeJournalEntry | null>(null);
   const [tickerFilter, setTickerFilter] = useState("");
   const [sideFilter, setSideFilter] = useState<"all" | "buy" | "sell">("all");
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(
@@ -76,7 +81,10 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
             </div>
             <button
               type="button"
-              onClick={() => setModalOpen(true)}
+              onClick={() => {
+                setEditingTrade(null);
+                setModalOpen(true);
+              }}
               className={buttonPrimaryClassName}
             >
               Record trade
@@ -183,16 +191,35 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
             </div>
           </div>
 
-          <TradeDetail trade={selectedTrade} />
+          <TradeDetail
+            trade={selectedTrade}
+            onEdit={(trade) => {
+              setEditingTrade(trade);
+              setModalOpen(true);
+            }}
+          />
         </section>
       </div>
 
-      <ManualTradeModal open={modalOpen} onClose={() => setModalOpen(false)} />
+      <ManualTradeModal
+        initialTrade={editingTrade}
+        open={modalOpen}
+        onClose={() => {
+          setModalOpen(false);
+          setEditingTrade(null);
+        }}
+      />
     </>
   );
 }
 
-function TradeDetail({ trade }: { trade: TradeJournalEntry | null }) {
+function TradeDetail({
+  onEdit,
+  trade,
+}: {
+  onEdit: (trade: TradeJournalEntry) => void;
+  trade: TradeJournalEntry | null;
+}) {
   if (!trade) {
     return (
       <aside className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
@@ -215,6 +242,14 @@ function TradeDetail({ trade }: { trade: TradeJournalEntry | null }) {
         </div>
         <SidePill side={trade.side} />
       </div>
+
+      <button
+        type="button"
+        onClick={() => onEdit(trade)}
+        className={`${buttonSecondaryClassName} mt-5 w-full`}
+      >
+        Edit trade
+      </button>
 
       <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
         <Metric label="Status" value={formatLabel(trade.status)} />

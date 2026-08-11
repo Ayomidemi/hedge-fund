@@ -38,6 +38,12 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("get", methods)
         self.assertIn("post", methods)
 
+    def test_trade_journal_edit_route_is_registered(self) -> None:
+        paths = app.openapi()["paths"]
+
+        self.assertIn("/api/operating-core/trades/{trade_id}", paths)
+        self.assertIn("patch", paths["/api/operating-core/trades/{trade_id}"])
+
     def test_ticker_intelligence_routes_are_registered(self) -> None:
         paths = app.openapi()["paths"]
 
@@ -109,3 +115,9 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("/api/strategy-pods/{code}/snapshots", paths)
         self.assertIn("get", paths["/api/strategy-pods/{code}/snapshots"])
         self.assertIn("post", paths["/api/strategy-pods/{code}/snapshots"])
+
+    def test_administration_routes_are_registered(self) -> None:
+        paths = app.openapi()["paths"]
+
+        self.assertIn("/api/administration/overview", paths)
+        self.assertIn("get", paths["/api/administration/overview"])

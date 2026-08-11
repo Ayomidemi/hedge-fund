@@ -96,6 +96,10 @@ class ManualTradeCreate(BaseModel):
     broker_reference: str | None = None
 
 
+class ManualTradeUpdate(ManualTradeCreate):
+    pass
+
+
 class PortfolioResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

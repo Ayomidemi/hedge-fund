@@ -397,8 +397,10 @@ export type ManualTradeInput = {
   quantity: string;
   price: string;
   fees: string;
+  trade_date?: string;
   rationale: string;
   risk_notes?: string;
+  broker_reference?: string;
 };
 
 export type TickerMetricsInput = {
@@ -1155,6 +1157,18 @@ export function createManualTrade(payload: ManualTradeInput, options?: ApiReques
   return postApi<Trade, ManualTradeInput>("/api/operating-core/trades", payload, options);
 }
 
+export function updateManualTrade(
+  tradeId: string,
+  payload: ManualTradeInput,
+  options?: ApiRequestOptions,
+) {
+  return patchApi<Trade, ManualTradeInput>(
+    `/api/operating-core/trades/${encodeURIComponent(tradeId)}`,
+    payload,
+    options,
+  );
+}
+
 export function getTradeJournal(options?: ApiRequestOptions) {
   return fetchApi<TradeJournal>("/api/operating-core/trades", options);
 }
@@ -1339,6 +1353,80 @@ export function captureStrategyPodSnapshot(code: string, options?: ApiRequestOpt
   return postApi<StrategyPodSnapshot, Record<string, never>>(
     `/api/strategy-pods/${encodeURIComponent(code)}/snapshots`,
     {},
+    options,
+  );
+}
+
+export type SystemLogEntry = {
+  id: string;
+  level: string;
+  category: string;
+  event: string;
+  message: string;
+  context: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AdministrationModelVersion = {
+  id: string;
+  name: string;
+  version: string;
+  pod: string;
+  purpose: string;
+  approved_use: string | null;
+  shutdown_criteria: string | null;
+  validation_status: string;
+  created_at: string;
+};
+
+export type AdministrationDataVersion = {
+  key: string;
+  label: string;
+  record_count: number;
+  instrument_count: number;
+  latest_as_of_date: string | null;
+};
+
+export type AdministrationPortfolioRule = {
+  name: string;
+  limit_type: string;
+  threshold_value: string;
+  unit: string;
+  scope: string;
+};
+
+export type AdministrationRiskPolicy = {
+  id: string;
+  name: string;
+  version: string;
+  status: string;
+  effective_at: string;
+  limit_count: number;
+  notes: string | null;
+};
+
+export type AdministrationOverview = {
+  generated_at: string;
+  portfolio_name: string;
+  system_logs: SystemLogEntry[];
+  model_versions: AdministrationModelVersion[];
+  data_versions: AdministrationDataVersion[];
+  portfolio_rules: AdministrationPortfolioRule[];
+  risk_policies: AdministrationRiskPolicy[];
+};
+
+export function getAdministrationOverview(
+  params?: { log_limit?: number; log_category?: string },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.log_limit) search.set("log_limit", String(params.log_limit));
+  if (params?.log_category && params.log_category !== "all") {
+    search.set("log_category", params.log_category);
+  }
+  const query = search.toString();
+  return fetchApi<AdministrationOverview>(
+    `/api/administration/overview${query ? `?${query}` : ""}`,
     options,
   );
 }

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Query, status
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.operating_core import (
@@ -8,6 +10,7 @@ from app.api.schemas.operating_core import (
     CashLedgerEntryResponse,
     CashWithdrawalCreate,
     ManualTradeCreate,
+    ManualTradeUpdate,
     PortfolioDashboardResponse,
     TradeJournalResponse,
     TradeResponse,
@@ -22,6 +25,8 @@ from app.services.portfolio.operating_core import (
     get_dashboard,
     get_trade_journal,
     list_cash_ledger_history,
+    update_manual_trade,
+    TradeNotFoundError,
 )
 
 router = APIRouter(prefix="/operating-core")
@@ -114,6 +119,22 @@ async def add_manual_trade(
     session: AsyncSession = Depends(get_session),
 ) -> TradeResponse:
     return await create_manual_trade(session, payload, user)
+
+
+@router.patch("/trades/{trade_id}", response_model=TradeResponse)
+async def edit_manual_trade(
+    trade_id: UUID,
+    payload: ManualTradeUpdate,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> TradeResponse:
+    try:
+        return await update_manual_trade(session, trade_id, payload, user)
+    except TradeNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/trades", response_model=TradeJournalResponse)

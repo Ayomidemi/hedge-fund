@@ -848,3 +848,22 @@ class TickerTrainingLabel(Base, TimestampMixin):
             "ix_ticker_training_labels_instrument_date", "instrument_id", "as_of_date"
         ),
     )
+
+
+class SystemLogEntry(Base, TimestampMixin):
+    __tablename__ = "system_log_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    level: Mapped[str] = mapped_column(String(16), nullable=False, default="info")
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    event: Mapped[str] = mapped_column(String(128), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_system_log_entries_owner_created", "owner_user_id", "created_at"),
+        Index("ix_system_log_entries_category_created", "category", "created_at"),
+    )

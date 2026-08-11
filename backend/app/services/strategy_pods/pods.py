@@ -23,6 +23,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerMemoSummaryResponse,
 )
 from app.models import MarketPriceBar, StrategyPod, StrategyPodSnapshot
+from app.services.administration.system_log import record_system_log
 from app.services.risk.risk_centre import build_risk_centre_overview
 from app.services.ticker_intelligence.analysis import list_recent_ticker_memos
 from app.services.ticker_intelligence.ml_training import (
@@ -374,6 +375,14 @@ async def update_strategy_pod(
             value = _decimal4(value)
         setattr(pod, field_name, value)
 
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="strategy_pods",
+        event="strategy_pod_updated",
+        message=f"{pod.name} controls updated ({pod.status}).",
+        context={"pod_code": pod.code, "status": pod.status},
+    )
     await session.commit()
     await session.refresh(pod)
 
@@ -420,6 +429,15 @@ async def capture_strategy_pod_snapshot(
         payload=_json_payload(response.model_dump(mode="json")),
     )
     session.add(snapshot)
+    await session.flush()
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="strategy_pods",
+        event="strategy_pod_snapshot_captured",
+        message=f"Snapshot captured for {pod.name}.",
+        context={"pod_code": pod.code, "snapshot_id": str(snapshot.id)},
+    )
     await session.commit()
     await session.refresh(snapshot)
 
