@@ -41,3 +41,19 @@ export async function getServerUserEmail(): Promise<string | null> {
   const { data } = await supabase.auth.getUser();
   return data.user?.email ?? null;
 }
+
+export async function getServerUserProfile(): Promise<{
+  email: string | null;
+  fullName: string | null;
+  orgName: string | null;
+}> {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getUser();
+  const metadata = data.user?.user_metadata ?? {};
+
+  return {
+    email: data.user?.email ?? null,
+    fullName: typeof metadata.full_name === "string" ? metadata.full_name : null,
+    orgName: typeof metadata.org_name === "string" ? metadata.org_name : null,
+  };
+}

@@ -1,6 +1,6 @@
 import { AppShell } from "@/components/shell/AppShell";
 import { getHealth } from "@/lib/api";
-import { getServerAccessToken, getServerUserEmail } from "@/lib/supabase/server";
+import { getServerAccessToken, getServerUserProfile } from "@/lib/supabase/server";
 
 export default async function PlatformLayout({
   children,
@@ -9,7 +9,7 @@ export default async function PlatformLayout({
 }>) {
   let apiStatus: "connected" | "offline" = "offline";
   const accessToken = await getServerAccessToken();
-  const userEmail = await getServerUserEmail();
+  const user = await getServerUserProfile();
 
   try {
     const health = await getHealth({ accessToken });
@@ -21,7 +21,11 @@ export default async function PlatformLayout({
   }
 
   return (
-    <AppShell apiStatus={apiStatus} userEmail={userEmail}>
+    <AppShell
+      apiStatus={apiStatus}
+      userEmail={user.email}
+      userOrgName={user.orgName}
+    >
       {children}
     </AppShell>
   );

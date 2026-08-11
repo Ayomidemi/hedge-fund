@@ -13,6 +13,8 @@ _bearer = HTTPBearer(auto_error=False)
 class AuthenticatedUser:
     id: str
     email: str | None
+    full_name: str | None = None
+    org_name: str | None = None
     role: str | None = None
 
 
@@ -54,10 +56,14 @@ def _user_from_payload(payload: dict) -> AuthenticatedUser:
     user_metadata = payload.get("user_metadata") or {}
     email = payload.get("email") or user_metadata.get("email")
     role = app_metadata.get("role") or payload.get("role")
+    full_name = user_metadata.get("full_name")
+    org_name = user_metadata.get("org_name")
 
     return AuthenticatedUser(
         id=str(user_id),
         email=str(email) if email else None,
+        full_name=str(full_name) if full_name else None,
+        org_name=str(org_name) if org_name else None,
         role=str(role) if role else None,
     )
 

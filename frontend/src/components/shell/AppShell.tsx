@@ -21,6 +21,7 @@ const navigationItems = [
 type AppShellProps = {
   apiStatus: "connected" | "offline";
   userEmail: string | null;
+  userOrgName?: string | null;
   children: React.ReactNode;
 };
 
@@ -41,7 +42,7 @@ function userInitials(email: string | null) {
   return localPart.slice(0, 2).toUpperCase();
 }
 
-export function AppShell({ apiStatus, children, userEmail }: AppShellProps) {
+export function AppShell({ apiStatus, children, userEmail, userOrgName }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const activeLabel =
@@ -119,6 +120,9 @@ export function AppShell({ apiStatus, children, userEmail }: AppShellProps) {
                   <p className="truncate font-medium">
                     {userEmail ?? "Signed in"}
                   </p>
+                  {userOrgName ? (
+                    <p className="truncate text-xs text-zinc-500">{userOrgName}</p>
+                  ) : null}
                   <button
                     type="button"
                     onClick={handleSignOut}
