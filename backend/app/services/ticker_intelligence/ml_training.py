@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.auth import AuthenticatedUser
 from app.api.schemas.operating_core import InstrumentCreate
 from app.api.schemas.ticker_intelligence import (
     BacktestPeriodResponse,
@@ -40,8 +41,17 @@ from app.api.schemas.ticker_intelligence import (
     TrainingLabelResponse,
     YahooPriceBackfillCreate,
 )
-from app.models import CashLedgerEntry, Instrument, MarketPriceBar, ModelVersion, Portfolio, Position, TickerFeatureSnapshot, TickerTrainingLabel
-from app.services.portfolio.operating_core import DEFAULT_PORTFOLIO_NAME, upsert_instrument
+from app.models import (
+    CashLedgerEntry,
+    Instrument,
+    MarketPriceBar,
+    ModelVersion,
+    Portfolio,
+    Position,
+    TickerFeatureSnapshot,
+    TickerTrainingLabel,
+)
+from app.services.portfolio.operating_core import upsert_instrument
 
 logger = logging.getLogger(__name__)
 
@@ -160,11 +170,15 @@ async def generate_training_labels(
 ) -> TrainingLabelResponse:
     instrument = await _get_instrument(session, payload.ticker)
     if instrument is None:
-        raise MLTrainingDataUnavailableError(f"{payload.ticker.upper()} is not in the instrument table.")
+        raise MLTrainingDataUnavailableError(
+            f"{payload.ticker.upper()} is not in the instrument table."
+        )
 
     bars = await _load_price_points(session, instrument.id, payload.source)
     if not bars:
-        raise MLTrainingDataUnavailableError(f"No {payload.source} price bars found for {instrument.ticker}.")
+        raise MLTrainingDataUnavailableError(
+            f"No {payload.source} price bars found for {instrument.ticker}."
+        )
 
     benchmark = None
     benchmark_bars = None
@@ -185,7 +199,9 @@ async def generate_training_labels(
         horizons=payload.horizons,
         benchmark_bars=benchmark_bars,
     )
-    if benchmark is not None and not any(label.relative_return_pct is not None for label in labels):
+    if benchmark is not None and not any(
+        label.relative_return_pct is not None for label in labels
+    ):
         raise MLTrainingDataUnavailableError(
             f"No benchmark-aligned labels could be generated for {instrument.ticker} vs {benchmark.ticker}."
         )
@@ -234,7 +250,9 @@ async def build_price_feature_snapshots(
     for ticker in normalized_tickers:
         instrument = await _get_instrument(session, ticker)
         if instrument is None:
-            raise MLTrainingDataUnavailableError(f"{ticker} is not in the instrument table.")
+            raise MLTrainingDataUnavailableError(
+                f"{ticker} is not in the instrument table."
+            )
 
         bars = await _load_price_points(session, instrument.id, payload.source)
         snapshots = compute_price_feature_snapshots(
@@ -290,7 +308,9 @@ async def train_predictive_model(
         )
 
     feature_names = _model_feature_names(dataset)
-    x = np.array([[float(row["features"][name]) for name in feature_names] for row in dataset])
+    x = np.array(
+        [[float(row["features"][name]) for name in feature_names] for row in dataset]
+    )
     y = np.array([float(row["label"]) for row in dataset])
     y_direction = np.array([1.0 if value > 0 else 0.0 for value in y])
 
@@ -317,7 +337,9 @@ async def train_predictive_model(
 
     metrics = {
         "train_mae": _float4(_mean_absolute_error(y_train, train_prediction)),
-        "validation_mae": _float4(_mean_absolute_error(y_validation, validation_prediction)),
+        "validation_mae": _float4(
+            _mean_absolute_error(y_validation, validation_prediction)
+        ),
         "validation_r2": _float4(_r2_score(y_validation, validation_prediction)),
         "validation_directional_accuracy": _float4(
             _accuracy(y_direction_validation, validation_direction)
@@ -415,7 +437,9 @@ async def predict_with_latest_model(
 
     instrument = await _get_instrument(session, payload.ticker)
     if instrument is None:
-        raise MLTrainingDataUnavailableError(f"{payload.ticker.upper()} is not in the instrument table.")
+        raise MLTrainingDataUnavailableError(
+            f"{payload.ticker.upper()} is not in the instrument table."
+        )
 
     model_version = await _load_model_version(
         session,
@@ -462,31 +486,44 @@ async def predict_with_latest_model(
         )
 
     vector = np.array([float(prediction_features[name]) for name in feature_names])
-    mean = np.array([float(artifact["standardization"]["mean"][name]) for name in feature_names])
-    std = np.array([float(artifact["standardization"]["std"][name]) for name in feature_names])
+    mean = np.array(
+        [float(artifact["standardization"]["mean"][name]) for name in feature_names]
+    )
+    std = np.array(
+        [float(artifact["standardization"]["std"][name]) for name in feature_names]
+    )
     standardized_vector = (vector - mean) / std
     ridge = {
         "intercept": float(artifact["ridge_regression"]["intercept"]),
-        "coefficients": np.array([
-            float(artifact["ridge_regression"]["coefficients"][name])
-            for name in feature_names
-        ]),
+        "coefficients": np.array(
+            [
+                float(artifact["ridge_regression"]["coefficients"][name])
+                for name in feature_names
+            ]
+        ),
     }
     logistic = {
         "intercept": float(artifact["logistic_regression"]["intercept"]),
-        "coefficients": np.array([
-            float(artifact["logistic_regression"]["coefficients"][name])
-            for name in feature_names
-        ]),
+        "coefficients": np.array(
+            [
+                float(artifact["logistic_regression"]["coefficients"][name])
+                for name in feature_names
+            ]
+        ),
     }
     expected_relative_return = float(
         ridge["intercept"] + np.dot(standardized_vector, ridge["coefficients"])
     )
     probability_outperform = float(
-        _sigmoid(logistic["intercept"] + np.dot(standardized_vector, logistic["coefficients"]))
+        _sigmoid(
+            logistic["intercept"]
+            + np.dot(standardized_vector, logistic["coefficients"])
+        )
     )
     residual_p05 = float(artifact.get("residual_p05_pct", 0))
-    confidence = _prediction_confidence(model_version.metrics or {}, probability_outperform)
+    confidence = _prediction_confidence(
+        model_version.metrics or {}, probability_outperform
+    )
 
     return PredictiveModelPredictionResponse(
         ticker=instrument.ticker,
@@ -495,11 +532,15 @@ async def predict_with_latest_model(
         as_of_date=snapshot.as_of_date,
         horizon_days=payload.horizon_days,
         expected_relative_return_pct=_decimal4(expected_relative_return),
-        downside_p05_relative_return_pct=_decimal4(expected_relative_return + residual_p05),
+        downside_p05_relative_return_pct=_decimal4(
+            expected_relative_return + residual_p05
+        ),
         probability_outperform=_decimal4(probability_outperform),
         confidence_score=_decimal4(confidence),
         feature_version=payload.feature_version,
-        drivers=_prediction_drivers(feature_names, standardized_vector, ridge["coefficients"]),
+        drivers=_prediction_drivers(
+            feature_names, standardized_vector, ridge["coefficients"]
+        ),
     )
 
 
@@ -507,6 +548,7 @@ async def build_ticker_ml_report(
     session: AsyncSession,
     ticker: str,
     horizon_days: int = 63,
+    user: AuthenticatedUser | None = None,
 ) -> TickerMLReportResponse:
     normalized_ticker = ticker.strip().upper()
     warnings: list[str] = []
@@ -531,6 +573,7 @@ async def build_ticker_ml_report(
         session,
         normalized_ticker,
         prediction=prediction,
+        user=user,
     )
     if portfolio_fit is None:
         warnings.append("Portfolio fit needs an instrument record and portfolio state.")
@@ -595,7 +638,8 @@ async def run_research_data_pipeline(
     label_ready_tickers = [
         ticker
         for ticker in normalized_tickers
-        if ticker in successful_price_tickers and benchmark_ticker in successful_price_tickers
+        if ticker in successful_price_tickers
+        and benchmark_ticker in successful_price_tickers
     ]
     for ticker in label_ready_tickers:
         try:
@@ -718,13 +762,15 @@ async def fit_market_regime_model(
 ) -> RegimeModelResponse:
     instrument = await _get_instrument(session, payload.ticker)
     if instrument is None:
-        raise MLTrainingDataUnavailableError(f"{payload.ticker.upper()} is not in the instrument table.")
+        raise MLTrainingDataUnavailableError(
+            f"{payload.ticker.upper()} is not in the instrument table."
+        )
 
     bars = await _load_price_points(session, instrument.id, payload.source)
     if len(bars) < payload.lookback_days:
-        bars = bars[-len(bars):]
+        bars = bars[-len(bars) :]
     else:
-        bars = bars[-payload.lookback_days:]
+        bars = bars[-payload.lookback_days :]
 
     artifact = compute_hmm_regime_artifact(
         instrument.ticker,
@@ -781,7 +827,9 @@ async def get_latest_market_regime_model(
         .order_by(ModelVersion.created_at.desc())
     )
     if model_version is None:
-        raise MLTrainingDataUnavailableError("No HMM market-regime model has been fit yet.")
+        raise MLTrainingDataUnavailableError(
+            "No HMM market-regime model has been fit yet."
+        )
 
     return _regime_response_from_artifact(model_version, model_version.features or {})
 
@@ -792,7 +840,9 @@ async def run_factor_backtest(
 ) -> BacktestRunResponse:
     dataset = await _load_backtest_dataset(session, payload)
     if not dataset:
-        raise MLTrainingDataUnavailableError("No labeled feature rows are available for this backtest.")
+        raise MLTrainingDataUnavailableError(
+            "No labeled feature rows are available for this backtest."
+        )
 
     rows_by_date: dict[date, list[dict]] = {}
     for row in dataset:
@@ -846,7 +896,9 @@ async def run_factor_backtest(
         previous_selection = selection_set
 
     if not periods:
-        raise MLTrainingDataUnavailableError("No rebalance periods met the backtest requirements.")
+        raise MLTrainingDataUnavailableError(
+            "No rebalance periods met the backtest requirements."
+        )
 
     strategy_returns = [period.strategy_return_pct for period in periods]
     benchmark_returns = [
@@ -900,7 +952,9 @@ async def run_factor_backtest(
         end_date=periods[-1].as_of_date,
         horizon_days=payload.horizon_days,
         rebalance_count=len(periods),
-        selected_count_avg=_average_decimal([Decimal(count) for count in selected_counts]),
+        selected_count_avg=_average_decimal(
+            [Decimal(count) for count in selected_counts]
+        ),
         cumulative_return_pct=cumulative_return,
         benchmark_return_pct=benchmark_cumulative,
         alpha_pct=alpha,
@@ -956,17 +1010,24 @@ async def build_comparative_analysis(
             continue
         history_values = [
             item
-            for item in (_decimal(snapshot.features.get(feature_name)) for snapshot in history_snapshots)
+            for item in (
+                _decimal(snapshot.features.get(feature_name))
+                for snapshot in history_snapshots
+            )
             if item is not None
         ]
         sector_values = [
             item
-            for item in (_decimal(row["features"].get(feature_name)) for row in sector_snapshots)
+            for item in (
+                _decimal(row["features"].get(feature_name)) for row in sector_snapshots
+            )
             if item is not None
         ]
         universe_values = [
             item
-            for item in (_decimal(row["features"].get(feature_name)) for row in latest_universe)
+            for item in (
+                _decimal(row["features"].get(feature_name)) for row in latest_universe
+            )
             if item is not None
         ]
         metrics.append(
@@ -993,13 +1054,17 @@ async def build_portfolio_fit(
     session: AsyncSession,
     ticker: str,
     prediction: PredictiveModelPredictionResponse | None,
+    user: AuthenticatedUser | None = None,
 ) -> PortfolioFitResponse | None:
+    if user is None:
+        return None
+
     instrument = await _get_instrument(session, ticker)
     if instrument is None:
         return None
 
     portfolio = await session.scalar(
-        select(Portfolio).where(Portfolio.name == DEFAULT_PORTFOLIO_NAME)
+        select(Portfolio).where(Portfolio.owner_user_id == user.id)
     )
     if portfolio is None:
         return None
@@ -1018,7 +1083,9 @@ async def build_portfolio_fit(
             .where(Position.quantity > 0)
         )
     )
-    invested_value = sum((position.market_value for position in positions), Decimal("0"))
+    invested_value = sum(
+        (position.market_value for position in positions), Decimal("0")
+    )
     nav = cash_balance + invested_value
     if nav <= 0:
         nav = Decimal("1")
@@ -1035,17 +1102,25 @@ async def build_portfolio_fit(
         (
             position.market_value
             for position in positions
-            if position.instrument.sector == instrument.sector and instrument.sector is not None
+            if position.instrument.sector == instrument.sector
+            and instrument.sector is not None
         ),
         Decimal("0"),
     )
     current_weight = _quantize((current_position_value / nav) * Decimal("100"))
-    proposed_weight = _proposed_weight_from_prediction(prediction, instrument.asset_class)
+    proposed_weight = _proposed_weight_from_prediction(
+        prediction, instrument.asset_class
+    )
     pro_forma_weight = _quantize(current_weight + proposed_weight)
-    sector_exposure_after = _quantize((sector_value / nav) * Decimal("100") + proposed_weight)
+    sector_exposure_after = _quantize(
+        (sector_value / nav) * Decimal("100") + proposed_weight
+    )
     concentration_after = max(
         [pro_forma_weight]
-        + [_quantize((position.market_value / nav) * Decimal("100")) for position in positions]
+        + [
+            _quantize((position.market_value / nav) * Decimal("100"))
+            for position in positions
+        ]
     )
     expected_return = (
         prediction.expected_relative_return_pct
@@ -1058,9 +1133,7 @@ async def build_portfolio_fit(
         else Decimal("-10")
     )
     confidence = (
-        prediction.confidence_score
-        if prediction is not None
-        else Decimal("25")
+        prediction.confidence_score if prediction is not None else Decimal("25")
     )
     score = compute_portfolio_fit_score(
         expected_relative_return_pct=expected_return,
@@ -1194,7 +1267,9 @@ async def list_ticker_dataset_rows(
                 [snapshot.as_of_date for snapshot in snapshots]
             )
         )
-        .order_by(TickerTrainingLabel.as_of_date.desc(), TickerTrainingLabel.horizon_days)
+        .order_by(
+            TickerTrainingLabel.as_of_date.desc(), TickerTrainingLabel.horizon_days
+        )
     )
     labels_by_date: dict[date, list[dict]] = {}
     for label in label_result:
@@ -1205,7 +1280,9 @@ async def list_ticker_dataset_rows(
                 "benchmark_forward_return_pct": _optional_decimal_string(
                     label.benchmark_forward_return_pct
                 ),
-                "relative_return_pct": _optional_decimal_string(label.relative_return_pct),
+                "relative_return_pct": _optional_decimal_string(
+                    label.relative_return_pct
+                ),
                 "max_drawdown_pct": _optional_decimal_string(label.max_drawdown_pct),
                 "realized_volatility_pct": _optional_decimal_string(
                     label.realized_volatility_pct
@@ -1252,7 +1329,9 @@ async def fetch_yahoo_daily_bars(
 
     frame = await asyncio.to_thread(load_history)
     if frame is None or frame.empty:
-        raise MLTrainingDataUnavailableError(f"Yahoo returned no rows for {yahoo_symbol}.")
+        raise MLTrainingDataUnavailableError(
+            f"Yahoo returned no rows for {yahoo_symbol}."
+        )
 
     bars: list[PriceBarPoint] = []
     for index, row in frame.iterrows():
@@ -1512,7 +1591,9 @@ def compute_hmm_regime_artifact(
             for observation in observations
         ]
     )
-    assignments, means, standard_deviations = _cluster_regime_points(points, state_count)
+    assignments, means, standard_deviations = _cluster_regime_points(
+        points, state_count
+    )
     transition_matrix = _regime_transition_matrix(assignments, state_count)
     previous_state = int(assignments[-2]) if len(assignments) > 1 else None
     probabilities = _regime_state_probabilities(
@@ -1550,8 +1631,7 @@ def compute_hmm_regime_artifact(
         "confidence_score": str(confidence),
         "state_probabilities": states,
         "transition_matrix": [
-            [str(_decimal4(float(value))) for value in row]
-            for row in transition_matrix
+            [str(_decimal4(float(value))) for value in row] for row in transition_matrix
         ],
         "observation_count": len(observations),
         "warnings": [
@@ -1572,7 +1652,9 @@ def _regime_observations(bars: list[PriceBarPoint]) -> list[dict]:
         observations.append(
             {
                 "as_of_date": current.bar_date,
-                "daily_return_pct": _return_pct(previous.label_price, current.label_price),
+                "daily_return_pct": _return_pct(
+                    previous.label_price, current.label_price
+                ),
                 "realized_volatility_pct": volatility,
             }
         )
@@ -1674,10 +1756,7 @@ def _regime_labels(means) -> dict[int, str]:
         reverse=True,
     )
     rank_labels = labels_by_count.get(state_count, labels_by_count[4])
-    return {
-        state_id: rank_labels[rank]
-        for rank, state_id in enumerate(ordered_states)
-    }
+    return {state_id: rank_labels[rank] for rank, state_id in enumerate(ordered_states)}
 
 
 def _regime_response_from_artifact(
@@ -1707,10 +1786,7 @@ def _regime_response_from_artifact(
             [_required_decimal(value) for value in row]
             for row in artifact.get("transition_matrix", [])
         ],
-        warnings=[
-            str(warning)
-            for warning in artifact.get("warnings", [])
-        ],
+        warnings=[str(warning) for warning in artifact.get("warnings", [])],
     )
 
 
@@ -1773,7 +1849,9 @@ async def _load_backtest_dataset(
             TickerTrainingLabel.benchmark_instrument_id == benchmark.id
         )
     else:
-        label_query = label_query.where(TickerTrainingLabel.benchmark_instrument_id.is_(None))
+        label_query = label_query.where(
+            TickerTrainingLabel.benchmark_instrument_id.is_(None)
+        )
 
     rows = []
     for label in await session.scalars(label_query):
@@ -1797,9 +1875,17 @@ def _backtest_signal_score(features: dict) -> float:
     return_63d = float(_decimal(features.get("return_63d_pct")) or Decimal("0"))
     return_126d = float(_decimal(features.get("return_126d_pct")) or Decimal("0"))
     trend = float(_decimal(features.get("price_vs_200d_pct")) or Decimal("0"))
-    volatility = float(_decimal(features.get("realized_volatility_63d_pct")) or Decimal("0"))
+    volatility = float(
+        _decimal(features.get("realized_volatility_63d_pct")) or Decimal("0")
+    )
     drawdown = float(_decimal(features.get("max_drawdown_63d_pct")) or Decimal("0"))
-    return (return_63d * 0.35) + (return_126d * 0.25) + (trend * 0.25) + (drawdown * 0.10) - (volatility * 0.15)
+    return (
+        (return_63d * 0.35)
+        + (return_126d * 0.25)
+        + (trend * 0.25)
+        + (drawdown * 0.10)
+        - (volatility * 0.15)
+    )
 
 
 def _selection_turnover(
@@ -1810,12 +1896,16 @@ def _selection_turnover(
         return Decimal("0.0000")
     if not previous_selection:
         return Decimal("100.0000")
-    overlap = Decimal(len(previous_selection & current_selection)) / Decimal(len(current_selection))
+    overlap = Decimal(len(previous_selection & current_selection)) / Decimal(
+        len(current_selection)
+    )
     return _quantize((Decimal("1") - overlap) * Decimal("100"))
 
 
 def _cost_drag_pct(turnover_pct: Decimal, transaction_cost_bps: Decimal) -> Decimal:
-    return _quantize((turnover_pct / Decimal("100")) * (transaction_cost_bps / Decimal("100")))
+    return _quantize(
+        (turnover_pct / Decimal("100")) * (transaction_cost_bps / Decimal("100"))
+    )
 
 
 def _average_decimal(values: list[Decimal]) -> Decimal:
@@ -1970,7 +2060,9 @@ async def _load_model_dataset(
         for snapshot in snapshots
         if _has_model_features(snapshot.features)
     }
-    fundamentals_by_instrument = _group_fundamentals_by_instrument(fundamental_snapshots)
+    fundamentals_by_instrument = _group_fundamentals_by_instrument(
+        fundamental_snapshots
+    )
     label_query = (
         select(TickerTrainingLabel)
         .where(TickerTrainingLabel.instrument_id.in_(instrument_ids))
@@ -1986,7 +2078,9 @@ async def _load_model_dataset(
     elif payload.benchmark_ticker:
         return []
     else:
-        label_query = label_query.where(TickerTrainingLabel.benchmark_instrument_id.is_(None))
+        label_query = label_query.where(
+            TickerTrainingLabel.benchmark_instrument_id.is_(None)
+        )
 
     labels = list(await session.scalars(label_query))
 
@@ -2159,7 +2253,9 @@ def _proposed_weight_from_prediction(
         (prediction.probability_outperform - Decimal("0.5000")) / Decimal("0.2500"),
         Decimal("1"),
     )
-    return _quantize(max_weight * edge_component * confidence_component * probability_component)
+    return _quantize(
+        max_weight * edge_component * confidence_component * probability_component
+    )
 
 
 def compute_portfolio_fit_score(
@@ -2171,10 +2267,17 @@ def compute_portfolio_fit_score(
     sector_exposure_after_pct: Decimal,
 ) -> Decimal:
     score = Decimal("50")
-    score += max(min(expected_relative_return_pct * Decimal("2.0"), Decimal("25")), Decimal("-25"))
-    score += max(min(confidence_score - Decimal("50"), Decimal("20")), Decimal("-20")) / Decimal("2")
+    score += max(
+        min(expected_relative_return_pct * Decimal("2.0"), Decimal("25")),
+        Decimal("-25"),
+    )
+    score += max(
+        min(confidence_score - Decimal("50"), Decimal("20")), Decimal("-20")
+    ) / Decimal("2")
     if downside_p05_relative_return_pct < Decimal("-15"):
-        score -= min(abs(downside_p05_relative_return_pct + Decimal("15")), Decimal("25"))
+        score -= min(
+            abs(downside_p05_relative_return_pct + Decimal("15")), Decimal("25")
+        )
     if concentration_after_pct > Decimal("20"):
         score -= min(concentration_after_pct - Decimal("20"), Decimal("25"))
     if sector_exposure_after_pct > Decimal("35"):
@@ -2241,9 +2344,11 @@ def _fit_ridge(x, y, alpha: float):
     x_with_intercept = np.column_stack([np.ones(len(x)), x])
     penalty = np.eye(x_with_intercept.shape[1]) * alpha
     penalty[0, 0] = 0
-    coefficients = np.linalg.pinv(
-        x_with_intercept.T @ x_with_intercept + penalty
-    ) @ x_with_intercept.T @ y
+    coefficients = (
+        np.linalg.pinv(x_with_intercept.T @ x_with_intercept + penalty)
+        @ x_with_intercept.T
+        @ y
+    )
     return {
         "intercept": float(coefficients[0]),
         "coefficients": coefficients[1:],
@@ -2318,7 +2423,9 @@ def _prediction_confidence(metrics: dict, probability_outperform: float) -> floa
     return min(20 + row_component + accuracy_component + probability_component, 100)
 
 
-def _prediction_drivers(feature_names: list[str], standardized_vector, coefficients) -> list[dict]:
+def _prediction_drivers(
+    feature_names: list[str], standardized_vector, coefficients
+) -> list[dict]:
     contributions = [
         {
             "feature": feature_name,
@@ -2347,7 +2454,9 @@ def _lookback_return_pct(path: list[PriceBarPoint], lookback: int) -> Decimal | 
 def _price_vs_average_pct(path: list[PriceBarPoint], lookback: int) -> Decimal | None:
     if len(path) < lookback:
         return None
-    average = sum((bar.label_price for bar in path[-lookback:]), Decimal("0")) / Decimal(lookback)
+    average = sum(
+        (bar.label_price for bar in path[-lookback:]), Decimal("0")
+    ) / Decimal(lookback)
     if average == 0:
         return None
     return _quantize(((path[-1].label_price - average) / average) * Decimal("100"))

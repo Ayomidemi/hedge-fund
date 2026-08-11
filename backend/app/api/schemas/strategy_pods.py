@@ -5,7 +5,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-StrategyPodStatus = Literal["active", "watch", "research", "sandbox", "suspended", "retired"]
+StrategyPodStatus = Literal[
+    "active", "watch", "research", "sandbox", "suspended", "retired"
+]
 StrategyPodLifecycle = Literal[
     "research",
     "candidate",

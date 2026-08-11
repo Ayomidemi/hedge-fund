@@ -38,7 +38,7 @@ export function RiskCentre({ initialOverview, unavailable }: RiskCentreProps) {
   const [activeTab, setActiveTab] = useState<RiskTab>("overview");
   const [pending, setPending] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(
-    unavailable ? "Backend unavailable." : null,
+    unavailable ? "Risk overview could not be loaded yet." : null,
   );
   const [customStress, setCustomStress] = useState<StressTestResult | null>(null);
   const [preTrade, setPreTrade] = useState<PreTradeRiskCheck | null>(null);

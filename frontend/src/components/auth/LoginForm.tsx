@@ -17,6 +17,7 @@ export function LoginForm() {
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [fullName, setFullName] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [startingCapital, setStartingCapital] = useState("1000");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -48,6 +49,12 @@ export function LoginForm() {
         return;
       }
 
+      const capital = Number(startingCapital);
+      if (!Number.isFinite(capital) || capital < 1000) {
+        toast.error("Starting capital must be at least 1,000.");
+        return;
+      }
+
       const { error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
@@ -55,6 +62,7 @@ export function LoginForm() {
           data: {
             full_name: fullName.trim(),
             org_name: orgName.trim(),
+            starting_capital: capital.toFixed(2),
           },
         },
       });
@@ -133,6 +141,18 @@ export function LoginForm() {
               required
               value={orgName}
               onChange={setOrgName}
+            />
+
+            <FormField
+              label="Starting capital"
+              type="number"
+              required
+              min={1000}
+              step={100}
+              inputMode="decimal"
+              helper="Minimum 1,000."
+              value={startingCapital}
+              onChange={setStartingCapital}
             />
           </>
         ) : null}

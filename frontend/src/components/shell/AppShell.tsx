@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { usePathname } from "next/navigation";
 
 const navigationItems = [
   { label: "Fund Dashboard", href: "/" },
@@ -15,13 +14,11 @@ const navigationItems = [
   { label: "Trade Journal" },
   { label: "Attribution" },
   { label: "Reports", href: "/reports" },
-  { label: "Administration" },
+  { label: "Settings", href: "/settings" },
 ];
 
 type AppShellProps = {
-  apiStatus: "connected" | "offline";
-  userEmail: string | null;
-  userOrgName?: string | null;
+  userOrgName: string | null;
   children: React.ReactNode;
 };
 
@@ -32,29 +29,14 @@ const pageTitles: Record<string, string> = {
   "Strategy Pods": "Investment Pod Control",
   "Risk Centre": "Central Risk Office",
   Reports: "Monthly Reports",
+  Settings: "Account Settings",
 };
 
-function userInitials(email: string | null) {
-  if (!email) {
-    return "U";
-  }
-  const localPart = email.split("@")[0] ?? email;
-  return localPart.slice(0, 2).toUpperCase();
-}
-
-export function AppShell({ apiStatus, children, userEmail, userOrgName }: AppShellProps) {
+export function AppShell({ children, userOrgName }: AppShellProps) {
   const pathname = usePathname();
-  const router = useRouter();
   const activeLabel =
     navigationItems.find((item) => item.href === pathname)?.label ??
     "Fund Dashboard";
-
-  async function handleSignOut() {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.replace("/login");
-    router.refresh();
-  }
 
   return (
     <div className="flex min-h-screen bg-[#f6f7f4] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
@@ -111,37 +93,13 @@ export function AppShell({ apiStatus, children, userEmail, userOrgName }: AppShe
                 {pageTitles[activeLabel] ?? "Portfolio Control Room"}
               </h1>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                  {userInitials(userEmail)}
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate font-medium">
-                    {userEmail ?? "Signed in"}
-                  </p>
-                  {userOrgName ? (
-                    <p className="truncate text-xs text-zinc-500">{userOrgName}</p>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={handleSignOut}
-                    className="text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-                  >
-                    Sign out
-                  </button>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-                <div
-                  className={`h-2.5 w-2.5 rounded-full ${
-                    apiStatus === "connected" ? "bg-emerald-500" : "bg-red-500"
-                  }`}
-                />
-                <span className="font-medium">Backend</span>
-                <span className="text-zinc-500">{apiStatus}</span>
-              </div>
-            </div>
+
+            <Link
+              href="/settings"
+              className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+            >
+              {userOrgName ?? "Your organization"}
+            </Link>
           </div>
         </header>
 

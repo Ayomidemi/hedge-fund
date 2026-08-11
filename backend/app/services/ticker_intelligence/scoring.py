@@ -26,20 +26,43 @@ class TickerScorecard:
 
 def score_ticker(metrics: TickerMetricsInput, asset_class: str) -> TickerScorecard:
     scores = [
-        TickerScore("Quality", _quality_score(metrics), Decimal("0.25"), _quality_note(metrics)),
-        TickerScore("Growth", _growth_score(metrics), Decimal("0.20"), _growth_note(metrics)),
-        TickerScore("Valuation", _valuation_score(metrics), Decimal("0.20"), _valuation_note(metrics)),
-        TickerScore("Momentum", _momentum_score(metrics), Decimal("0.20"), _momentum_note(metrics)),
-        TickerScore("Balance Sheet Risk", _risk_score(metrics), Decimal("0.15"), _risk_note(metrics)),
+        TickerScore(
+            "Quality", _quality_score(metrics), Decimal("0.25"), _quality_note(metrics)
+        ),
+        TickerScore(
+            "Growth", _growth_score(metrics), Decimal("0.20"), _growth_note(metrics)
+        ),
+        TickerScore(
+            "Valuation",
+            _valuation_score(metrics),
+            Decimal("0.20"),
+            _valuation_note(metrics),
+        ),
+        TickerScore(
+            "Momentum",
+            _momentum_score(metrics),
+            Decimal("0.20"),
+            _momentum_note(metrics),
+        ),
+        TickerScore(
+            "Balance Sheet Risk",
+            _risk_score(metrics),
+            Decimal("0.15"),
+            _risk_note(metrics),
+        ),
     ]
     composite = _quantize(
         sum((score.score * score.weight for score in scores), Decimal("0"))
     )
     confidence = _confidence_score(metrics)
-    conviction = _quantize((composite * Decimal("0.70")) + (confidence * Decimal("0.30")))
+    conviction = _quantize(
+        (composite * Decimal("0.70")) + (confidence * Decimal("0.30"))
+    )
     classification = classify_score(composite, confidence)
     action = action_from_score(composite, confidence)
-    recommended_weight = recommended_weight_from_score(composite, confidence, asset_class)
+    recommended_weight = recommended_weight_from_score(
+        composite, confidence, asset_class
+    )
     evidence_summary = (
         f"Composite {composite}/100 with {confidence}/100 confidence from "
         f"{_provided_metric_count(metrics)} of {_metric_count()} supplied metrics."
@@ -126,9 +149,36 @@ def score_payload(scorecard: TickerScorecard) -> dict[str, str | list[dict[str, 
 
 def _quality_score(metrics: TickerMetricsInput) -> Decimal:
     parts = [
-        _band_score(metrics.net_margin_pct, [(Decimal("25"), 100), (Decimal("15"), 80), (Decimal("8"), 60), (Decimal("0"), 40)], 50),
-        _band_score(metrics.free_cash_flow_yield_pct, [(Decimal("6"), 100), (Decimal("3"), 75), (Decimal("0"), 50), (Decimal("-3"), 25)], 50),
-        _inverse_band_score(metrics.debt_to_equity, [(Decimal("0.4"), 100), (Decimal("1.0"), 75), (Decimal("2.0"), 45), (Decimal("4.0"), 20)], 50),
+        _band_score(
+            metrics.net_margin_pct,
+            [
+                (Decimal("25"), 100),
+                (Decimal("15"), 80),
+                (Decimal("8"), 60),
+                (Decimal("0"), 40),
+            ],
+            50,
+        ),
+        _band_score(
+            metrics.free_cash_flow_yield_pct,
+            [
+                (Decimal("6"), 100),
+                (Decimal("3"), 75),
+                (Decimal("0"), 50),
+                (Decimal("-3"), 25),
+            ],
+            50,
+        ),
+        _inverse_band_score(
+            metrics.debt_to_equity,
+            [
+                (Decimal("0.4"), 100),
+                (Decimal("1.0"), 75),
+                (Decimal("2.0"), 45),
+                (Decimal("4.0"), 20),
+            ],
+            50,
+        ),
     ]
     return _average(parts)
 
@@ -136,8 +186,26 @@ def _quality_score(metrics: TickerMetricsInput) -> Decimal:
 def _growth_score(metrics: TickerMetricsInput) -> Decimal:
     return _average(
         [
-            _band_score(metrics.revenue_growth_pct, [(Decimal("20"), 100), (Decimal("10"), 80), (Decimal("3"), 60), (Decimal("0"), 45)], 50),
-            _band_score(metrics.earnings_growth_pct, [(Decimal("25"), 100), (Decimal("12"), 80), (Decimal("3"), 60), (Decimal("0"), 45)], 50),
+            _band_score(
+                metrics.revenue_growth_pct,
+                [
+                    (Decimal("20"), 100),
+                    (Decimal("10"), 80),
+                    (Decimal("3"), 60),
+                    (Decimal("0"), 45),
+                ],
+                50,
+            ),
+            _band_score(
+                metrics.earnings_growth_pct,
+                [
+                    (Decimal("25"), 100),
+                    (Decimal("12"), 80),
+                    (Decimal("3"), 60),
+                    (Decimal("0"), 45),
+                ],
+                50,
+            ),
         ]
     )
 
@@ -146,12 +214,22 @@ def _valuation_score(metrics: TickerMetricsInput) -> Decimal:
     pe = metrics.forward_pe if metrics.forward_pe is not None else metrics.pe_ratio
     pe_score = _inverse_band_score(
         pe,
-        [(Decimal("12"), 100), (Decimal("20"), 75), (Decimal("30"), 50), (Decimal("45"), 25)],
+        [
+            (Decimal("12"), 100),
+            (Decimal("20"), 75),
+            (Decimal("30"), 50),
+            (Decimal("45"), 25),
+        ],
         50,
     )
     fcf_score = _band_score(
         metrics.free_cash_flow_yield_pct,
-        [(Decimal("8"), 100), (Decimal("5"), 80), (Decimal("2"), 60), (Decimal("0"), 40)],
+        [
+            (Decimal("8"), 100),
+            (Decimal("5"), 80),
+            (Decimal("2"), 60),
+            (Decimal("0"), 40),
+        ],
         50,
     )
     return _average([pe_score, fcf_score])
@@ -160,17 +238,32 @@ def _valuation_score(metrics: TickerMetricsInput) -> Decimal:
 def _momentum_score(metrics: TickerMetricsInput) -> Decimal:
     trend_score = _band_score(
         metrics.price_vs_200d_pct,
-        [(Decimal("20"), 100), (Decimal("8"), 80), (Decimal("0"), 60), (Decimal("-10"), 35)],
+        [
+            (Decimal("20"), 100),
+            (Decimal("8"), 80),
+            (Decimal("0"), 60),
+            (Decimal("-10"), 35),
+        ],
         50,
     )
     relative_score = _band_score(
         metrics.relative_strength_6m_pct,
-        [(Decimal("20"), 100), (Decimal("8"), 80), (Decimal("0"), 60), (Decimal("-10"), 35)],
+        [
+            (Decimal("20"), 100),
+            (Decimal("8"), 80),
+            (Decimal("0"), 60),
+            (Decimal("-10"), 35),
+        ],
         50,
     )
     volatility_score = _inverse_band_score(
         metrics.volatility_30d_pct,
-        [(Decimal("20"), 90), (Decimal("35"), 70), (Decimal("55"), 40), (Decimal("80"), 20)],
+        [
+            (Decimal("20"), 90),
+            (Decimal("35"), 70),
+            (Decimal("55"), 40),
+            (Decimal("80"), 20),
+        ],
         50,
     )
     return _average([trend_score, relative_score, volatility_score])
@@ -179,12 +272,22 @@ def _momentum_score(metrics: TickerMetricsInput) -> Decimal:
 def _risk_score(metrics: TickerMetricsInput) -> Decimal:
     debt_score = _inverse_band_score(
         metrics.debt_to_equity,
-        [(Decimal("0.4"), 100), (Decimal("1.0"), 75), (Decimal("2.0"), 45), (Decimal("4.0"), 20)],
+        [
+            (Decimal("0.4"), 100),
+            (Decimal("1.0"), 75),
+            (Decimal("2.0"), 45),
+            (Decimal("4.0"), 20),
+        ],
         50,
     )
     volatility_score = _inverse_band_score(
         metrics.volatility_30d_pct,
-        [(Decimal("18"), 100), (Decimal("30"), 75), (Decimal("50"), 45), (Decimal("75"), 20)],
+        [
+            (Decimal("18"), 100),
+            (Decimal("30"), 75),
+            (Decimal("50"), 45),
+            (Decimal("75"), 20),
+        ],
         50,
     )
     return _average([debt_score, volatility_score])
@@ -211,12 +314,18 @@ def _quality_note(metrics: TickerMetricsInput) -> str:
 
 def _growth_note(metrics: TickerMetricsInput) -> str:
     if metrics.revenue_growth_pct is None and metrics.earnings_growth_pct is None:
-        return "Growth score is provisional until revenue or earnings growth is entered."
+        return (
+            "Growth score is provisional until revenue or earnings growth is entered."
+        )
     return "Growth combines revenue and earnings expansion."
 
 
 def _valuation_note(metrics: TickerMetricsInput) -> str:
-    if metrics.pe_ratio is None and metrics.forward_pe is None and metrics.free_cash_flow_yield_pct is None:
+    if (
+        metrics.pe_ratio is None
+        and metrics.forward_pe is None
+        and metrics.free_cash_flow_yield_pct is None
+    ):
         return "Valuation score is provisional until multiple or cash-flow yield data is entered."
     return "Valuation favors lower earnings multiples and stronger cash-flow yield."
 

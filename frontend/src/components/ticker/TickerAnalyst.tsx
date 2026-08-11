@@ -70,7 +70,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     "prefill" | "draft" | "model" | null
   >(null);
   const [error, setError] = useState<string | null>(
-    isUnavailable ? "Backend unavailable." : null,
+    isUnavailable ? "Ticker workspace could not be loaded yet." : null,
   );
 
   function startNewAnalysis() {

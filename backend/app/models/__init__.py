@@ -3,7 +3,19 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -84,8 +96,12 @@ class RiskSeverity(str, enum.Enum):
 class Instrument(Base, TimestampMixin):
     __tablename__ = "instruments"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    ticker: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticker: Mapped[str] = mapped_column(
+        String(32), unique=True, nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     asset_class: Mapped[str] = mapped_column(String(32), nullable=False)
     exchange: Mapped[str | None] = mapped_column(String(64))
@@ -95,10 +111,16 @@ class Instrument(Base, TimestampMixin):
 
     positions: Mapped[list["Position"]] = relationship(back_populates="instrument")
     trades: Mapped[list["Trade"]] = relationship(back_populates="instrument")
-    recommendations: Mapped[list["ModelRecommendation"]] = relationship(back_populates="instrument")
+    recommendations: Mapped[list["ModelRecommendation"]] = relationship(
+        back_populates="instrument"
+    )
     ticker_memos: Mapped[list["TickerMemo"]] = relationship(back_populates="instrument")
-    market_price_bars: Mapped[list["MarketPriceBar"]] = relationship(back_populates="instrument")
-    feature_snapshots: Mapped[list["TickerFeatureSnapshot"]] = relationship(back_populates="instrument")
+    market_price_bars: Mapped[list["MarketPriceBar"]] = relationship(
+        back_populates="instrument"
+    )
+    feature_snapshots: Mapped[list["TickerFeatureSnapshot"]] = relationship(
+        back_populates="instrument"
+    )
     training_labels: Mapped[list["TickerTrainingLabel"]] = relationship(
         back_populates="instrument",
         foreign_keys="TickerTrainingLabel.instrument_id",
@@ -108,24 +130,40 @@ class Instrument(Base, TimestampMixin):
 class Portfolio(Base, TimestampMixin):
     __tablename__ = "portfolios"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     mandate: Mapped[str | None] = mapped_column(Text)
     initial_capital: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
 
-    cash_entries: Mapped[list["CashLedgerEntry"]] = relationship(back_populates="portfolio")
+    cash_entries: Mapped[list["CashLedgerEntry"]] = relationship(
+        back_populates="portfolio"
+    )
     positions: Mapped[list["Position"]] = relationship(back_populates="portfolio")
     trades: Mapped[list["Trade"]] = relationship(back_populates="portfolio")
     risk_limits: Mapped[list["RiskLimit"]] = relationship(back_populates="portfolio")
-    risk_snapshots: Mapped[list["PortfolioRiskSnapshot"]] = relationship(back_populates="portfolio")
+    risk_snapshots: Mapped[list["PortfolioRiskSnapshot"]] = relationship(
+        back_populates="portfolio"
+    )
+
+    __table_args__ = (
+        Index("ix_portfolios_owner_user_id_unique", "owner_user_id", unique=True),
+        Index("ix_portfolios_owner_name", "owner_user_id", "name", unique=True),
+    )
 
 
 class CashLedgerEntry(Base, TimestampMixin):
     __tablename__ = "cash_ledger_entries"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
@@ -140,13 +178,23 @@ class CashLedgerEntry(Base, TimestampMixin):
 class Position(Base, TimestampMixin):
     __tablename__ = "positions"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
     average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
-    market_value: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=0)
-    unrealized_pnl: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=0)
+    market_value: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0
+    )
+    unrealized_pnl: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0
+    )
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -157,7 +205,9 @@ class Position(Base, TimestampMixin):
 class ModelVersion(Base, TimestampMixin):
     __tablename__ = "model_versions"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     version: Mapped[str] = mapped_column(String(64), nullable=False)
     pod: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -171,18 +221,31 @@ class ModelVersion(Base, TimestampMixin):
     prohibited_use: Mapped[str | None] = mapped_column(Text)
     shutdown_criteria: Mapped[str | None] = mapped_column(Text)
 
-    recommendations: Mapped[list["ModelRecommendation"]] = relationship(back_populates="model_version")
+    recommendations: Mapped[list["ModelRecommendation"]] = relationship(
+        back_populates="model_version"
+    )
 
-    __table_args__ = (Index("ix_model_versions_name_version", "name", "version", unique=True),)
+    __table_args__ = (
+        Index("ix_model_versions_name_version", "name", "version", unique=True),
+    )
 
 
 class ModelRecommendation(Base, TimestampMixin):
     __tablename__ = "model_recommendations"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    model_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("model_versions.id"), nullable=False, index=True)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
-    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("model_versions.id"), nullable=False, index=True
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     confidence_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     conviction_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
@@ -192,22 +255,40 @@ class ModelRecommendation(Base, TimestampMixin):
     scores: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     evidence_summary: Mapped[str | None] = mapped_column(Text)
 
-    model_version: Mapped["ModelVersion"] = relationship(back_populates="recommendations")
+    model_version: Mapped["ModelVersion"] = relationship(
+        back_populates="recommendations"
+    )
     instrument: Mapped["Instrument"] = relationship(back_populates="recommendations")
-    decisions: Mapped[list["HumanModelDecision"]] = relationship(back_populates="recommendation")
-    evidence_snapshots: Mapped[list["EvidenceSnapshot"]] = relationship(back_populates="recommendation")
+    decisions: Mapped[list["HumanModelDecision"]] = relationship(
+        back_populates="recommendation"
+    )
+    evidence_snapshots: Mapped[list["EvidenceSnapshot"]] = relationship(
+        back_populates="recommendation"
+    )
 
 
 class Trade(Base, TimestampMixin):
     __tablename__ = "trades"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
-    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("model_recommendations.id"), index=True)
-    trade_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("model_recommendations.id"), index=True
+    )
+    trade_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     side: Mapped[str] = mapped_column(String(16), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default=TradeStatus.PLANNED.value)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=TradeStatus.PLANNED.value
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     executed_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
@@ -223,14 +304,20 @@ class Trade(Base, TimestampMixin):
 class RiskLimit(Base, TimestampMixin):
     __tablename__ = "risk_limits"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("portfolios.id"), index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("portfolios.id"), index=True
+    )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     limit_type: Mapped[str] = mapped_column(String(64), nullable=False)
     threshold_value: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
     scope: Mapped[str] = mapped_column(String(64), nullable=False)
-    severity: Mapped[str] = mapped_column(String(32), nullable=False, default=RiskSeverity.WARNING.value)
+    severity: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=RiskSeverity.WARNING.value
+    )
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -241,12 +328,24 @@ class RiskLimit(Base, TimestampMixin):
 class RiskCheck(Base, TimestampMixin):
     __tablename__ = "risk_checks"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    risk_limit_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("risk_limits.id"), nullable=False, index=True)
-    portfolio_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("portfolios.id"), index=True)
-    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("model_recommendations.id"), index=True)
-    trade_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("trades.id"), index=True)
-    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    risk_limit_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("risk_limits.id"), nullable=False, index=True
+    )
+    portfolio_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("portfolios.id"), index=True
+    )
+    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("model_recommendations.id"), index=True
+    )
+    trade_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("trades.id"), index=True
+    )
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     observed_value: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     passed: Mapped[bool] = mapped_column(nullable=False)
     message: Mapped[str | None] = mapped_column(Text)
@@ -257,36 +356,61 @@ class RiskCheck(Base, TimestampMixin):
 class StrategyPod(Base, TimestampMixin):
     __tablename__ = "strategy_pods"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     mandate: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="research")
-    lifecycle_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="research")
-    capital_allocation_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, default=0)
-    risk_budget_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False, default=0)
+    lifecycle_stage: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="research"
+    )
+    capital_allocation_pct: Mapped[Decimal] = mapped_column(
+        Numeric(8, 4), nullable=False, default=0
+    )
+    risk_budget_pct: Mapped[Decimal] = mapped_column(
+        Numeric(8, 4), nullable=False, default=0
+    )
     volatility_target_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
     max_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
     turnover_ceiling_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
-    approved_instruments: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    approved_instruments: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     current_signals: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     evaluation: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     shutdown_criteria: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
 
-    snapshots: Mapped[list["StrategyPodSnapshot"]] = relationship(back_populates="strategy_pod")
+    snapshots: Mapped[list["StrategyPodSnapshot"]] = relationship(
+        back_populates="strategy_pod"
+    )
+
+    __table_args__ = (
+        Index("ix_strategy_pods_owner_code", "owner_user_id", "code", unique=True),
+    )
 
 
 class StrategyPodSnapshot(Base, TimestampMixin):
     __tablename__ = "strategy_pod_snapshots"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    strategy_pod_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("strategy_pods.id"), nullable=False, index=True)
-    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    strategy_pod_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("strategy_pods.id"), nullable=False, index=True
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     lifecycle_stage: Mapped[str] = mapped_column(String(64), nullable=False)
-    capital_allocation_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    capital_allocation_pct: Mapped[Decimal] = mapped_column(
+        Numeric(8, 4), nullable=False
+    )
     risk_budget_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
     current_signal_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
     model_confidence: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
@@ -297,18 +421,24 @@ class StrategyPodSnapshot(Base, TimestampMixin):
     strategy_pod: Mapped["StrategyPod"] = relationship(back_populates="snapshots")
 
     __table_args__ = (
-        Index("ix_strategy_pod_snapshots_pod_captured", "strategy_pod_id", "captured_at"),
+        Index(
+            "ix_strategy_pod_snapshots_pod_captured", "strategy_pod_id", "captured_at"
+        ),
     )
 
 
 class RiskPolicyVersion(Base, TimestampMixin):
     __tablename__ = "risk_policy_versions"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     version: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     limits: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     hierarchy: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -321,10 +451,18 @@ class RiskPolicyVersion(Base, TimestampMixin):
 class PortfolioRiskSnapshot(Base, TimestampMixin):
     __tablename__ = "portfolio_risk_snapshots"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
-    risk_policy_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("risk_policy_versions.id"), index=True)
-    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    risk_policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("risk_policy_versions.id"), index=True
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     nav: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     cash_balance: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
@@ -333,7 +471,9 @@ class PortfolioRiskSnapshot(Base, TimestampMixin):
     net_exposure_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     cash_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     top_position_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
-    top5_concentration_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    top5_concentration_pct: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4), nullable=False
+    )
     portfolio_volatility_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     beta_to_benchmark: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     max_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
@@ -347,17 +487,29 @@ class PortfolioRiskSnapshot(Base, TimestampMixin):
     portfolio: Mapped["Portfolio"] = relationship(back_populates="risk_snapshots")
 
     __table_args__ = (
-        Index("ix_portfolio_risk_snapshots_portfolio_captured", "portfolio_id", "captured_at"),
+        Index(
+            "ix_portfolio_risk_snapshots_portfolio_captured",
+            "portfolio_id",
+            "captured_at",
+        ),
     )
 
 
 class PositionRiskSnapshot(Base, TimestampMixin):
     __tablename__ = "position_risk_snapshots"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_risk_snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolio_risk_snapshots.id"), nullable=False, index=True)
-    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_risk_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolio_risk_snapshots.id"), nullable=False, index=True
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
     ticker: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     asset_class: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -371,17 +523,29 @@ class PositionRiskSnapshot(Base, TimestampMixin):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (
-        Index("ix_position_risk_snapshots_snapshot_ticker", "portfolio_risk_snapshot_id", "ticker"),
+        Index(
+            "ix_position_risk_snapshots_snapshot_ticker",
+            "portfolio_risk_snapshot_id",
+            "ticker",
+        ),
     )
 
 
 class RiskMeasurement(Base, TimestampMixin):
     __tablename__ = "risk_measurements"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
-    portfolio_risk_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("portfolio_risk_snapshots.id"), index=True)
-    measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    portfolio_risk_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("portfolio_risk_snapshots.id"), index=True
+    )
+    measured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     measurement_type: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
@@ -400,7 +564,10 @@ class RiskMeasurement(Base, TimestampMixin):
 class StressScenario(Base, TimestampMixin):
     __tablename__ = "stress_scenarios"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     scenario_type: Mapped[str] = mapped_column(String(64), nullable=False)
     shocks: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -411,10 +578,18 @@ class StressScenario(Base, TimestampMixin):
 class StressTestResult(Base, TimestampMixin):
     __tablename__ = "stress_test_results"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
-    portfolio_risk_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("portfolio_risk_snapshots.id"), index=True)
-    stress_scenario_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("stress_scenarios.id"), index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    portfolio_risk_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("portfolio_risk_snapshots.id"), index=True
+    )
+    stress_scenario_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("stress_scenarios.id"), index=True
+    )
     run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     scenario_name: Mapped[str] = mapped_column(String(128), nullable=False)
     nav_before: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
@@ -432,9 +607,15 @@ class StressTestResult(Base, TimestampMixin):
 class EvidenceSnapshot(Base, TimestampMixin):
     __tablename__ = "evidence_snapshots"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("model_recommendations.id"), index=True)
-    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("model_recommendations.id"), index=True
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     source_type: Mapped[str] = mapped_column(String(64), nullable=False)
     source_name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_reference: Mapped[str | None] = mapped_column(String(512))
@@ -442,15 +623,24 @@ class EvidenceSnapshot(Base, TimestampMixin):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     data_version: Mapped[str | None] = mapped_column(String(128))
 
-    recommendation: Mapped["ModelRecommendation | None"] = relationship(back_populates="evidence_snapshots")
+    recommendation: Mapped["ModelRecommendation | None"] = relationship(
+        back_populates="evidence_snapshots"
+    )
 
 
 class TickerMemo(Base, TimestampMixin):
     __tablename__ = "ticker_memos"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
-    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("model_recommendations.id"), index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("model_recommendations.id"), index=True
+    )
     memo_date: Mapped[date] = mapped_column(Date, nullable=False)
     classification: Mapped[str] = mapped_column(String(64), nullable=False)
     time_horizon: Mapped[str | None] = mapped_column(String(64))
@@ -462,7 +652,9 @@ class TickerMemo(Base, TimestampMixin):
     thesis_breakers: Mapped[str | None] = mapped_column(Text)
     risk_assessment: Mapped[str | None] = mapped_column(Text)
     scores: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    data_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    data_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     model_version_label: Mapped[str | None] = mapped_column(String(128))
 
     instrument: Mapped["Instrument"] = relationship(back_populates="ticker_memos")
@@ -471,9 +663,15 @@ class TickerMemo(Base, TimestampMixin):
 class HumanModelDecision(Base, TimestampMixin):
     __tablename__ = "human_model_decisions"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    recommendation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("model_recommendations.id"), nullable=False, index=True)
-    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    recommendation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("model_recommendations.id"), nullable=False, index=True
+    )
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     decision: Mapped[str] = mapped_column(String(32), nullable=False)
     selected_action: Mapped[str | None] = mapped_column(String(32))
     selected_weight: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
@@ -481,14 +679,20 @@ class HumanModelDecision(Base, TimestampMixin):
     reviewer: Mapped[str | None] = mapped_column(String(128))
     outcome_notes: Mapped[str | None] = mapped_column(Text)
 
-    recommendation: Mapped["ModelRecommendation"] = relationship(back_populates="decisions")
+    recommendation: Mapped["ModelRecommendation"] = relationship(
+        back_populates="decisions"
+    )
 
 
 class MarketPriceBar(Base, TimestampMixin):
     __tablename__ = "market_price_bars"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
     bar_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
     open_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
@@ -503,7 +707,12 @@ class MarketPriceBar(Base, TimestampMixin):
     instrument: Mapped["Instrument"] = relationship(back_populates="market_price_bars")
 
     __table_args__ = (
-        UniqueConstraint("instrument_id", "bar_date", "source", name="uq_market_price_bars_instrument_date_source"),
+        UniqueConstraint(
+            "instrument_id",
+            "bar_date",
+            "source",
+            name="uq_market_price_bars_instrument_date_source",
+        ),
         Index("ix_market_price_bars_instrument_date", "instrument_id", "bar_date"),
     )
 
@@ -511,8 +720,12 @@ class MarketPriceBar(Base, TimestampMixin):
 class TickerFeatureSnapshot(Base, TimestampMixin):
     __tablename__ = "ticker_feature_snapshots"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
     as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
     source_reference: Mapped[str | None] = mapped_column(String(512))
@@ -522,17 +735,30 @@ class TickerFeatureSnapshot(Base, TimestampMixin):
     instrument: Mapped["Instrument"] = relationship(back_populates="feature_snapshots")
 
     __table_args__ = (
-        UniqueConstraint("instrument_id", "as_of_date", "feature_version", name="uq_ticker_feature_snapshots_instrument_date_version"),
-        Index("ix_ticker_feature_snapshots_instrument_date", "instrument_id", "as_of_date"),
+        UniqueConstraint(
+            "instrument_id",
+            "as_of_date",
+            "feature_version",
+            name="uq_ticker_feature_snapshots_instrument_date_version",
+        ),
+        Index(
+            "ix_ticker_feature_snapshots_instrument_date", "instrument_id", "as_of_date"
+        ),
     )
 
 
 class TickerTrainingLabel(Base, TimestampMixin):
     __tablename__ = "ticker_training_labels"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    instrument_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
-    benchmark_instrument_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("instruments.id"), index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    benchmark_instrument_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("instruments.id"), index=True
+    )
     as_of_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
     forward_return_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
@@ -562,5 +788,7 @@ class TickerTrainingLabel(Base, TimestampMixin):
             "source",
             name="uq_ticker_training_labels_identity",
         ),
-        Index("ix_ticker_training_labels_instrument_date", "instrument_id", "as_of_date"),
+        Index(
+            "ix_ticker_training_labels_instrument_date", "instrument_id", "as_of_date"
+        ),
     )

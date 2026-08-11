@@ -77,7 +77,9 @@ class PortfolioCalculationTests(TestCase):
 
         self.assertFalse(checks_by_type["min_cash_allocation_pct"].passed)
         self.assertFalse(checks_by_type["max_leverage_pct"].passed)
-        self.assertEqual(checks_by_type["max_leverage_pct"].observed_value, Decimal("2.50"))
+        self.assertEqual(
+            checks_by_type["max_leverage_pct"].observed_value, Decimal("2.50")
+        )
 
     def test_percent_returns_zero_when_denominator_is_zero(self) -> None:
         self.assertEqual(percent(Decimal("10"), Decimal("0")), Decimal("0"))

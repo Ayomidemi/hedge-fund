@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.auth import AuthenticatedUser
 from app.api.schemas.operating_core import InstrumentResponse
 from app.api.schemas.ticker_intelligence import (
     TickerAnalysisCreate,
@@ -39,16 +40,20 @@ TICKER_MODEL_VERSION = "0.1.0"
 async def analyze_ticker(
     session: AsyncSession,
     payload: TickerAnalysisCreate,
+    user: AuthenticatedUser,
 ) -> TickerAnalysisResponse:
     instrument = await upsert_instrument(session, payload.instrument)
     scorecard = score_ticker(payload.metrics, instrument.asset_class)
     score_data = score_payload(scorecard)
     await save_ticker_feature_snapshot(session, instrument, payload, score_data)
     await session.flush()
-    score_data["ml_report"] = await _ml_report_snapshot(session, instrument.ticker)
+    score_data["ml_report"] = await _ml_report_snapshot(
+        session, instrument.ticker, user
+    )
     model_version = await _get_or_create_model_version(session)
 
     recommendation = ModelRecommendation(
+        owner_user_id=user.id,
         model_version_id=model_version.id,
         instrument_id=instrument.id,
         generated_at=datetime.now(timezone.utc),
@@ -78,12 +83,15 @@ async def analyze_ticker(
     )
 
     memo = TickerMemo(
+        owner_user_id=user.id,
         instrument_id=instrument.id,
         recommendation_id=recommendation.id,
         memo_date=payload.memo_date,
         classification=scorecard.classification,
         time_horizon=payload.time_horizon,
-        executive_view=_executive_view(instrument, scorecard.action, scorecard.classification),
+        executive_view=_executive_view(
+            instrument, scorecard.action, scorecard.classification
+        ),
         thesis=payload.thesis,
         bull_case=payload.bull_case,
         base_case=payload.base_case,
@@ -97,7 +105,7 @@ async def analyze_ticker(
     session.add(memo)
     await session.commit()
 
-    memo = await _load_memo(session, memo.id)
+    memo = await _load_memo(session, memo.id, user)
     if memo is None:
         raise RuntimeError("Ticker memo could not be loaded after commit.")
 
@@ -105,6 +113,7 @@ async def analyze_ticker(
         "ticker_analysis_created",
         extra={
             "ticker": instrument.ticker,
+            "owner_user_id": user.id,
             "memo_id": str(memo.id),
             "recommendation_id": str(recommendation.id),
             "action": scorecard.action,
@@ -134,16 +143,20 @@ async def analyze_ticker(
     )
 
 
-async def _ml_report_snapshot(session: AsyncSession, ticker: str) -> dict:
+async def _ml_report_snapshot(
+    session: AsyncSession,
+    ticker: str,
+    user: AuthenticatedUser,
+) -> dict:
     try:
-        report = await build_ticker_ml_report(session, ticker)
+        report = await build_ticker_ml_report(session, ticker, user=user)
         snapshot = report.model_dump(mode="json")
         snapshot.pop("model_comparison", None)
         return snapshot
     except Exception as exc:  # pragma: no cover - defensive audit preservation
         logger.warning(
             "ticker_ml_report_snapshot_failed",
-            extra={"ticker": ticker, "error": str(exc)},
+            extra={"ticker": ticker, "owner_user_id": user.id, "error": str(exc)},
             exc_info=True,
         )
         return {
@@ -157,17 +170,22 @@ async def _ml_report_snapshot(session: AsyncSession, ticker: str) -> dict:
 
 async def list_recent_ticker_memos(
     session: AsyncSession,
+    user: AuthenticatedUser,
     limit: int = 12,
 ) -> list[TickerMemoSummaryResponse]:
     result = await session.scalars(
         select(TickerMemo)
         .options(selectinload(TickerMemo.instrument))
+        .where(TickerMemo.owner_user_id == user.id)
         .order_by(TickerMemo.memo_date.desc(), TickerMemo.created_at.desc())
         .limit(limit)
     )
     memos = list(result)
 
-    logger.info("recent_ticker_memos_loaded", extra={"memo_count": len(memos)})
+    logger.info(
+        "recent_ticker_memos_loaded",
+        extra={"owner_user_id": user.id, "memo_count": len(memos)},
+    )
 
     return [_memo_summary(memo) for memo in memos]
 
@@ -175,20 +193,28 @@ async def list_recent_ticker_memos(
 async def list_ticker_memos(
     session: AsyncSession,
     ticker: str,
+    user: AuthenticatedUser,
 ) -> list[TickerMemoResponse]:
     normalized_ticker = ticker.strip().upper()
     result = await session.scalars(
         select(TickerMemo)
         .join(TickerMemo.instrument)
         .options(selectinload(TickerMemo.instrument))
-        .where(Instrument.ticker == normalized_ticker)
+        .where(
+            TickerMemo.owner_user_id == user.id,
+            Instrument.ticker == normalized_ticker,
+        )
         .order_by(TickerMemo.memo_date.desc(), TickerMemo.created_at.desc())
     )
     memos = list(result)
 
     logger.info(
         "ticker_memos_loaded",
-        extra={"ticker": normalized_ticker, "memo_count": len(memos)},
+        extra={
+            "ticker": normalized_ticker,
+            "owner_user_id": user.id,
+            "memo_count": len(memos),
+        },
     )
 
     return [_memo_response(memo) for memo in memos]
@@ -197,15 +223,23 @@ async def list_ticker_memos(
 async def get_ticker_memo(
     session: AsyncSession,
     memo_id: UUID,
+    user: AuthenticatedUser,
 ) -> TickerMemoResponse | None:
-    memo = await _load_memo(session, memo_id)
+    memo = await _load_memo(session, memo_id, user)
     if memo is None:
-        logger.info("ticker_memo_not_found", extra={"memo_id": str(memo_id)})
+        logger.info(
+            "ticker_memo_not_found",
+            extra={"memo_id": str(memo_id), "owner_user_id": user.id},
+        )
         return None
 
     logger.info(
         "ticker_memo_loaded",
-        extra={"memo_id": str(memo.id), "ticker": memo.instrument.ticker},
+        extra={
+            "memo_id": str(memo.id),
+            "owner_user_id": user.id,
+            "ticker": memo.instrument.ticker,
+        },
     )
     return _memo_response(memo)
 
@@ -233,7 +267,11 @@ async def _get_or_create_model_version(session: AsyncSession) -> ModelVersion:
             "quality": ["net_margin_pct", "free_cash_flow_yield_pct", "debt_to_equity"],
             "growth": ["revenue_growth_pct", "earnings_growth_pct"],
             "valuation": ["pe_ratio", "forward_pe", "free_cash_flow_yield_pct"],
-            "momentum": ["price_vs_200d_pct", "relative_strength_6m_pct", "volatility_30d_pct"],
+            "momentum": [
+                "price_vs_200d_pct",
+                "relative_strength_6m_pct",
+                "volatility_30d_pct",
+            ],
             "risk": ["debt_to_equity", "volatility_30d_pct"],
         },
         metrics={"validation": "deterministic_rule_set"},
@@ -248,17 +286,24 @@ async def _get_or_create_model_version(session: AsyncSession) -> ModelVersion:
 
     logger.info(
         "ticker_model_version_seeded",
-        extra={"model_name": model_version.name, "model_version": model_version.version},
+        extra={
+            "model_name": model_version.name,
+            "model_version": model_version.version,
+        },
     )
 
     return model_version
 
 
-async def _load_memo(session: AsyncSession, memo_id) -> TickerMemo | None:
+async def _load_memo(
+    session: AsyncSession,
+    memo_id,
+    user: AuthenticatedUser,
+) -> TickerMemo | None:
     return await session.scalar(
         select(TickerMemo)
         .options(selectinload(TickerMemo.instrument))
-        .where(TickerMemo.id == memo_id)
+        .where(TickerMemo.id == memo_id, TickerMemo.owner_user_id == user.id)
     )
 
 

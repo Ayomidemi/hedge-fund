@@ -31,6 +31,7 @@ from app.api.schemas.ticker_intelligence import (
     TrainingLabelResponse,
     YahooPriceBackfillCreate,
 )
+from app.core.auth import AuthenticatedUser, require_authenticated_user
 from app.db.session import get_session
 from app.services.ticker_intelligence.ai_draft import (
     AIDraftUnavailableError,
@@ -72,13 +73,17 @@ router = APIRouter(prefix="/ticker-intelligence")
 )
 async def create_ticker_analysis(
     payload: TickerAnalysisCreate,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TickerAnalysisResponse:
-    return await analyze_ticker(session, payload)
+    return await analyze_ticker(session, payload, user)
 
 
 @router.post("/ai/draft", response_model=TickerAIDraftResponse)
-async def create_ticker_ai_draft(payload: TickerAIDraftCreate) -> TickerAIDraftResponse:
+async def create_ticker_ai_draft(
+    payload: TickerAIDraftCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> TickerAIDraftResponse:
     try:
         return await generate_ticker_ai_draft(payload)
     except AIDraftUnavailableError as exc:
@@ -91,6 +96,7 @@ async def create_ticker_ai_draft(payload: TickerAIDraftCreate) -> TickerAIDraftR
 @router.post("/ml/prices/yahoo/backfill", response_model=PriceBackfillResponse)
 async def create_yahoo_price_backfill(
     payload: YahooPriceBackfillCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> PriceBackfillResponse:
     try:
@@ -105,6 +111,7 @@ async def create_yahoo_price_backfill(
 @router.post("/ml/pipeline/run", response_model=ResearchPipelineRunResponse)
 async def create_research_pipeline_run(
     payload: ResearchPipelineRunCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> ResearchPipelineRunResponse:
     return await run_research_data_pipeline(session, payload)
@@ -113,6 +120,7 @@ async def create_research_pipeline_run(
 @router.post("/ml/labels", response_model=TrainingLabelResponse)
 async def create_training_labels(
     payload: TrainingLabelGenerateCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TrainingLabelResponse:
     try:
@@ -127,6 +135,7 @@ async def create_training_labels(
 @router.post("/ml/features/price", response_model=PriceFeatureBuildResponse)
 async def create_price_feature_snapshots(
     payload: PriceFeatureBuildCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> PriceFeatureBuildResponse:
     try:
@@ -141,6 +150,7 @@ async def create_price_feature_snapshots(
 @router.post("/ml/regime/hmm", response_model=RegimeModelResponse)
 async def create_hmm_regime_model(
     payload: RegimeModelFitCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> RegimeModelResponse:
     try:
@@ -154,6 +164,7 @@ async def create_hmm_regime_model(
 
 @router.get("/ml/regime/latest", response_model=RegimeModelResponse)
 async def read_latest_hmm_regime_model(
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> RegimeModelResponse:
     try:
@@ -168,6 +179,7 @@ async def read_latest_hmm_regime_model(
 @router.post("/ml/backtests/factor", response_model=BacktestRunResponse)
 async def create_factor_backtest(
     payload: BacktestRunCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> BacktestRunResponse:
     try:
@@ -182,6 +194,7 @@ async def create_factor_backtest(
 @router.post("/ml/train", response_model=PredictiveModelTrainResponse)
 async def create_predictive_model_training_run(
     payload: PredictiveModelTrainCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> PredictiveModelTrainResponse:
     try:
@@ -196,6 +209,7 @@ async def create_predictive_model_training_run(
 @router.post("/ml/predict", response_model=PredictiveModelPredictionResponse)
 async def create_predictive_model_prediction(
     payload: PredictiveModelPredictCreate,
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> PredictiveModelPredictionResponse:
     try:
@@ -210,6 +224,7 @@ async def create_predictive_model_prediction(
 @router.get("/ml/models", response_model=list[ModelComparisonRowResponse])
 async def read_predictive_model_comparison(
     limit: int = Query(default=20, ge=1, le=100),
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[ModelComparisonRowResponse]:
     return await list_predictive_model_comparison(session, limit=limit)
@@ -219,15 +234,22 @@ async def read_predictive_model_comparison(
 async def read_ticker_ml_report(
     ticker: str,
     horizon_days: int = Query(default=63, ge=1, le=756),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TickerMLReportResponse:
-    return await build_ticker_ml_report(session, ticker, horizon_days=horizon_days)
+    return await build_ticker_ml_report(
+        session,
+        ticker,
+        horizon_days=horizon_days,
+        user=user,
+    )
 
 
 @router.get("/ml/dataset/{ticker}", response_model=list[TickerDatasetRowResponse])
 async def read_ticker_dataset_rows(
     ticker: str,
     limit: int = Query(default=100, ge=1, le=500),
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[TickerDatasetRowResponse]:
     return await list_ticker_dataset_rows(session, ticker, limit=limit)
@@ -236,17 +258,19 @@ async def read_ticker_dataset_rows(
 @router.get("/memos", response_model=list[TickerMemoSummaryResponse])
 async def read_recent_ticker_memos(
     limit: int = Query(default=12, ge=1, le=50),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[TickerMemoSummaryResponse]:
-    return await list_recent_ticker_memos(session, limit=limit)
+    return await list_recent_ticker_memos(session, user, limit=limit)
 
 
 @router.get("/memos/{memo_id}", response_model=TickerMemoResponse)
 async def read_ticker_memo(
     memo_id: UUID,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TickerMemoResponse:
-    memo = await get_ticker_memo(session, memo_id)
+    memo = await get_ticker_memo(session, memo_id, user)
     if memo is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -259,6 +283,7 @@ async def read_ticker_memo(
 async def read_ticker_prefill(
     ticker: str,
     market: str | None = Query(default=None, max_length=16),
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> TickerPrefillResponse:
     try:
         return await prefill_ticker(ticker, market_hint=market)
@@ -272,6 +297,7 @@ async def read_ticker_prefill(
 @router.get("/{ticker}/memos", response_model=list[TickerMemoResponse])
 async def read_ticker_memos(
     ticker: str,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[TickerMemoResponse]:
-    return await list_ticker_memos(session, ticker)
+    return await list_ticker_memos(session, ticker, user)

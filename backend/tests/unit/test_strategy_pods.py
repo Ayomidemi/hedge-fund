@@ -31,8 +31,7 @@ class StrategyPodTests(TestCase):
 
     def test_default_live_allocation_leaves_reserve(self) -> None:
         allocation = sum(
-            pod["capital_allocation_pct"]
-            for pod in DEFAULT_STRATEGY_POD_DEFINITIONS
+            pod["capital_allocation_pct"] for pod in DEFAULT_STRATEGY_POD_DEFINITIONS
         )
 
         self.assertLessEqual(allocation, Decimal("100"))
@@ -79,7 +78,9 @@ class StrategyPodTests(TestCase):
         self.assertIn("defensive", recommendation.lower())
 
     def test_code_normalization_accepts_url_friendly_slugs(self) -> None:
-        self.assertEqual(normalize_strategy_pod_code("Cross-Asset-Trend"), "cross_asset_trend")
+        self.assertEqual(
+            normalize_strategy_pod_code("Cross-Asset-Trend"), "cross_asset_trend"
+        )
 
     def test_update_schema_rejects_unknown_status(self) -> None:
         with self.assertRaises(ValidationError):

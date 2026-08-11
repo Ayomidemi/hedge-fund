@@ -19,10 +19,12 @@ export default async function ReportsPage() {
           Monthly report
         </p>
         <h2 className="mt-2 text-xl font-semibold">
-          {unavailable ? "Backend unavailable" : "Report pending"}
+          {unavailable ? "Report could not be loaded yet" : "Report pending"}
         </h2>
         <p className="mt-2 text-sm text-zinc-500">
-          The monthly report generator is ready once portfolio data is available.
+          {unavailable
+            ? "Sign in again or refresh this page."
+            : "The monthly report generator is ready once portfolio data is available."}
         </p>
       </section>
     );

@@ -31,9 +31,7 @@ class SecFundamentalsTests(TestCase):
                         }
                     },
                     "PaymentsToAcquirePropertyPlantAndEquipment": {
-                        "units": {
-                            "USD": [_annual_fact("2025-12-31", "2026-02-01", 50)]
-                        }
+                        "units": {"USD": [_annual_fact("2025-12-31", "2026-02-01", 50)]}
                     },
                     "LongTermDebtAndFinanceLeaseObligationsCurrent": {
                         "units": {

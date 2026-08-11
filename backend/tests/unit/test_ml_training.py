@@ -41,7 +41,9 @@ class MLTrainingTests(TestCase):
             for index, price in enumerate(benchmark_prices)
         ]
 
-        labels = compute_forward_labels(bars, horizons=[2], benchmark_bars=benchmark_bars)
+        labels = compute_forward_labels(
+            bars, horizons=[2], benchmark_bars=benchmark_bars
+        )
 
         self.assertEqual(len(labels), 3)
         self.assertEqual(labels[0].as_of_date, start_date)
@@ -142,8 +144,7 @@ class MLTrainingTests(TestCase):
         self.assertEqual(len(artifact["state_probabilities"]), 3)
         self.assertIn(artifact["current_regime"], {"risk-on", "fragile", "stress"})
         total_probability = sum(
-            Decimal(state["probability"])
-            for state in artifact["state_probabilities"]
+            Decimal(state["probability"]) for state in artifact["state_probabilities"]
         )
         self.assertAlmostEqual(float(total_probability), 1.0, places=3)
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.reporting import MonthlyReportResponse
+from app.core.auth import AuthenticatedUser, require_authenticated_user
 from app.db.session import get_session
 from app.services.reporting.monthly import build_monthly_report
 
@@ -12,6 +13,7 @@ router = APIRouter(prefix="/reports")
 async def read_monthly_report(
     year: int | None = Query(default=None, ge=2000, le=2100),
     month: int | None = Query(default=None, ge=1, le=12),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> MonthlyReportResponse:
-    return await build_monthly_report(session, year=year, month=month)
+    return await build_monthly_report(session, user, year=year, month=month)

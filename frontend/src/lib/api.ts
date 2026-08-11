@@ -5,10 +5,14 @@ export type ApiRequestOptions = {
   accessToken?: string;
 };
 
+type ErrorResponse = {
+  detail?: string | { msg?: string }[];
+};
+
 async function resolveAccessToken(
   explicit?: string,
 ): Promise<string | undefined> {
-  if (explicit) {
+  if (explicit?.trim()) {
     return explicit;
   }
 
@@ -34,6 +38,21 @@ function buildAuthHeaders(accessToken?: string): HeadersInit {
   return headers;
 }
 
+async function errorMessageFromResponse(response: Response) {
+  let detail = `Request failed (${response.status})`;
+  try {
+    const body = (await response.json()) as ErrorResponse;
+    if (typeof body.detail === "string") {
+      detail = body.detail;
+    } else if (Array.isArray(body.detail) && body.detail[0]?.msg) {
+      detail = body.detail[0].msg;
+    }
+  } catch {
+    // keep default message
+  }
+  return detail;
+}
+
 async function fetchApi<T>(
   path: string,
   options?: ApiRequestOptions,
@@ -45,7 +64,7 @@ async function fetchApi<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    throw new Error(await errorMessageFromResponse(response));
   }
 
   return response.json() as Promise<T>;
@@ -67,18 +86,29 @@ async function postApi<TResponse, TPayload>(
   });
 
   if (!response.ok) {
-    let detail = `Request failed (${response.status})`;
-    try {
-      const body = (await response.json()) as { detail?: string | { msg?: string }[] };
-      if (typeof body.detail === "string") {
-        detail = body.detail;
-      } else if (Array.isArray(body.detail) && body.detail[0]?.msg) {
-        detail = body.detail[0].msg;
-      }
-    } catch {
-      // keep default message
-    }
-    throw new Error(detail);
+    throw new Error(await errorMessageFromResponse(response));
+  }
+
+  return response.json() as Promise<TResponse>;
+}
+
+async function patchApi<TResponse, TPayload>(
+  path: string,
+  payload: TPayload,
+  options?: ApiRequestOptions,
+): Promise<TResponse> {
+  const accessToken = await resolveAccessToken(options?.accessToken);
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildAuthHeaders(accessToken),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
   }
 
   return response.json() as Promise<TResponse>;
@@ -204,29 +234,38 @@ export type CashLedgerEntryInput = CashMovementInput & {
   entry_type: string;
 };
 
-export function createCashDeposit(payload: CashMovementInput) {
+export function createCashDeposit(payload: CashMovementInput, options?: ApiRequestOptions) {
   return postApi<CashLedgerEntry, CashMovementInput>(
     "/api/operating-core/cash-ledger/deposits",
     payload,
+    options,
   );
 }
 
-export function createCashWithdrawal(payload: CashMovementInput) {
+export function createCashWithdrawal(payload: CashMovementInput, options?: ApiRequestOptions) {
   return postApi<CashLedgerEntry, CashMovementInput>(
     "/api/operating-core/cash-ledger/withdrawals",
     payload,
+    options,
   );
 }
 
-export function createCashAdjustment(payload: CashMovementInput & { description: string }) {
+export function createCashAdjustment(
+  payload: CashMovementInput & { description: string },
+  options?: ApiRequestOptions,
+) {
   return postApi<CashLedgerEntry, CashMovementInput & { description: string }>(
     "/api/operating-core/cash-ledger/adjustments",
     payload,
+    options,
   );
 }
 
-export function createCashLedgerEntry(payload: CashLedgerEntryInput) {
-  return createCashDeposit(payload);
+export function createCashLedgerEntry(
+  payload: CashLedgerEntryInput,
+  options?: ApiRequestOptions,
+) {
+  return createCashDeposit(payload, options);
 }
 
 export type ManualTradeInput = {
@@ -787,60 +826,80 @@ export function getCashLedgerHistory(options?: ApiRequestOptions) {
   return fetchApi<CashLedgerEntry[]>("/api/operating-core/cash-ledger/history", options);
 }
 
-export function createManualTrade(payload: ManualTradeInput) {
-  return postApi<Trade, ManualTradeInput>("/api/operating-core/trades", payload);
+export function createManualTrade(payload: ManualTradeInput, options?: ApiRequestOptions) {
+  return postApi<Trade, ManualTradeInput>("/api/operating-core/trades", payload, options);
 }
 
 export function getRecentTickerMemos(options?: ApiRequestOptions) {
   return fetchApi<TickerMemoSummary[]>("/api/ticker-intelligence/memos", options);
 }
 
-export function getTickerMemo(memoId: string) {
+export function getTickerMemo(memoId: string, options?: ApiRequestOptions) {
   return fetchApi<TickerMemo>(
     `/api/ticker-intelligence/memos/${encodeURIComponent(memoId)}`,
+    options,
   );
 }
 
-export function getTickerPrefill(ticker: string, market?: string) {
+export function getTickerPrefill(
+  ticker: string,
+  market?: string,
+  options?: ApiRequestOptions,
+) {
   const marketQuery =
     market && market !== "auto" ? `?market=${encodeURIComponent(market)}` : "";
   return fetchApi<TickerPrefill>(
     `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill${marketQuery}`,
+    options,
   );
 }
 
-export function createTickerAIDraft(payload: TickerAIDraftInput) {
+export function createTickerAIDraft(
+  payload: TickerAIDraftInput,
+  options?: ApiRequestOptions,
+) {
   return postApi<TickerAIDraft, TickerAIDraftInput>(
     "/api/ticker-intelligence/ai/draft",
     payload,
+    options,
   );
 }
 
-export function createTickerAnalysis(payload: TickerAnalysisInput) {
+export function createTickerAnalysis(
+  payload: TickerAnalysisInput,
+  options?: ApiRequestOptions,
+) {
   return postApi<TickerAnalysis, TickerAnalysisInput>(
     "/api/ticker-intelligence/analyze",
     payload,
+    options,
   );
 }
 
-export function getTickerMLReport(ticker: string, horizonDays = 63) {
+export function getTickerMLReport(
+  ticker: string,
+  horizonDays = 63,
+  options?: ApiRequestOptions,
+) {
   return fetchApi<TickerMLReport>(
     `/api/ticker-intelligence/ml/report/${encodeURIComponent(ticker)}?horizon_days=${horizonDays}`,
+    options,
   );
 }
 
-export function getPredictiveModelComparison() {
-  return fetchApi<ModelComparisonRow[]>("/api/ticker-intelligence/ml/models");
+export function getPredictiveModelComparison(options?: ApiRequestOptions) {
+  return fetchApi<ModelComparisonRow[]>("/api/ticker-intelligence/ml/models", options);
 }
 
-export function getLatestRegimeModel() {
-  return fetchApi<RegimeModel>("/api/ticker-intelligence/ml/regime/latest");
+export function getLatestRegimeModel(options?: ApiRequestOptions) {
+  return fetchApi<RegimeModel>("/api/ticker-intelligence/ml/regime/latest", options);
 }
 
-export function createFactorBacktest(payload: BacktestRunInput) {
+export function createFactorBacktest(payload: BacktestRunInput, options?: ApiRequestOptions) {
   return postApi<BacktestRun, BacktestRunInput>(
     "/api/ticker-intelligence/ml/backtests/factor",
     payload,
+    options,
   );
 }
 
@@ -852,24 +911,33 @@ export function getRiskCentreOverview(options?: ApiRequestOptions) {
   return fetchApi<RiskCentreOverview>("/api/risk-centre/overview", options);
 }
 
-export function captureRiskSnapshot() {
+export function captureRiskSnapshot(options?: ApiRequestOptions) {
   return postApi<RiskSnapshotCapture, Record<string, never>>(
     "/api/risk-centre/snapshots",
     {},
+    options,
   );
 }
 
-export function createCustomStressTest(payload: StressScenarioInput) {
+export function createCustomStressTest(
+  payload: StressScenarioInput,
+  options?: ApiRequestOptions,
+) {
   return postApi<StressTestResult, StressScenarioInput>(
     "/api/risk-centre/stress-tests",
     payload,
+    options,
   );
 }
 
-export function createPreTradeRiskCheck(payload: PreTradeRiskInput) {
+export function createPreTradeRiskCheck(
+  payload: PreTradeRiskInput,
+  options?: ApiRequestOptions,
+) {
   return postApi<PreTradeRiskCheck, PreTradeRiskInput>(
     "/api/risk-centre/pre-trade-check",
     payload,
+    options,
   );
 }
 
@@ -877,39 +945,36 @@ export function getStrategyPods(options?: ApiRequestOptions) {
   return fetchApi<StrategyPodsOverview>("/api/strategy-pods", options);
 }
 
-export function getStrategyPod(code: string) {
-  return fetchApi<StrategyPod>(`/api/strategy-pods/${encodeURIComponent(code)}`);
+export function getStrategyPod(code: string, options?: ApiRequestOptions) {
+  return fetchApi<StrategyPod>(
+    `/api/strategy-pods/${encodeURIComponent(code)}`,
+    options,
+  );
 }
 
-export function updateStrategyPod(code: string, payload: StrategyPodUpdateInput) {
-  return fetch(`${API_BASE_URL}/api/strategy-pods/${encodeURIComponent(code)}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  }).then(async (response) => {
-    if (!response.ok) {
-      let detail = `Request failed (${response.status})`;
-      try {
-        const body = (await response.json()) as { detail?: string | { msg?: string }[] };
-        if (typeof body.detail === "string") {
-          detail = body.detail;
-        } else if (Array.isArray(body.detail) && body.detail[0]?.msg) {
-          detail = body.detail[0].msg;
-        }
-      } catch {
-        // keep default message
-      }
-      throw new Error(detail);
-    }
-    return response.json() as Promise<StrategyPod>;
-  });
+export function updateStrategyPod(
+  code: string,
+  payload: StrategyPodUpdateInput,
+  options?: ApiRequestOptions,
+) {
+  return patchApi<StrategyPod, StrategyPodUpdateInput>(
+    `/api/strategy-pods/${encodeURIComponent(code)}`,
+    payload,
+    options,
+  );
 }
 
-export function captureStrategyPodSnapshot(code: string) {
+export function getStrategyPodSnapshots(code: string, options?: ApiRequestOptions) {
+  return fetchApi<StrategyPodSnapshot[]>(
+    `/api/strategy-pods/${encodeURIComponent(code)}/snapshots`,
+    options,
+  );
+}
+
+export function captureStrategyPodSnapshot(code: string, options?: ApiRequestOptions) {
   return postApi<StrategyPodSnapshot, Record<string, never>>(
     `/api/strategy-pods/${encodeURIComponent(code)}/snapshots`,
     {},
+    options,
   );
 }

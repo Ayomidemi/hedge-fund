@@ -107,9 +107,14 @@ def group_exposure_by_asset_class(
 ) -> dict[str, Decimal]:
     exposures: dict[str, Decimal] = {}
     for position in positions:
-        exposures[position.asset_class] = exposures.get(position.asset_class, Decimal("0")) + position.market_value
+        exposures[position.asset_class] = (
+            exposures.get(position.asset_class, Decimal("0")) + position.market_value
+        )
 
-    return {asset_class: percent(value, nav) for asset_class, value in sorted(exposures.items())}
+    return {
+        asset_class: percent(value, nav)
+        for asset_class, value in sorted(exposures.items())
+    }
 
 
 def group_exposure_by_sector(
@@ -134,9 +139,13 @@ def evaluate_risk_limits(
 
     for limit in risk_limits:
         if limit.limit_type == "max_single_equity_position_pct":
-            equity_positions = [position for position in positions if position.asset_class == "equity"]
+            equity_positions = [
+                position for position in positions if position.asset_class == "equity"
+            ]
             if not equity_positions:
-                checks.append(_passed_check(limit, Decimal("0"), "No single-equity exposure."))
+                checks.append(
+                    _passed_check(limit, Decimal("0"), "No single-equity exposure.")
+                )
                 continue
 
             largest = max(equity_positions, key=lambda position: position.market_value)
@@ -151,7 +160,9 @@ def evaluate_risk_limits(
             )
 
         elif limit.limit_type == "max_etf_position_pct":
-            etf_positions = [position for position in positions if position.asset_class == "etf"]
+            etf_positions = [
+                position for position in positions if position.asset_class == "etf"
+            ]
             if not etf_positions:
                 checks.append(_passed_check(limit, Decimal("0"), "No ETF exposure."))
                 continue
@@ -195,7 +206,9 @@ def evaluate_risk_limits(
             )
 
         elif limit.limit_type == "max_leverage_pct":
-            observed = Decimal("0") if cash_balance >= 0 else percent(abs(cash_balance), nav)
+            observed = (
+                Decimal("0") if cash_balance >= 0 else percent(abs(cash_balance), nav)
+            )
             checks.append(
                 _threshold_check(
                     limit,

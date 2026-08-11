@@ -1,3 +1,5 @@
+import "server-only";
+
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
@@ -32,8 +34,14 @@ export async function createClient() {
 
 export async function getServerAccessToken(): Promise<string | undefined> {
   const supabase = await createClient();
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token;
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+
+  if (userError || !userData.user) {
+    return undefined;
+  }
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  return sessionData.session?.access_token;
 }
 
 export async function getServerUserEmail(): Promise<string | null> {

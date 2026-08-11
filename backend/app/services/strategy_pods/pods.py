@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import AuthenticatedUser
 from app.api.schemas.risk_centre import RiskCentreOverviewResponse
 from app.api.schemas.strategy_pods import (
     StrategyPodLatestSnapshotResponse,
@@ -64,14 +65,29 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
         "volatility_target_pct": Decimal("12.0000"),
         "max_drawdown_pct": Decimal("10.0000"),
         "turnover_ceiling_pct": Decimal("50.0000"),
-        "approved_instruments": ["broad-market ETFs", "Treasury ETFs", "gold ETFs", "cash equivalents"],
+        "approved_instruments": [
+            "broad-market ETFs",
+            "Treasury ETFs",
+            "gold ETFs",
+            "cash equivalents",
+        ],
         "current_signals": {
             "primary_model": "HMM market regime model",
-            "required_inputs": ["market breadth", "volatility", "rates", "credit", "commodities"],
+            "required_inputs": [
+                "market breadth",
+                "volatility",
+                "rates",
+                "credit",
+                "commodities",
+            ],
         },
         "evaluation": {
             "primary_question": "Which regime are we in, and should portfolio risk expand or contract?",
-            "minimum_evidence": ["regime probability", "transition risk", "risk-center agreement"],
+            "minimum_evidence": [
+                "regime probability",
+                "transition risk",
+                "risk-center agreement",
+            ],
         },
         "shutdown_criteria": "Suspend overlay if regime state is unstable, confidence collapses, or risk centre enters halt.",
         "notes": "Phase-one version uses price and volatility until macro datasets are connected.",
@@ -87,14 +103,31 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
         "volatility_target_pct": Decimal("14.0000"),
         "max_drawdown_pct": Decimal("10.0000"),
         "turnover_ceiling_pct": Decimal("80.0000"),
-        "approved_instruments": ["SPY", "QQQ", "IWM", "TLT", "IEF", "SHY", "GLD", "DBC"],
+        "approved_instruments": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "TLT",
+            "IEF",
+            "SHY",
+            "GLD",
+            "DBC",
+        ],
         "current_signals": {
             "primary_model": "multi-horizon trend strength",
-            "required_inputs": ["moving averages", "breakouts", "realized volatility", "asset-class momentum"],
+            "required_inputs": [
+                "moving averages",
+                "breakouts",
+                "realized volatility",
+                "asset-class momentum",
+            ],
         },
         "evaluation": {
             "primary_question": "Which assets have persistent risk-adjusted direction?",
-            "minimum_evidence": ["multi-horizon agreement", "transaction-cost-aware backtest"],
+            "minimum_evidence": [
+                "multi-horizon agreement",
+                "transaction-cost-aware backtest",
+            ],
         },
         "shutdown_criteria": "Suspend if trend turnover overwhelms expected edge or correlations spike.",
         "notes": "Ready to consume the existing price history store before a dedicated trend model is added.",
@@ -110,14 +143,26 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
         "volatility_target_pct": Decimal("16.0000"),
         "max_drawdown_pct": Decimal("12.0000"),
         "turnover_ceiling_pct": Decimal("100.0000"),
-        "approved_instruments": ["US-listed equities", "sector ETFs", "broad-market ETFs"],
+        "approved_instruments": [
+            "US-listed equities",
+            "sector ETFs",
+            "broad-market ETFs",
+        ],
         "current_signals": {
             "primary_model": "ridge/logistic relative-return model",
-            "required_inputs": ["price features", "forward labels", "benchmark-relative outcomes"],
+            "required_inputs": [
+                "price features",
+                "forward labels",
+                "benchmark-relative outcomes",
+            ],
         },
         "evaluation": {
             "primary_question": "Which securities are most likely to outperform comparable securities?",
-            "minimum_evidence": ["validation rows", "directional accuracy", "simple-model baseline comparison"],
+            "minimum_evidence": [
+                "validation rows",
+                "directional accuracy",
+                "simple-model baseline comparison",
+            ],
         },
         "shutdown_criteria": "Disable if validation accuracy decays or residual downside becomes unacceptable.",
         "notes": "This is the current home of the predictive ticker model.",
@@ -136,7 +181,12 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
         "approved_instruments": ["US-listed equities", "liquid ETFs"],
         "current_signals": {
             "primary_model": "AI-assisted ticker analyst memo",
-            "required_inputs": ["thesis", "bull/base/bear cases", "risk notes", "valuation context"],
+            "required_inputs": [
+                "thesis",
+                "bull/base/bear cases",
+                "risk notes",
+                "valuation context",
+            ],
         },
         "evaluation": {
             "primary_question": "Does the business quality and valuation justify research time or capital?",
@@ -156,14 +206,27 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
         "volatility_target_pct": Decimal("10.0000"),
         "max_drawdown_pct": Decimal("6.0000"),
         "turnover_ceiling_pct": Decimal("120.0000"),
-        "approved_instruments": ["pairs", "sector-relative baskets", "ETF relationships"],
+        "approved_instruments": [
+            "pairs",
+            "sector-relative baskets",
+            "ETF relationships",
+        ],
         "current_signals": {
             "primary_model": "correlation and spread diagnostics",
-            "required_inputs": ["correlation", "cointegration", "borrow/shorting constraints", "transaction costs"],
+            "required_inputs": [
+                "correlation",
+                "cointegration",
+                "borrow/shorting constraints",
+                "transaction costs",
+            ],
         },
         "evaluation": {
             "primary_question": "Is there a stable relative mispricing after costs and constraints?",
-            "minimum_evidence": ["spread stability", "cost-aware backtest", "execution feasibility"],
+            "minimum_evidence": [
+                "spread stability",
+                "cost-aware backtest",
+                "execution feasibility",
+            ],
         },
         "shutdown_criteria": "No live allocation while leverage, shorting, or execution constraints are unresolved.",
         "notes": "Kept research-only during phase one.",
@@ -182,11 +245,20 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
         "approved_instruments": ["research-only datasets", "paper-trading candidates"],
         "current_signals": {
             "primary_model": "sandbox experiments",
-            "required_inputs": ["hypothesis", "data provenance", "baseline comparison", "failure criteria"],
+            "required_inputs": [
+                "hypothesis",
+                "data provenance",
+                "baseline comparison",
+                "failure criteria",
+            ],
         },
         "evaluation": {
             "primary_question": "Is this idea robust enough to graduate into a production pod?",
-            "minimum_evidence": ["clear baseline improvement", "robustness checks", "risk review"],
+            "minimum_evidence": [
+                "clear baseline improvement",
+                "robustness checks",
+                "risk review",
+            ],
         },
         "shutdown_criteria": "No live allocation until validation standards are met.",
         "notes": "This protects the core portfolio from exciting but unproven ideas.",
@@ -221,27 +293,32 @@ class StrategyPodAssessment:
     evaluation_overlay: dict[str, Any]
 
 
-async def list_strategy_pods(session: AsyncSession) -> StrategyPodOverviewResponse:
-    pods = await _get_or_seed_strategy_pods(session)
+async def list_strategy_pods(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> StrategyPodOverviewResponse:
+    pods = await _get_or_seed_strategy_pods(session, user)
     latest_snapshots = await _load_latest_snapshots(session, pods)
-    context = await _load_runtime_context(session)
+    context = await _load_runtime_context(session, user)
     responses = [
-        _pod_response(pod, context, latest_snapshots.get(pod.id))
-        for pod in pods
+        _pod_response(pod, context, latest_snapshots.get(pod.id)) for pod in pods
     ]
-    allocation_total = _decimal4(sum((pod.capital_allocation_pct for pod in pods), Decimal("0")))
-    risk_budget_total = _decimal4(sum((pod.risk_budget_pct for pod in pods), Decimal("0")))
+    allocation_total = _decimal4(
+        sum((pod.capital_allocation_pct for pod in pods), Decimal("0"))
+    )
+    risk_budget_total = _decimal4(
+        sum((pod.risk_budget_pct for pod in pods), Decimal("0"))
+    )
     unallocated = _decimal4(max(Decimal("0"), Decimal("100") - allocation_total))
-    warnings = list(context.warnings)
+    warnings: list[str] = []
     if allocation_total > Decimal("100"):
         warnings.append("Total pod allocation is above 100%; CIO review required.")
-    elif unallocated > 0:
-        warnings.append(f"{unallocated}% is unallocated and remains in portfolio reserve.")
 
     logger.info(
         "strategy_pods_loaded",
         extra={
             "pod_count": len(pods),
+            "owner_user_id": user.id,
             "allocation_total_pct": str(allocation_total),
             "risk_level": context.risk_overview.snapshot.risk_level,
         },
@@ -263,13 +340,16 @@ async def list_strategy_pods(session: AsyncSession) -> StrategyPodOverviewRespon
 async def get_strategy_pod(
     session: AsyncSession,
     code: str,
+    user: AuthenticatedUser,
 ) -> StrategyPodResponse | None:
-    pods = await _get_or_seed_strategy_pods(session)
-    pod = next((item for item in pods if item.code == normalize_strategy_pod_code(code)), None)
+    pods = await _get_or_seed_strategy_pods(session, user)
+    pod = next(
+        (item for item in pods if item.code == normalize_strategy_pod_code(code)), None
+    )
     if pod is None:
         return None
     latest_snapshots = await _load_latest_snapshots(session, [pod])
-    context = await _load_runtime_context(session)
+    context = await _load_runtime_context(session, user)
     return _pod_response(pod, context, latest_snapshots.get(pod.id))
 
 
@@ -277,9 +357,12 @@ async def update_strategy_pod(
     session: AsyncSession,
     code: str,
     payload: StrategyPodUpdate,
+    user: AuthenticatedUser,
 ) -> StrategyPodResponse | None:
-    pods = await _get_or_seed_strategy_pods(session)
-    pod = next((item for item in pods if item.code == normalize_strategy_pod_code(code)), None)
+    pods = await _get_or_seed_strategy_pods(session, user)
+    pod = next(
+        (item for item in pods if item.code == normalize_strategy_pod_code(code)), None
+    )
     if pod is None:
         return None
 
@@ -298,25 +381,29 @@ async def update_strategy_pod(
         "strategy_pod_updated",
         extra={
             "pod_code": pod.code,
+            "owner_user_id": user.id,
             "status": pod.status,
             "lifecycle_stage": pod.lifecycle_stage,
             "capital_allocation_pct": str(pod.capital_allocation_pct),
         },
     )
 
-    return await get_strategy_pod(session, pod.code)
+    return await get_strategy_pod(session, pod.code, user)
 
 
 async def capture_strategy_pod_snapshot(
     session: AsyncSession,
     code: str,
+    user: AuthenticatedUser,
 ) -> StrategyPodSnapshotResponse | None:
-    pods = await _get_or_seed_strategy_pods(session)
-    pod = next((item for item in pods if item.code == normalize_strategy_pod_code(code)), None)
+    pods = await _get_or_seed_strategy_pods(session, user)
+    pod = next(
+        (item for item in pods if item.code == normalize_strategy_pod_code(code)), None
+    )
     if pod is None:
         return None
 
-    context = await _load_runtime_context(session)
+    context = await _load_runtime_context(session, user)
     response = _pod_response(pod, context, None)
     snapshot = StrategyPodSnapshot(
         strategy_pod_id=pod.id,
@@ -340,27 +427,37 @@ async def capture_strategy_pod_snapshot(
         "strategy_pod_snapshot_captured",
         extra={
             "pod_code": pod.code,
+            "owner_user_id": user.id,
             "snapshot_id": str(snapshot.id),
             "risk_level": snapshot.risk_level,
             "signal_score": str(snapshot.current_signal_score),
         },
     )
 
-    return StrategyPodSnapshotResponse(
-        snapshot_id=snapshot.id,
-        strategy_pod_id=pod.id,
-        code=pod.code,
-        captured_at=snapshot.captured_at,
-        as_of_date=snapshot.as_of_date,
-        status=snapshot.status,
-        lifecycle_stage=snapshot.lifecycle_stage,
-        capital_allocation_pct=snapshot.capital_allocation_pct,
-        risk_budget_pct=snapshot.risk_budget_pct,
-        current_signal_score=snapshot.current_signal_score,
-        model_confidence=snapshot.model_confidence,
-        risk_level=snapshot.risk_level,
-        allocation_recommendation=snapshot.allocation_recommendation,
+    return _snapshot_to_response(snapshot, pod)
+
+
+async def list_strategy_pod_snapshots(
+    session: AsyncSession,
+    code: str,
+    user: AuthenticatedUser,
+    *,
+    limit: int = 20,
+) -> list[StrategyPodSnapshotResponse] | None:
+    pods = await _get_or_seed_strategy_pods(session, user)
+    pod = next(
+        (item for item in pods if item.code == normalize_strategy_pod_code(code)), None
     )
+    if pod is None:
+        return None
+
+    snapshots = await session.scalars(
+        select(StrategyPodSnapshot)
+        .where(StrategyPodSnapshot.strategy_pod_id == pod.id)
+        .order_by(StrategyPodSnapshot.captured_at.desc())
+        .limit(limit)
+    )
+    return [_snapshot_to_response(snapshot, pod) for snapshot in snapshots]
 
 
 def normalize_strategy_pod_code(code: str) -> str:
@@ -384,9 +481,15 @@ def strategy_pod_allocation_recommendation(
     normalized_regime = (current_regime or "").lower()
     normalized_code = normalize_strategy_pod_code(code)
 
-    if normalized_status not in POD_STATUS_ORDER or normalized_stage not in POD_LIFECYCLE_ORDER:
+    if (
+        normalized_status not in POD_STATUS_ORDER
+        or normalized_stage not in POD_LIFECYCLE_ORDER
+    ):
         return "Governance review required; pod status or lifecycle stage is outside the approved vocabulary."
-    if normalized_status in {"suspended", "retired"} or normalized_stage in {"suspended", "retired"}:
+    if normalized_status in {"suspended", "retired"} or normalized_stage in {
+        "suspended",
+        "retired",
+    }:
         return "No new capital; pod is suspended or retired."
     if normalized_risk == "halt":
         return "No new capital; portfolio-wide trading halt overrides the pod."
@@ -410,17 +513,19 @@ def strategy_pod_allocation_recommendation(
     return "Hold allocation steady; signal quality is still weak."
 
 
-async def _get_or_seed_strategy_pods(session: AsyncSession) -> list[StrategyPod]:
-    result = await session.scalars(select(StrategyPod))
-    existing = {
-        pod.code: pod
-        for pod in result
-    }
+async def _get_or_seed_strategy_pods(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> list[StrategyPod]:
+    result = await session.scalars(
+        select(StrategyPod).where(StrategyPod.owner_user_id == user.id)
+    )
+    existing = {pod.code: pod for pod in result}
     created = False
     for definition in DEFAULT_STRATEGY_POD_DEFINITIONS:
         if definition["code"] in existing:
             continue
-        pod = StrategyPod(**definition)
+        pod = StrategyPod(owner_user_id=user.id, **definition)
         session.add(pod)
         existing[pod.code] = pod
         created = True
@@ -429,10 +534,16 @@ async def _get_or_seed_strategy_pods(session: AsyncSession) -> list[StrategyPod]
         await session.commit()
         logger.info(
             "strategy_pods_seeded",
-            extra={"pod_count": len(DEFAULT_STRATEGY_POD_DEFINITIONS)},
+            extra={
+                "owner_user_id": user.id,
+                "pod_count": len(DEFAULT_STRATEGY_POD_DEFINITIONS),
+            },
         )
 
-    order = {definition["code"]: index for index, definition in enumerate(DEFAULT_STRATEGY_POD_DEFINITIONS)}
+    order = {
+        definition["code"]: index
+        for index, definition in enumerate(DEFAULT_STRATEGY_POD_DEFINITIONS)
+    }
     return sorted(existing.values(), key=lambda pod: order.get(pod.code, len(order)))
 
 
@@ -454,9 +565,12 @@ async def _load_latest_snapshots(
     return latest
 
 
-async def _load_runtime_context(session: AsyncSession) -> StrategyPodRuntimeContext:
+async def _load_runtime_context(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> StrategyPodRuntimeContext:
     generated_at = datetime.now(timezone.utc)
-    risk_overview = await build_risk_centre_overview(session)
+    risk_overview = await build_risk_centre_overview(session, user)
     warnings = list(risk_overview.notes)
 
     try:
@@ -466,7 +580,7 @@ async def _load_runtime_context(session: AsyncSession) -> StrategyPodRuntimeCont
         warnings.append(str(exc))
 
     model_comparison = await list_predictive_model_comparison(session, limit=5)
-    recent_memos = await list_recent_ticker_memos(session, limit=20)
+    recent_memos = await list_recent_ticker_memos(session, user, limit=20)
     price_coverage = await _load_market_price_coverage(session)
 
     return StrategyPodRuntimeContext(
@@ -597,7 +711,9 @@ def _assess_macro_regime(
             StrategyPodSignalResponse(
                 key="transition_risk",
                 label="Transition Risk",
-                value=_transition_risk_label(context.latest_regime.current_regime, confidence),
+                value=_transition_risk_label(
+                    context.latest_regime.current_regime, confidence
+                ),
                 status="live",
                 detail="Derived from current regime label and model confidence.",
                 as_of_date=context.latest_regime.as_of_date,
@@ -622,7 +738,11 @@ def _assess_macro_regime(
         evaluation_overlay={
             "regime": regime,
             "risk_level": context.risk_overview.snapshot.risk_level,
-            "state_count": len(context.latest_regime.state_probabilities) if context.latest_regime else 0,
+            "state_count": (
+                len(context.latest_regime.state_probabilities)
+                if context.latest_regime
+                else 0
+            ),
         },
     )
 
@@ -640,7 +760,9 @@ def _assess_cross_asset_trend(
         detail = "Backfill ETF and asset-class proxy prices before trend scoring."
     else:
         score = _pct(Decimal("45") + Decimal(min(coverage.instrument_count * 3, 25)))
-        confidence = _pct(Decimal("35") + Decimal(min(coverage.instrument_count * 4, 30)))
+        confidence = _pct(
+            Decimal("35") + Decimal(min(coverage.instrument_count * 4, 30))
+        )
         status = "live" if coverage.instrument_count >= 5 else "warning"
         value = f"{coverage.instrument_count} instruments"
         detail = f"{coverage.bar_count} price bars available for trend research."
@@ -679,7 +801,11 @@ def _assess_cross_asset_trend(
         evaluation_overlay={
             "price_bar_count": coverage.bar_count,
             "price_instrument_count": coverage.instrument_count,
-            "latest_bar_date": coverage.latest_bar_date.isoformat() if coverage.latest_bar_date else None,
+            "latest_bar_date": (
+                coverage.latest_bar_date.isoformat()
+                if coverage.latest_bar_date
+                else None
+            ),
         },
     )
 
@@ -705,7 +831,10 @@ def _assess_quant_equity(
         accuracy = _pct(latest.validation_directional_accuracy)
         validation_rows = latest.validation_rows or 0
         score = _quant_model_score(accuracy, validation_rows)
-        confidence = _pct(accuracy * Decimal("0.75") + Decimal(min(validation_rows, 100)) * Decimal("0.25"))
+        confidence = _pct(
+            accuracy * Decimal("0.75")
+            + Decimal(min(validation_rows, 100)) * Decimal("0.25")
+        )
         signals = [
             StrategyPodSignalResponse(
                 key="predictive_model",
@@ -718,7 +847,11 @@ def _assess_quant_equity(
             StrategyPodSignalResponse(
                 key="downside_proxy",
                 label="Downside Proxy",
-                value=f"{latest.residual_p05_pct}%" if latest.residual_p05_pct is not None else "Pending",
+                value=(
+                    f"{latest.residual_p05_pct}%"
+                    if latest.residual_p05_pct is not None
+                    else "Pending"
+                ),
                 status="live" if latest.residual_p05_pct is not None else "pending",
                 detail="Uses model residual p05 as a first-pass downside proxy.",
                 as_of_date=latest.created_at.date(),
@@ -742,7 +875,9 @@ def _assess_quant_equity(
         evaluation_overlay={
             "latest_model_version": latest.model_version if latest else None,
             "validation_rows": latest.validation_rows if latest else 0,
-            "directional_accuracy": str(latest.validation_directional_accuracy) if latest else None,
+            "directional_accuracy": (
+                str(latest.validation_directional_accuracy) if latest else None
+            ),
             "models_tracked": len(context.model_comparison),
         },
     )
@@ -759,9 +894,7 @@ def _assess_fundamental_equity(
         if memo.confidence_score is not None
     ]
     composite_values = [
-        _pct(memo.composite_score)
-        for memo in memos
-        if memo.composite_score is not None
+        _pct(memo.composite_score) for memo in memos if memo.composite_score is not None
     ]
     confidence = _average(confidence_values)
     score = _average(composite_values) if composite_values else Decimal("40.0000")
@@ -885,6 +1018,27 @@ def _assess_experimental_research(
             "live_capital_allowed": False,
             "graduation_gate": "candidate pod review",
         },
+    )
+
+
+def _snapshot_to_response(
+    snapshot: StrategyPodSnapshot,
+    pod: StrategyPod,
+) -> StrategyPodSnapshotResponse:
+    return StrategyPodSnapshotResponse(
+        snapshot_id=snapshot.id,
+        strategy_pod_id=pod.id,
+        code=pod.code,
+        captured_at=snapshot.captured_at,
+        as_of_date=snapshot.as_of_date,
+        status=snapshot.status,
+        lifecycle_stage=snapshot.lifecycle_stage,
+        capital_allocation_pct=snapshot.capital_allocation_pct,
+        risk_budget_pct=snapshot.risk_budget_pct,
+        current_signal_score=snapshot.current_signal_score,
+        model_confidence=snapshot.model_confidence,
+        risk_level=snapshot.risk_level,
+        allocation_recommendation=snapshot.allocation_recommendation,
     )
 
 

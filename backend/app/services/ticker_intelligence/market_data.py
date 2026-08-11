@@ -8,7 +8,10 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.api.schemas.operating_core import InstrumentCreate
-from app.api.schemas.ticker_intelligence import TickerMetricsInput, TickerPrefillResponse
+from app.api.schemas.ticker_intelligence import (
+    TickerMetricsInput,
+    TickerPrefillResponse,
+)
 from app.core.config import settings
 from app.services.ticker_intelligence.sec_fundamentals import (
     SecFundamentals,
@@ -128,7 +131,9 @@ def resolve_ticker(ticker: str, market_hint: str | None = None) -> TickerResolut
             "NG",
         )
 
-    return TickerResolution(requested_ticker, normalized_ticker, normalized_ticker, "US")
+    return TickerResolution(
+        requested_ticker, normalized_ticker, normalized_ticker, "US"
+    )
 
 
 def normalize_massive_base_url(base_url: str) -> str:
@@ -216,7 +221,9 @@ async def _load_tiingo_sources(context: PrefillBuildContext) -> None:
         timeout=httpx.Timeout(10.0),
         headers={"Authorization": f"Token {settings.hf_tiingo_api_key}"},
     ) as client:
-        meta = await _safe_get(client, f"/tiingo/daily/{context.provider_symbol.lower()}")
+        meta = await _safe_get(
+            client, f"/tiingo/daily/{context.provider_symbol.lower()}"
+        )
         prices = await _safe_get(
             client,
             f"/tiingo/daily/{context.provider_symbol.lower()}/prices",
@@ -261,10 +268,14 @@ async def _load_ngn_market_sources(context: PrefillBuildContext) -> None:
             params={"period": "1y", "format": "ohlcv"},
         )
 
-    context.ngn_company = _payload_object(company.payload) or _find_symbol_payload(
-        companies.payload,
-        symbol,
-    ) or _find_symbol_payload(identifiers.payload, symbol)
+    context.ngn_company = (
+        _payload_object(company.payload)
+        or _find_symbol_payload(
+            companies.payload,
+            symbol,
+        )
+        or _find_symbol_payload(identifiers.payload, symbol)
+    )
     context.ngn_etf = _payload_object(etf.payload) or _find_symbol_payload(
         etfs.payload,
         symbol,
@@ -398,7 +409,9 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
 def _bars_path(ticker: str) -> str:
     today = date.today()
     start = today - timedelta(days=430)
-    return f"/v2/aggs/ticker/{ticker}/range/1/day/{start.isoformat()}/{today.isoformat()}"
+    return (
+        f"/v2/aggs/ticker/{ticker}/range/1/day/{start.isoformat()}/{today.isoformat()}"
+    )
 
 
 def _record_provider(
@@ -458,7 +471,9 @@ def _instrument_name(context: PrefillBuildContext) -> str:
             "companyName",
             "securityName",
         )
-        or _string_from_keys(context.fmp_profile, "companyName", "companyNameLong", "name")
+        or _string_from_keys(
+            context.fmp_profile, "companyName", "companyNameLong", "name"
+        )
         or _string_from_keys(context.tiingo_meta, "name")
         or _string_from_keys(
             context.ngn_company,
@@ -637,7 +652,9 @@ def _free_cash_flow_yield(context: PrefillBuildContext) -> Decimal | None:
 
 def _net_margin(context: PrefillBuildContext) -> Decimal | None:
     value = (
-        _decimal(context.ratios.get("net_margin") or context.ratios.get("profit_margin"))
+        _decimal(
+            context.ratios.get("net_margin") or context.ratios.get("profit_margin")
+        )
         or _decimal_from_keys(
             context.fmp_ratios,
             "netProfitMarginTTM",
@@ -732,10 +749,14 @@ def _bar_date(bar: dict | list) -> str | None:
     if isinstance(bar, dict):
         timestamp = bar.get("t") or bar.get("timestamp")
         if isinstance(timestamp, int):
-            return datetime.fromtimestamp(
-                timestamp / 1000,
-                tz=timezone.utc,
-            ).date().isoformat()
+            return (
+                datetime.fromtimestamp(
+                    timestamp / 1000,
+                    tz=timezone.utc,
+                )
+                .date()
+                .isoformat()
+            )
         value = bar.get("date")
         return str(value)[:10] if value else None
 
@@ -746,7 +767,9 @@ def _bar_date(bar: dict | list) -> str | None:
         timestamp_float = float(timestamp)
         if timestamp_float > 10_000_000_000:
             timestamp_float = timestamp_float / 1000
-        return datetime.fromtimestamp(timestamp_float, tz=timezone.utc).date().isoformat()
+        return (
+            datetime.fromtimestamp(timestamp_float, tz=timezone.utc).date().isoformat()
+        )
 
     return None
 
@@ -828,7 +851,9 @@ def _find_symbol_payload(payload: dict | list | None, symbol: str) -> dict:
             item.get("securityCode"),
             item.get("code"),
         ]
-        if any(str(candidate or "").strip().upper() == target for candidate in candidates):
+        if any(
+            str(candidate or "").strip().upper() == target for candidate in candidates
+        ):
             return item
     return {}
 

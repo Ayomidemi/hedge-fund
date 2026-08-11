@@ -25,7 +25,9 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000"
 
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/hedge_fund"
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/hedge_fund"
+    )
     hf_supabase_database_url: str | None = None
     hf_supabase_url: str | None = None
     hf_supabase_jwt_secret: str | None = None
@@ -62,7 +64,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -160,7 +164,7 @@ class Settings(BaseSettings):
 
     @property
     def auth_enabled(self) -> bool:
-        return bool(self.hf_supabase_jwt_secret)
+        return bool(self.hf_supabase_jwt_secret or self.supabase_url)
 
     @staticmethod
     def _uses_pooler_host(hostname: str | None) -> bool:

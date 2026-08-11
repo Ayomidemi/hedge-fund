@@ -1,12 +1,18 @@
+import ssl
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
+import certifi
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientConnectionError
 
 from app.core.config import settings
 
 _bearer = HTTPBearer(auto_error=False)
+_jwks_client: PyJWKClient | None = None
 
 
 @dataclass(frozen=True)
@@ -16,32 +22,76 @@ class AuthenticatedUser:
     full_name: str | None = None
     org_name: str | None = None
     role: str | None = None
+    starting_capital: Decimal | None = None
+
+
+def _get_jwks_client() -> PyJWKClient | None:
+    global _jwks_client
+
+    if not settings.supabase_url:
+        return None
+
+    if _jwks_client is None:
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        _jwks_client = PyJWKClient(
+            f"{settings.supabase_url}/auth/v1/.well-known/jwks.json",
+            cache_keys=True,
+            ssl_context=ssl_context,
+        )
+
+    return _jwks_client
 
 
 def _decode_supabase_token(token: str) -> dict:
-    if not settings.hf_supabase_jwt_secret:
+    if settings.hf_supabase_jwt_secret:
+        try:
+            return jwt.decode(
+                token,
+                settings.hf_supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+        except jwt.ExpiredSignatureError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired. Sign in again.",
+            ) from exc
+        except jwt.InvalidTokenError:
+            pass
+
+    jwks_client = _get_jwks_client()
+    if jwks_client is not None:
+        try:
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            return jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=[signing_key.algorithm_name],
+                audience="authenticated",
+            )
+        except jwt.ExpiredSignatureError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired. Sign in again.",
+            ) from exc
+        except jwt.InvalidTokenError:
+            pass
+        except PyJWKClientConnectionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to verify authentication token. Try again shortly.",
+            ) from exc
+
+    if not settings.hf_supabase_jwt_secret and jwks_client is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Supabase JWT verification is not configured.",
         )
 
-    try:
-        return jwt.decode(
-            token,
-            settings.hf_supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
-    except jwt.ExpiredSignatureError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired. Sign in again.",
-        ) from exc
-    except jwt.InvalidTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token.",
-        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid authentication token.",
+    )
 
 
 def _user_from_payload(payload: dict) -> AuthenticatedUser:
@@ -58,6 +108,7 @@ def _user_from_payload(payload: dict) -> AuthenticatedUser:
     role = app_metadata.get("role") or payload.get("role")
     full_name = user_metadata.get("full_name")
     org_name = user_metadata.get("org_name")
+    starting_capital = _starting_capital_from_metadata(user_metadata)
 
     return AuthenticatedUser(
         id=str(user_id),
@@ -65,7 +116,24 @@ def _user_from_payload(payload: dict) -> AuthenticatedUser:
         full_name=str(full_name) if full_name else None,
         org_name=str(org_name) if org_name else None,
         role=str(role) if role else None,
+        starting_capital=starting_capital,
     )
+
+
+def _starting_capital_from_metadata(metadata: dict) -> Decimal | None:
+    value = metadata.get("starting_capital")
+    if value is None or value == "":
+        return None
+
+    try:
+        capital = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+    minimum = Decimal("1000.00")
+    if capital < minimum:
+        return minimum
+    return capital.quantize(Decimal("0.01"))
 
 
 async def get_optional_user(

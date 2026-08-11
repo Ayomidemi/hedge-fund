@@ -3,9 +3,11 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.auth import AuthenticatedUser
 from app.api.schemas.operating_core import (
     CashAdjustmentCreate,
     CashDepositCreate,
@@ -22,6 +24,9 @@ from app.api.schemas.operating_core import (
     PositionResponse,
     RiskCheckResponse,
     RiskLimitResponse,
+    TradeJournalEntryResponse,
+    TradeJournalResponse,
+    TradeJournalSummaryResponse,
     TradeResponse,
 )
 from app.models import (
@@ -45,14 +50,17 @@ from app.services.portfolio.calculations import (
     money,
 )
 
-DEFAULT_PORTFOLIO_NAME = "Pease Capital Master Fund"
+DEFAULT_PORTFOLIO_NAME = "Operating Fund"
 DEFAULT_INITIAL_CAPITAL = Decimal("1000.00")
 
 logger = logging.getLogger(__name__)
 
 
-async def get_dashboard(session: AsyncSession) -> PortfolioDashboardResponse:
-    portfolio = await get_or_create_default_portfolio(session)
+async def get_dashboard(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> PortfolioDashboardResponse:
+    portfolio = await get_or_create_default_portfolio(session, user)
 
     cash_entries = await _list_cash_entries(session, portfolio.id)
     positions = await _list_positions(session, portfolio.id)
@@ -89,6 +97,7 @@ async def get_dashboard(session: AsyncSession) -> PortfolioDashboardResponse:
         "portfolio_dashboard_loaded",
         extra={
             "portfolio_id": str(portfolio.id),
+            "owner_user_id": portfolio.owner_user_id,
             "nav": str(nav),
             "cash_balance": str(cash_balance),
             "open_position_count": len(position_snapshots),
@@ -102,9 +111,15 @@ async def get_dashboard(session: AsyncSession) -> PortfolioDashboardResponse:
         cash_balance=cash_balance,
         nav=nav,
         invested_value=invested_value,
-        open_position_count=len([position for position in positions if position.quantity > 0]),
+        open_position_count=len(
+            [position for position in positions if position.quantity > 0]
+        ),
         trade_count=len(trades),
-        positions=[_position_response(position) for position in positions if position.quantity > 0],
+        positions=[
+            _position_response(position)
+            for position in positions
+            if position.quantity > 0
+        ],
         recent_cash_entries=[
             CashLedgerEntryResponse.model_validate(entry) for entry in cash_entries[:10]
         ],
@@ -125,7 +140,9 @@ async def get_dashboard(session: AsyncSession) -> PortfolioDashboardResponse:
         ],
         asset_class_exposure=[
             ExposureBucketResponse(name=name, exposure_pct=value)
-            for name, value in group_exposure_by_asset_class(position_snapshots, nav).items()
+            for name, value in group_exposure_by_asset_class(
+                position_snapshots, nav
+            ).items()
         ],
         sector_exposure=[
             ExposureBucketResponse(name=name, exposure_pct=value)
@@ -134,25 +151,63 @@ async def get_dashboard(session: AsyncSession) -> PortfolioDashboardResponse:
     )
 
 
-async def get_or_create_default_portfolio(session: AsyncSession) -> Portfolio:
-    portfolio = await session.scalar(
-        select(Portfolio).where(Portfolio.name == DEFAULT_PORTFOLIO_NAME)
-    )
+async def get_or_create_default_portfolio(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> Portfolio:
+    portfolio = await _load_owned_portfolio(session, user)
     if portfolio is not None:
         await _ensure_default_risk_limits(session, portfolio)
         await session.commit()
         return portfolio
 
-    logger.info(
-        "default_portfolio_seed_started",
-        extra={"portfolio_name": DEFAULT_PORTFOLIO_NAME},
+    try:
+        return await _seed_default_portfolio(session, user)
+    except IntegrityError as exc:
+        await session.rollback()
+        if "ix_portfolios_owner_user_id_unique" not in str(exc):
+            raise
+
+        portfolio = await _load_owned_portfolio(session, user)
+        if portfolio is None:
+            raise
+
+        await _ensure_default_risk_limits(session, portfolio)
+        await session.commit()
+        await session.refresh(portfolio)
+
+        logger.info(
+            "default_portfolio_seed_race_resolved",
+            extra={"portfolio_id": str(portfolio.id), "owner_user_id": user.id},
+        )
+        return portfolio
+
+
+async def _load_owned_portfolio(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> Portfolio | None:
+    return await session.scalar(
+        select(Portfolio).where(Portfolio.owner_user_id == user.id)
     )
 
+
+async def _seed_default_portfolio(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> Portfolio:
+    logger.info(
+        "default_portfolio_seed_started",
+        extra={"portfolio_name": DEFAULT_PORTFOLIO_NAME, "owner_user_id": user.id},
+    )
+
+    initial_capital = _starting_capital_for_user(user)
     portfolio = Portfolio(
-        name=DEFAULT_PORTFOLIO_NAME,
+        owner_user_id=user.id,
+        name=_default_portfolio_name(user),
         base_currency="USD",
         mandate="Technology-driven, multi-strategy fund operating core.",
-        initial_capital=DEFAULT_INITIAL_CAPITAL,
+        initial_capital=initial_capital,
     )
     session.add(portfolio)
     await session.flush()
@@ -161,12 +216,12 @@ async def get_or_create_default_portfolio(session: AsyncSession) -> Portfolio:
         CashLedgerEntry(
             portfolio_id=portfolio.id,
             entry_date=date.today(),
-            amount=DEFAULT_INITIAL_CAPITAL,
+            amount=initial_capital,
             currency="USD",
             entry_type="initial_capital",
             platform="manual",
-            description="Initial Pease Capital funding.",
-            source_reference="system_seed",
+            description="Starting capital from account setup.",
+            source_reference="account_seed",
         )
     )
     await _ensure_default_risk_limits(session, portfolio)
@@ -175,18 +230,40 @@ async def get_or_create_default_portfolio(session: AsyncSession) -> Portfolio:
 
     logger.info(
         "default_portfolio_seeded",
-        extra={"portfolio_id": str(portfolio.id), "initial_capital": str(DEFAULT_INITIAL_CAPITAL)},
+        extra={
+            "portfolio_id": str(portfolio.id),
+            "owner_user_id": user.id,
+            "initial_capital": str(initial_capital),
+        },
     )
     return portfolio
+
+
+def _default_portfolio_name(user: AuthenticatedUser) -> str:
+    if user.org_name:
+        return f"{user.org_name} Operating Fund"
+    if user.full_name:
+        return f"{user.full_name} Operating Fund"
+    if user.email:
+        return f"{user.email} Operating Fund"
+    return DEFAULT_PORTFOLIO_NAME
+
+
+def _starting_capital_for_user(user: AuthenticatedUser) -> Decimal:
+    if user.starting_capital is None:
+        return DEFAULT_INITIAL_CAPITAL
+    return max(user.starting_capital, DEFAULT_INITIAL_CAPITAL).quantize(Decimal("0.01"))
 
 
 async def create_cash_deposit(
     session: AsyncSession,
     payload: CashDepositCreate | CashLedgerEntryCreate,
+    user: AuthenticatedUser,
 ) -> CashLedgerEntryResponse:
     return await _create_cash_entry(
         session,
         payload,
+        user,
         entry_type="deposit",
         amount=payload.amount,
     )
@@ -195,10 +272,12 @@ async def create_cash_deposit(
 async def create_cash_withdrawal(
     session: AsyncSession,
     payload: CashWithdrawalCreate,
+    user: AuthenticatedUser,
 ) -> CashLedgerEntryResponse:
     return await _create_cash_entry(
         session,
         payload,
+        user,
         entry_type="withdrawal",
         amount=-abs(payload.amount),
     )
@@ -207,10 +286,12 @@ async def create_cash_withdrawal(
 async def create_cash_adjustment(
     session: AsyncSession,
     payload: CashAdjustmentCreate,
+    user: AuthenticatedUser,
 ) -> CashLedgerEntryResponse:
     return await _create_cash_entry(
         session,
         payload,
+        user,
         entry_type="adjustment",
         amount=payload.amount,
     )
@@ -219,18 +300,20 @@ async def create_cash_adjustment(
 async def create_cash_entry(
     session: AsyncSession,
     payload: CashLedgerEntryCreate,
+    user: AuthenticatedUser,
 ) -> CashLedgerEntryResponse:
-    return await create_cash_deposit(session, payload)
+    return await create_cash_deposit(session, payload, user)
 
 
 async def _create_cash_entry(
     session: AsyncSession,
     payload: CashMovementCreate,
+    user: AuthenticatedUser,
     *,
     entry_type: str,
     amount: Decimal,
 ) -> CashLedgerEntryResponse:
-    portfolio = await get_or_create_default_portfolio(session)
+    portfolio = await get_or_create_default_portfolio(session, user)
     entry = CashLedgerEntry(
         portfolio_id=portfolio.id,
         entry_date=payload.entry_date,
@@ -249,6 +332,7 @@ async def _create_cash_entry(
         "cash_ledger_entry_created",
         extra={
             "portfolio_id": str(portfolio.id),
+            "owner_user_id": portfolio.owner_user_id,
             "entry_id": str(entry.id),
             "entry_type": entry.entry_type,
             "platform": entry.platform,
@@ -261,14 +345,16 @@ async def _create_cash_entry(
 
 async def list_cash_ledger_history(
     session: AsyncSession,
+    user: AuthenticatedUser,
 ) -> list[CashLedgerEntryResponse]:
-    portfolio = await get_or_create_default_portfolio(session)
+    portfolio = await get_or_create_default_portfolio(session, user)
     cash_entries = await _list_cash_entries(session, portfolio.id)
 
     logger.info(
         "cash_ledger_history_loaded",
         extra={
             "portfolio_id": str(portfolio.id),
+            "owner_user_id": portfolio.owner_user_id,
             "entry_count": len(cash_entries),
         },
     )
@@ -276,12 +362,42 @@ async def list_cash_ledger_history(
     return [CashLedgerEntryResponse.model_validate(entry) for entry in cash_entries]
 
 
+async def get_trade_journal(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    *,
+    limit: int = 100,
+) -> TradeJournalResponse:
+    portfolio = await get_or_create_default_portfolio(session, user)
+    trades = await _list_trades(session, portfolio.id, limit=limit)
+    entries = [_trade_journal_entry_response(trade) for trade in trades]
+    summary = _trade_journal_summary(entries)
+
+    logger.info(
+        "trade_journal_loaded",
+        extra={
+            "portfolio_id": str(portfolio.id),
+            "owner_user_id": portfolio.owner_user_id,
+            "trade_count": len(entries),
+            "limit": limit,
+        },
+    )
+
+    return TradeJournalResponse(
+        portfolio=PortfolioResponse.model_validate(portfolio),
+        summary=summary,
+        trades=entries,
+    )
+
+
 async def upsert_instrument(
     session: AsyncSession,
     payload: InstrumentCreate,
 ) -> Instrument:
     ticker = payload.ticker.upper()
-    instrument = await session.scalar(select(Instrument).where(Instrument.ticker == ticker))
+    instrument = await session.scalar(
+        select(Instrument).where(Instrument.ticker == ticker)
+    )
     if instrument is None:
         instrument = Instrument(
             ticker=ticker,
@@ -326,8 +442,9 @@ async def upsert_instrument(
 async def create_manual_trade(
     session: AsyncSession,
     payload: ManualTradeCreate,
+    user: AuthenticatedUser,
 ) -> TradeResponse:
-    portfolio = await get_or_create_default_portfolio(session)
+    portfolio = await get_or_create_default_portfolio(session, user)
     instrument = await upsert_instrument(session, payload.instrument)
     trade_value = money(payload.quantity * payload.price)
     cash_amount = -(trade_value + payload.fees)
@@ -378,6 +495,7 @@ async def create_manual_trade(
         "manual_trade_created",
         extra={
             "portfolio_id": str(portfolio.id),
+            "owner_user_id": portfolio.owner_user_id,
             "trade_id": str(trade.id),
             "ticker": instrument.ticker,
             "side": trade.side,
@@ -431,7 +549,9 @@ async def _apply_trade_to_position(
             position.closed_at = now
 
     position.market_value = money(position.quantity * payload.price)
-    position.unrealized_pnl = money((payload.price - position.average_cost) * position.quantity)
+    position.unrealized_pnl = money(
+        (payload.price - position.average_cost) * position.quantity
+    )
 
     logger.info(
         "position_updated_from_trade",
@@ -446,7 +566,9 @@ async def _apply_trade_to_position(
     )
 
 
-async def _ensure_default_risk_limits(session: AsyncSession, portfolio: Portfolio) -> None:
+async def _ensure_default_risk_limits(
+    session: AsyncSession, portfolio: Portfolio
+) -> None:
     existing_limit_types = set(
         await session.scalars(
             select(RiskLimit.limit_type).where(RiskLimit.portfolio_id == portfolio.id)
@@ -480,7 +602,9 @@ async def _ensure_default_risk_limits(session: AsyncSession, portfolio: Portfoli
         )
 
 
-async def _list_cash_entries(session: AsyncSession, portfolio_id) -> list[CashLedgerEntry]:
+async def _list_cash_entries(
+    session: AsyncSession, portfolio_id
+) -> list[CashLedgerEntry]:
     result = await session.scalars(
         select(CashLedgerEntry)
         .where(CashLedgerEntry.portfolio_id == portfolio_id)
@@ -499,12 +623,23 @@ async def _list_positions(session: AsyncSession, portfolio_id) -> list[Position]
     return list(result)
 
 
-async def _list_trades(session: AsyncSession, portfolio_id) -> list[Trade]:
-    result = await session.scalars(
+async def _list_trades(
+    session: AsyncSession,
+    portfolio_id,
+    *,
+    limit: int | None = None,
+) -> list[Trade]:
+    statement = (
         select(Trade)
         .options(selectinload(Trade.instrument))
         .where(Trade.portfolio_id == portfolio_id)
         .order_by(Trade.trade_date.desc(), Trade.created_at.desc())
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+
+    result = await session.scalars(
+        statement
     )
     return list(result)
 
@@ -543,6 +678,75 @@ def _trade_response(trade: Trade) -> TradeResponse:
         risk_notes=trade.risk_notes,
         broker_reference=trade.broker_reference,
     )
+
+
+def _trade_journal_entry_response(trade: Trade) -> TradeJournalEntryResponse:
+    price = trade.executed_price or Decimal("0")
+    notional_value = money(trade.quantity * price)
+    cash_impact = _trade_cash_impact(trade, notional_value)
+    fee_bps = None
+    if notional_value > 0:
+        fee_bps = ((trade.fees / notional_value) * Decimal("10000")).quantize(
+            Decimal("0.01")
+        )
+
+    return TradeJournalEntryResponse(
+        id=trade.id,
+        instrument=InstrumentResponse.model_validate(trade.instrument),
+        trade_date=trade.trade_date,
+        side=trade.side,
+        status=trade.status,
+        quantity=trade.quantity,
+        executed_price=trade.executed_price,
+        fees=trade.fees,
+        rationale=trade.rationale,
+        risk_notes=trade.risk_notes,
+        broker_reference=trade.broker_reference,
+        notional_value=notional_value,
+        cash_impact=cash_impact,
+        fee_bps=fee_bps,
+        has_risk_notes=bool(trade.risk_notes and trade.risk_notes.strip()),
+    )
+
+
+def _trade_journal_summary(
+    entries: list[TradeJournalEntryResponse],
+) -> TradeJournalSummaryResponse:
+    total_notional = money(
+        sum((entry.notional_value for entry in entries), Decimal("0"))
+    )
+    total_fees = money(sum((entry.fees for entry in entries), Decimal("0")))
+    net_cash_impact = money(
+        sum((entry.cash_impact for entry in entries), Decimal("0"))
+    )
+    fee_bps_values = [
+        entry.fee_bps for entry in entries if entry.fee_bps is not None
+    ]
+    average_fee_bps = None
+    if fee_bps_values:
+        average_fee_bps = (
+            sum(fee_bps_values, Decimal("0")) / Decimal(len(fee_bps_values))
+        ).quantize(Decimal("0.01"))
+
+    return TradeJournalSummaryResponse(
+        total_trades=len(entries),
+        buy_count=len([entry for entry in entries if entry.side == TradeSide.BUY.value]),
+        sell_count=len(
+            [entry for entry in entries if entry.side == TradeSide.SELL.value]
+        ),
+        unique_tickers=len({entry.instrument.ticker for entry in entries}),
+        gross_traded_value=total_notional,
+        net_cash_impact=net_cash_impact,
+        total_fees=total_fees,
+        average_fee_bps=average_fee_bps,
+        last_trade_at=entries[0].trade_date if entries else None,
+    )
+
+
+def _trade_cash_impact(trade: Trade, notional_value: Decimal) -> Decimal:
+    if trade.side == TradeSide.SELL.value:
+        return money(notional_value - trade.fees)
+    return money(-(notional_value + trade.fees))
 
 
 def _risk_limit_snapshot(limit: RiskLimit) -> RiskLimitSnapshot:

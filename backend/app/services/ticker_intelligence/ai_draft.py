@@ -70,7 +70,9 @@ async def _create_openai_response(payload: TickerAIDraftCreate) -> dict:
                 "content": [
                     {
                         "type": "input_text",
-                        "text": json.dumps(_model_context(payload), default=_json_default),
+                        "text": json.dumps(
+                            _model_context(payload), default=_json_default
+                        ),
                     }
                 ],
             },

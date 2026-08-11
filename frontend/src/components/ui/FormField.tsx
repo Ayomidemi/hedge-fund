@@ -7,10 +7,13 @@ type FormFieldProps = {
   label: string;
   helper?: string;
   labelAction?: ReactNode;
-  type?: "text" | "email" | "password";
+  type?: "text" | "email" | "password" | "number";
   autoComplete?: string;
   required?: boolean;
   minLength?: number;
+  min?: number;
+  step?: number;
+  inputMode?: "decimal" | "numeric" | "text";
   value: string;
   onChange: (value: string) => void;
   id?: string;
@@ -57,6 +60,9 @@ export function FormField({
   autoComplete,
   required,
   minLength,
+  min,
+  step,
+  inputMode,
   value,
   onChange,
   id,
@@ -87,6 +93,9 @@ export function FormField({
           autoComplete={autoComplete}
           required={required}
           minLength={minLength}
+          min={min}
+          step={step}
+          inputMode={inputMode}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           aria-describedby={helperId}

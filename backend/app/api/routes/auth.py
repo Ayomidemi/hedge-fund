@@ -15,4 +15,7 @@ async def read_current_user(
         "full_name": user.full_name,
         "org_name": user.org_name,
         "role": user.role,
+        "starting_capital": (
+            str(user.starting_capital) if user.starting_capital is not None else None
+        ),
     }

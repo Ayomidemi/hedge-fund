@@ -44,7 +44,9 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("/api/ticker-intelligence/memos/{memo_id}", paths)
         self.assertIn("get", paths["/api/ticker-intelligence/memos/{memo_id}"])
         self.assertIn("/api/ticker-intelligence/ml/prices/yahoo/backfill", paths)
-        self.assertIn("post", paths["/api/ticker-intelligence/ml/prices/yahoo/backfill"])
+        self.assertIn(
+            "post", paths["/api/ticker-intelligence/ml/prices/yahoo/backfill"]
+        )
         self.assertIn("/api/ticker-intelligence/ml/pipeline/run", paths)
         self.assertIn("post", paths["/api/ticker-intelligence/ml/pipeline/run"])
         self.assertIn("/api/ticker-intelligence/ml/labels", paths)
@@ -99,4 +101,5 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("get", paths["/api/strategy-pods/{code}"])
         self.assertIn("patch", paths["/api/strategy-pods/{code}"])
         self.assertIn("/api/strategy-pods/{code}/snapshots", paths)
+        self.assertIn("get", paths["/api/strategy-pods/{code}/snapshots"])
         self.assertIn("post", paths["/api/strategy-pods/{code}/snapshots"])

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.operating_core import (
@@ -9,8 +9,10 @@ from app.api.schemas.operating_core import (
     CashWithdrawalCreate,
     ManualTradeCreate,
     PortfolioDashboardResponse,
+    TradeJournalResponse,
     TradeResponse,
 )
+from app.core.auth import AuthenticatedUser, require_authenticated_user
 from app.db.session import get_session
 from app.services.portfolio.operating_core import (
     create_cash_adjustment,
@@ -18,6 +20,7 @@ from app.services.portfolio.operating_core import (
     create_cash_withdrawal,
     create_manual_trade,
     get_dashboard,
+    get_trade_journal,
     list_cash_ledger_history,
 )
 
@@ -26,9 +29,10 @@ router = APIRouter(prefix="/operating-core")
 
 @router.get("/dashboard", response_model=PortfolioDashboardResponse)
 async def read_dashboard(
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> PortfolioDashboardResponse:
-    return await get_dashboard(session)
+    return await get_dashboard(session, user)
 
 
 @router.post(
@@ -38,9 +42,10 @@ async def read_dashboard(
 )
 async def add_cash_entry(
     payload: CashLedgerEntryCreate,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_deposit(session, payload)
+    return await create_cash_deposit(session, payload, user)
 
 
 @router.post(
@@ -50,9 +55,10 @@ async def add_cash_entry(
 )
 async def add_cash_deposit(
     payload: CashDepositCreate,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_deposit(session, payload)
+    return await create_cash_deposit(session, payload, user)
 
 
 @router.post(
@@ -62,9 +68,10 @@ async def add_cash_deposit(
 )
 async def add_cash_withdrawal(
     payload: CashWithdrawalCreate,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_withdrawal(session, payload)
+    return await create_cash_withdrawal(session, payload, user)
 
 
 @router.post(
@@ -74,23 +81,26 @@ async def add_cash_withdrawal(
 )
 async def add_cash_adjustment(
     payload: CashAdjustmentCreate,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_adjustment(session, payload)
+    return await create_cash_adjustment(session, payload, user)
 
 
 @router.get("/cash-ledger/history", response_model=list[CashLedgerEntryResponse])
 async def read_cash_ledger_history(
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[CashLedgerEntryResponse]:
-    return await list_cash_ledger_history(session)
+    return await list_cash_ledger_history(session, user)
 
 
 @router.get("/cash-ledger", response_model=list[CashLedgerEntryResponse])
 async def read_cash_ledger_history_compat(
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[CashLedgerEntryResponse]:
-    return await list_cash_ledger_history(session)
+    return await list_cash_ledger_history(session, user)
 
 
 @router.post(
@@ -100,6 +110,16 @@ async def read_cash_ledger_history_compat(
 )
 async def add_manual_trade(
     payload: ManualTradeCreate,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TradeResponse:
-    return await create_manual_trade(session, payload)
+    return await create_manual_trade(session, payload, user)
+
+
+@router.get("/trades", response_model=TradeJournalResponse)
+async def read_trade_journal(
+    limit: int = Query(default=100, ge=1, le=500),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> TradeJournalResponse:
+    return await get_trade_journal(session, user, limit=limit)

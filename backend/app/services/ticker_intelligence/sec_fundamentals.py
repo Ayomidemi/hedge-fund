@@ -72,9 +72,13 @@ def calculate_sec_fundamentals(
     previous_revenue = revenue_values[-2] if len(revenue_values) >= 2 else None
     previous_income = income_values[-2] if len(income_values) >= 2 else None
 
-    debt_value = total_debt.value if total_debt is not None else _sum_fact_values(
-        current_debt,
-        noncurrent_debt,
+    debt_value = (
+        total_debt.value
+        if total_debt is not None
+        else _sum_fact_values(
+            current_debt,
+            noncurrent_debt,
+        )
     )
     free_cash_flow = _free_cash_flow(operating_cash_flow, capex)
 
@@ -113,7 +117,8 @@ def _annual_values(companyfacts: dict, tags: list[str], unit: str) -> list[FactV
                 tag=tag,
             )
             for item in values
-            if _is_annual_fact(item) and (value := _decimal(item.get("val"))) is not None
+            if _is_annual_fact(item)
+            and (value := _decimal(item.get("val"))) is not None
         ]
         annual = _dedupe_by_period(annual)
         if annual:
@@ -173,10 +178,14 @@ def _dedupe_by_period(values: list[FactValue]) -> list[FactValue]:
 def _growth_pct(latest: FactValue | None, previous: FactValue | None) -> Decimal | None:
     if latest is None or previous is None or previous.value == 0:
         return None
-    return _quantize(((latest.value - previous.value) / abs(previous.value)) * Decimal("100"))
+    return _quantize(
+        ((latest.value - previous.value) / abs(previous.value)) * Decimal("100")
+    )
 
 
-def _ratio_pct(numerator: Decimal | None, denominator: Decimal | None) -> Decimal | None:
+def _ratio_pct(
+    numerator: Decimal | None, denominator: Decimal | None
+) -> Decimal | None:
     if numerator is None or denominator is None or denominator == 0:
         return None
     return _quantize((numerator / denominator) * Decimal("100"))

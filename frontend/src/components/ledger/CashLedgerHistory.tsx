@@ -48,7 +48,7 @@ export function CashLedgerHistory({
       <div className="mx-auto flex max-w-[1200px] flex-col gap-6">
         {isUnavailable && (
           <div className="rounded-lg border border-red-200 bg-white p-4 text-sm text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-400">
-            Cash ledger history unavailable. Check the backend server and refresh.
+            Your cash ledger could not be loaded yet. Sign in again or refresh this page.
           </div>
         )}
 

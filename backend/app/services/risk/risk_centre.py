@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.auth import AuthenticatedUser
 from app.api.schemas.operating_core import InstrumentCreate
 from app.api.schemas.risk_centre import (
     CorrelationPairResponse,
@@ -38,10 +39,7 @@ from app.models import (
     StressTestResult,
 )
 from app.services.portfolio.calculations import money, percent
-from app.services.portfolio.operating_core import (
-    DEFAULT_PORTFOLIO_NAME,
-    get_or_create_default_portfolio,
-)
+from app.services.portfolio.operating_core import get_or_create_default_portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -213,15 +211,17 @@ class PortfolioMarketStats:
 
 async def build_risk_centre_overview(
     session: AsyncSession,
+    user: AuthenticatedUser,
 ) -> RiskCentreOverviewResponse:
-    state, price_histories = await _load_current_state(session)
+    state, price_histories = await _load_current_state(session, user)
     return build_risk_overview_from_state(state, price_histories)
 
 
 async def capture_risk_snapshot(
     session: AsyncSession,
+    user: AuthenticatedUser,
 ) -> RiskSnapshotCaptureResponse:
-    state, price_histories = await _load_current_state(session)
+    state, price_histories = await _load_current_state(session, user)
     overview = build_risk_overview_from_state(state, price_histories)
     policy_version = await _get_or_create_policy_version(session)
 
@@ -246,8 +246,12 @@ async def capture_risk_snapshot(
         liquidity_days=overview.snapshot.liquidity_days,
         risk_level=overview.snapshot.risk_level,
         exposures={
-            "asset_class": [item.model_dump(mode="json") for item in overview.asset_class_exposure],
-            "sector": [item.model_dump(mode="json") for item in overview.sector_exposure],
+            "asset_class": [
+                item.model_dump(mode="json") for item in overview.asset_class_exposure
+            ],
+            "sector": [
+                item.model_dump(mode="json") for item in overview.sector_exposure
+            ],
         },
         payload=overview.model_dump(mode="json"),
     )
@@ -317,6 +321,7 @@ async def capture_risk_snapshot(
         "risk_snapshot_captured",
         extra={
             "portfolio_id": str(state.portfolio_id),
+            "owner_user_id": user.id,
             "snapshot_id": str(snapshot_record.id),
             "risk_level": overview.snapshot.risk_level,
             "measurement_count": len(overview.measurements),
@@ -335,12 +340,14 @@ async def capture_risk_snapshot(
 async def run_custom_stress_test(
     session: AsyncSession,
     payload: StressScenarioCreate,
+    user: AuthenticatedUser,
 ) -> StressTestResultResponse:
-    state, _ = await _load_current_state(session)
+    state, _ = await _load_current_state(session, user)
     scenario = _custom_scenario_from_payload(payload)
     result = run_stress_scenario(state, scenario)
 
     scenario_record = StressScenario(
+        owner_user_id=user.id,
         name=payload.name,
         scenario_type="custom",
         shocks=_json_payload(scenario),
@@ -370,6 +377,7 @@ async def run_custom_stress_test(
         "custom_stress_test_completed",
         extra={
             "portfolio_id": str(state.portfolio_id),
+            "owner_user_id": user.id,
             "scenario_name": payload.name,
             "impact_pct": str(result.nav_impact_pct),
         },
@@ -380,17 +388,21 @@ async def run_custom_stress_test(
 async def check_pre_trade_risk(
     session: AsyncSession,
     payload: PreTradeRiskCheckCreate,
+    user: AuthenticatedUser,
 ) -> PreTradeRiskCheckResponse:
-    state, price_histories = await _load_current_state(session)
+    state, price_histories = await _load_current_state(session, user)
     pro_forma_state, cash_impact, messages = _apply_trade_to_state(state, payload)
     overview = build_risk_overview_from_state(pro_forma_state, price_histories)
     failed_checks = [check for check in overview.measurements if not check.passed]
-    decision = _pre_trade_decision(overview.snapshot.risk_level, failed_checks, messages)
+    decision = _pre_trade_decision(
+        overview.snapshot.risk_level, failed_checks, messages
+    )
 
     logger.info(
         "pre_trade_risk_checked",
         extra={
             "ticker": payload.instrument.ticker,
+            "owner_user_id": user.id,
             "side": payload.side,
             "decision": decision,
             "risk_level": overview.snapshot.risk_level,
@@ -439,7 +451,10 @@ def build_risk_overview_from_state(
         market_stats,
         risk_level=risk_level,
     )
-    stress_tests = [run_stress_scenario(state, scenario) for scenario in standard_stress_scenarios(state)]
+    stress_tests = [
+        run_stress_scenario(state, scenario)
+        for scenario in standard_stress_scenarios(state)
+    ]
     notes = list(market_stats.notes or [])
     if not state.positions:
         notes.append("No open positions; market risk is cash-only.")
@@ -474,7 +489,9 @@ def compute_portfolio_market_stats(
     }
     portfolio_returns = _portfolio_returns(weights, returns_by_ticker)
     benchmark_returns = returns_by_ticker.get(BENCHMARK_TICKER, {})
-    aligned_portfolio, aligned_benchmark = _align_series(portfolio_returns, benchmark_returns)
+    aligned_portfolio, aligned_benchmark = _align_series(
+        portfolio_returns, benchmark_returns
+    )
 
     if not portfolio_returns:
         notes.append("Portfolio volatility, VaR, and beta need market price history.")
@@ -489,7 +506,9 @@ def compute_portfolio_market_stats(
         position_stats[position.ticker] = PositionMarketStats(
             volatility_pct=_volatility_pct(ticker_returns),
             beta_to_benchmark=_beta_pct(ticker_series, ticker_benchmark),
-            liquidity_days=_liquidity_days(position, price_histories.get(position.ticker, [])),
+            liquidity_days=_liquidity_days(
+                position, price_histories.get(position.ticker, [])
+            ),
         )
 
     liquidity_values = [
@@ -504,9 +523,13 @@ def compute_portfolio_market_stats(
     return PortfolioMarketStats(
         portfolio_volatility_pct=_volatility_pct(list(portfolio_returns.values())),
         beta_to_benchmark=_beta_pct(aligned_portfolio, aligned_benchmark),
-        max_drawdown_pct=_max_drawdown_from_fraction_returns(list(portfolio_returns.values())),
+        max_drawdown_pct=_max_drawdown_from_fraction_returns(
+            list(portfolio_returns.values())
+        ),
         var_95_pct=_var_pct(list(portfolio_returns.values()), percentile=5),
-        expected_shortfall_95_pct=_expected_shortfall_pct(list(portfolio_returns.values()), percentile=5),
+        expected_shortfall_95_pct=_expected_shortfall_pct(
+            list(portfolio_returns.values()), percentile=5
+        ),
         liquidity_days=liquidity_days,
         position_stats=position_stats,
         correlation_pairs=_correlation_pairs(returns_by_ticker, state.positions),
@@ -521,7 +544,9 @@ def evaluate_risk_policy(
     asset_class_exposure: list[RiskExposureBucketResponse],
     sector_exposure: list[RiskExposureBucketResponse],
 ) -> list[RiskMeasurementResponse]:
-    metrics = _policy_metric_values(state, market_stats, asset_class_exposure, sector_exposure)
+    metrics = _policy_metric_values(
+        state, market_stats, asset_class_exposure, sector_exposure
+    )
     checks = []
     for limit in DEFAULT_POLICY_LIMITS:
         value = metrics.get(limit["key"])
@@ -559,7 +584,9 @@ def risk_level_from_measurements(measurements: list[RiskMeasurementResponse]) ->
 
 
 def standard_stress_scenarios(state: PortfolioRiskState) -> list[dict]:
-    largest_position = max(state.positions, key=lambda item: item.market_value, default=None)
+    largest_position = max(
+        state.positions, key=lambda item: item.market_value, default=None
+    )
     largest_sector = _largest_sector(state)
     scenarios = [
         {
@@ -596,7 +623,9 @@ def standard_stress_scenarios(state: PortfolioRiskState) -> list[dict]:
             "sector_shocks_pct": {},
             "ticker_shocks_pct": {},
             "cash_shock_pct": Decimal("-10"),
-            "notes": ["Liquidity pressure from capital withdrawal or operational need."],
+            "notes": [
+                "Liquidity pressure from capital withdrawal or operational need."
+            ],
         },
     ]
     if largest_position is not None:
@@ -631,14 +660,20 @@ def run_stress_scenario(
     scenario: dict,
 ) -> StressTestResultResponse:
     nav_before = state.nav
-    stressed_cash = state.cash_balance + (state.nav * (_decimal(scenario.get("cash_shock_pct")) / Decimal("100")))
+    stressed_cash = state.cash_balance + (
+        state.nav * (_decimal(scenario.get("cash_shock_pct")) / Decimal("100"))
+    )
     stressed_positions = []
     for position in state.positions:
         shock = _position_shock(position, scenario)
-        stressed_value = money(position.market_value * (Decimal("1") + shock / Decimal("100")))
+        stressed_value = money(
+            position.market_value * (Decimal("1") + shock / Decimal("100"))
+        )
         stressed_positions.append((position, stressed_value, shock))
 
-    nav_after = money(stressed_cash + sum((value for _, value, _ in stressed_positions), Decimal("0")))
+    nav_after = money(
+        stressed_cash + sum((value for _, value, _ in stressed_positions), Decimal("0"))
+    )
     nav_impact = money(nav_after - nav_before)
     nav_impact_pct = percent(nav_impact, nav_before)
     worst_positions = sorted(
@@ -647,7 +682,9 @@ def run_stress_scenario(
                 "ticker": position.ticker,
                 "shock_pct": str(shock),
                 "impact": str(money(value - position.market_value)),
-                "impact_pct_nav": str(percent(value - position.market_value, nav_before)),
+                "impact_pct_nav": str(
+                    percent(value - position.market_value, nav_before)
+                ),
             }
             for position, value, shock in stressed_positions
             if shock != 0
@@ -670,8 +707,9 @@ def run_stress_scenario(
 
 async def _load_current_state(
     session: AsyncSession,
+    user: AuthenticatedUser,
 ) -> tuple[PortfolioRiskState, dict[str, list[MarketPriceBar]]]:
-    portfolio = await get_or_create_default_portfolio(session)
+    portfolio = await get_or_create_default_portfolio(session, user)
     cash_balance = await _cash_balance(session, portfolio)
     positions = list(
         await session.scalars(
@@ -696,7 +734,9 @@ async def _load_current_state(
         )
         for position in positions
     ]
-    invested_value = money(sum((position.market_value for position in risk_positions), Decimal("0")))
+    invested_value = money(
+        sum((position.market_value for position in risk_positions), Decimal("0"))
+    )
     nav = money(cash_balance + invested_value)
     if nav <= 0:
         nav = Decimal("1.00")
@@ -814,10 +854,20 @@ def _snapshot_response(
         cash_balance=state.cash_balance,
         invested_value=state.invested_value,
         cash_pct=_weight_pct(state.cash_balance, state.nav),
-        gross_exposure_pct=_weight_pct(sum((position.exposure_value for position in state.positions), Decimal("0")), state.nav),
-        net_exposure_pct=_weight_pct(sum((position.market_value for position in state.positions), Decimal("0")), state.nav),
+        gross_exposure_pct=_weight_pct(
+            sum(
+                (position.exposure_value for position in state.positions), Decimal("0")
+            ),
+            state.nav,
+        ),
+        net_exposure_pct=_weight_pct(
+            sum((position.market_value for position in state.positions), Decimal("0")),
+            state.nav,
+        ),
         top_position_pct=top_weights[0] if top_weights else Decimal("0.0000"),
-        top5_concentration_pct=sum(top_weights[:5], Decimal("0")).quantize(Decimal("0.0001")),
+        top5_concentration_pct=sum(top_weights[:5], Decimal("0")).quantize(
+            Decimal("0.0001")
+        ),
         portfolio_volatility_pct=market_stats.portfolio_volatility_pct,
         beta_to_benchmark=market_stats.beta_to_benchmark,
         max_drawdown_pct=market_stats.max_drawdown_pct,
@@ -846,9 +896,15 @@ def _position_responses(
             market_value=position.market_value,
             unrealized_pnl=position.unrealized_pnl,
             weight_pct=_weight_pct(position.market_value, state.nav),
-            volatility_pct=stats_by_ticker.get(position.ticker, PositionMarketStats()).volatility_pct,
-            beta_to_benchmark=stats_by_ticker.get(position.ticker, PositionMarketStats()).beta_to_benchmark,
-            liquidity_days=stats_by_ticker.get(position.ticker, PositionMarketStats()).liquidity_days,
+            volatility_pct=stats_by_ticker.get(
+                position.ticker, PositionMarketStats()
+            ).volatility_pct,
+            beta_to_benchmark=stats_by_ticker.get(
+                position.ticker, PositionMarketStats()
+            ).beta_to_benchmark,
+            liquidity_days=stats_by_ticker.get(
+                position.ticker, PositionMarketStats()
+            ).liquidity_days,
         )
         for position in state.positions
     ]
@@ -870,7 +926,9 @@ def _exposure_buckets(
             market_value=money(value),
             exposure_pct=_weight_pct(value, nav),
         )
-        for name, value in sorted(values.items(), key=lambda item: item[1], reverse=True)
+        for name, value in sorted(
+            values.items(), key=lambda item: item[1], reverse=True
+        )
     ]
 
 
@@ -914,7 +972,9 @@ def _policy_metric_values(
         "max_sector_exposure_pct": largest_sector,
         "min_cash_allocation_pct": _weight_pct(state.cash_balance, state.nav),
         "max_gross_exposure_pct": gross_exposure,
-        "max_top5_concentration_pct": sum(top_weights[:5], Decimal("0")).quantize(Decimal("0.0001")),
+        "max_top5_concentration_pct": sum(top_weights[:5], Decimal("0")).quantize(
+            Decimal("0.0001")
+        ),
         "max_portfolio_volatility_pct": market_stats.portfolio_volatility_pct,
         "max_var_95_pct": market_stats.var_95_pct,
         "max_expected_shortfall_95_pct": market_stats.expected_shortfall_95_pct,
@@ -973,7 +1033,9 @@ def _portfolio_returns(
         ticker_dates = set(returns_by_ticker.get(ticker, {}))
         if not ticker_dates:
             continue
-        common_dates = ticker_dates if common_dates is None else common_dates & ticker_dates
+        common_dates = (
+            ticker_dates if common_dates is None else common_dates & ticker_dates
+        )
     if not common_dates:
         return {}
     return {
@@ -990,7 +1052,9 @@ def _align_series(
     second: dict[date, float],
 ) -> tuple[list[float], list[float]]:
     common_dates = sorted(set(first) & set(second))
-    return [first[item] for item in common_dates], [second[item] for item in common_dates]
+    return [first[item] for item in common_dates], [
+        second[item] for item in common_dates
+    ]
 
 
 def _volatility_pct(returns: list[float]) -> Decimal | None:
@@ -1053,14 +1117,18 @@ def _liquidity_days(
     position: RiskPosition,
     bars: list[MarketPriceBar],
 ) -> Decimal | None:
-    recent = [bar for bar in sorted(bars, key=lambda item: item.bar_date)[-20:] if bar.volume]
+    recent = [
+        bar for bar in sorted(bars, key=lambda item: item.bar_date)[-20:] if bar.volume
+    ]
     if not recent:
         return None
     dollar_volumes = []
     for bar in recent:
         price = bar.adjusted_close_price or bar.close_price
         dollar_volumes.append(price * Decimal(bar.volume or 0))
-    average_dollar_volume = sum(dollar_volumes, Decimal("0")) / Decimal(len(dollar_volumes))
+    average_dollar_volume = sum(dollar_volumes, Decimal("0")) / Decimal(
+        len(dollar_volumes)
+    )
     if average_dollar_volume <= 0:
         return None
     daily_capacity = average_dollar_volume * Decimal("0.10")
@@ -1074,7 +1142,7 @@ def _correlation_pairs(
     tickers = [position.ticker for position in positions]
     pairs: list[CorrelationPairResponse] = []
     for index, ticker_a in enumerate(tickers):
-        for ticker_b in tickers[index + 1:]:
+        for ticker_b in tickers[index + 1 :]:
             series_a, series_b = _align_series(
                 returns_by_ticker.get(ticker_a, {}),
                 returns_by_ticker.get(ticker_b, {}),
@@ -1121,7 +1189,11 @@ def _apply_trade_to_state(
     messages: list[str] = []
     positions = list(state.positions)
     existing_index = next(
-        (index for index, position in enumerate(positions) if position.ticker == ticker),
+        (
+            index
+            for index, position in enumerate(positions)
+            if position.ticker == ticker
+        ),
         None,
     )
     if existing_index is None:
@@ -1136,13 +1208,21 @@ def _apply_trade_to_state(
                 sector=payload.instrument.sector,
                 quantity=payload.quantity if payload.side == "buy" else Decimal("0"),
                 average_cost=payload.price,
-                market_value=money(payload.quantity * payload.price) if payload.side == "buy" else Decimal("0"),
+                market_value=(
+                    money(payload.quantity * payload.price)
+                    if payload.side == "buy"
+                    else Decimal("0")
+                ),
                 unrealized_pnl=Decimal("0"),
             )
         )
     else:
         existing = positions[existing_index]
-        quantity = existing.quantity + payload.quantity if payload.side == "buy" else existing.quantity - payload.quantity
+        quantity = (
+            existing.quantity + payload.quantity
+            if payload.side == "buy"
+            else existing.quantity - payload.quantity
+        )
         if quantity < 0:
             messages.append("Sell quantity exceeds the current position.")
             quantity = Decimal("0")
@@ -1161,7 +1241,9 @@ def _apply_trade_to_state(
 
     positions = [position for position in positions if position.quantity > 0]
     cash_balance = money(state.cash_balance + cash_impact)
-    invested_value = money(sum((position.market_value for position in positions), Decimal("0")))
+    invested_value = money(
+        sum((position.market_value for position in positions), Decimal("0"))
+    )
     nav = money(cash_balance + invested_value)
     if nav <= 0:
         nav = Decimal("1.00")
@@ -1186,7 +1268,11 @@ def _pre_trade_decision(
     failed_checks: list[RiskMeasurementResponse],
     messages: list[str],
 ) -> str:
-    if any("exceeds the current position" in message or "no existing long position" in message for message in messages):
+    if any(
+        "exceeds the current position" in message
+        or "no existing long position" in message
+        for message in messages
+    ):
         return "reject"
     if risk_level == "halt":
         return "reject"
@@ -1203,12 +1289,10 @@ def _custom_scenario_from_payload(payload: StressScenarioCreate) -> dict:
         "scenario_type": "custom",
         "market_shock_pct": payload.market_shock_pct,
         "sector_shocks_pct": {
-            key: value
-            for key, value in payload.sector_shocks_pct.items()
+            key: value for key, value in payload.sector_shocks_pct.items()
         },
         "ticker_shocks_pct": {
-            key.upper(): value
-            for key, value in payload.ticker_shocks_pct.items()
+            key.upper(): value for key, value in payload.ticker_shocks_pct.items()
         },
         "cash_shock_pct": payload.cash_shock_pct,
         "notes": [payload.notes] if payload.notes else [],
@@ -1262,7 +1346,9 @@ def _risk_level_label(risk_level: str) -> str:
 def _weight_pct(value: Decimal, nav: Decimal) -> Decimal:
     if nav == 0:
         return Decimal("0.0000")
-    return ((value / nav) * Decimal("100")).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    return ((value / nav) * Decimal("100")).quantize(
+        Decimal("0.0001"), rounding=ROUND_HALF_UP
+    )
 
 
 def _decimal(value: object) -> Decimal:

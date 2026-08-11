@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class InstrumentCreate(BaseModel):
     ticker: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=255)
-    asset_class: str = Field(pattern="^(equity|etf|bond|commodity|cash_equivalent|other)$")
+    asset_class: str = Field(
+        pattern="^(equity|etf|bond|commodity|cash_equivalent|other)$"
+    )
     exchange: str | None = Field(default=None, max_length=64)
     currency: str = Field(default="USD", min_length=3, max_length=3)
     sector: str | None = Field(default=None, max_length=128)
@@ -72,7 +74,9 @@ class CashAdjustmentCreate(CashMovementCreate):
     @classmethod
     def description_is_required(cls, value: str | None) -> str:
         if value is None or not value.strip():
-            raise ValueError("Adjustments require a description explaining the correction.")
+            raise ValueError(
+                "Adjustments require a description explaining the correction."
+            )
         return value.strip()
 
 
@@ -150,6 +154,31 @@ class TradeResponse(BaseModel):
     rationale: str
     risk_notes: str | None
     broker_reference: str | None
+
+
+class TradeJournalEntryResponse(TradeResponse):
+    notional_value: Decimal
+    cash_impact: Decimal
+    fee_bps: Decimal | None
+    has_risk_notes: bool
+
+
+class TradeJournalSummaryResponse(BaseModel):
+    total_trades: int
+    buy_count: int
+    sell_count: int
+    unique_tickers: int
+    gross_traded_value: Decimal
+    net_cash_impact: Decimal
+    total_fees: Decimal
+    average_fee_bps: Decimal | None
+    last_trade_at: datetime | None
+
+
+class TradeJournalResponse(BaseModel):
+    portfolio: PortfolioResponse
+    summary: TradeJournalSummaryResponse
+    trades: list[TradeJournalEntryResponse]
 
 
 class RiskLimitResponse(BaseModel):
