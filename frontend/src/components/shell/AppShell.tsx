@@ -12,7 +12,7 @@ const navigationItems = [
   { label: "Risk Centre", href: "/risk-centre" },
   { label: "Opportunity Queue", href: "/opportunity-queue" },
   { label: "Trade Journal", href: "/trade-journal" },
-  { label: "Attribution" },
+  { label: "Attribution", href: "/attribution" },
   { label: "Reports", href: "/reports" },
   { label: "Settings", href: "/settings" },
 ];
@@ -30,6 +30,7 @@ const pageTitles: Record<string, string> = {
   "Risk Centre": "Central Risk Office",
   "Opportunity Queue": "Research Pipeline",
   "Trade Journal": "Execution Journal",
+  Attribution: "Performance Attribution",
   Reports: "Monthly Reports",
   Settings: "Account Settings",
 };

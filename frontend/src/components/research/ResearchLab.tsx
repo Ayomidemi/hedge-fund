@@ -1,174 +1,187 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  backtests,
-  datasets,
-  experiments,
-  features,
-  labStats,
-  models,
-  notebooks,
-  pipelineStages,
-  sectionLabels,
-  validationChecks,
-  type LabSection,
-} from "@/components/research/research-lab-data";
-import { buttonPrimaryClassName, buttonSecondaryClassName } from "@/components/ui/form-styles";
-import {
-  getCurrentMonthlyReport,
-  getLatestRegimeModel,
-  getPredictiveModelComparison,
-  type ModelComparisonRow,
-  type MonthlyReport,
-  type RegimeModel,
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import type {
+  ResearchActionItem,
+  ResearchBacktest,
+  ResearchDataset,
+  ResearchExperiment,
+  ResearchFeatureSet,
+  ResearchLabOverview,
+  ResearchModel,
+  ResearchNotebook,
+  ResearchValidationCheck,
 } from "@/lib/api";
 
-const sections: LabSection[] = [
-  "overview",
-  "notebooks",
-  "datasets",
-  "features",
-  "experiments",
-  "backtests",
-  "models",
+type ResearchLabProps = {
+  initialOverview: ResearchLabOverview | null;
+  unavailable: boolean;
+};
+
+type LabTab =
+  | "overview"
+  | "datasets"
+  | "features"
+  | "notebooks"
+  | "experiments"
+  | "backtests"
+  | "models";
+
+const tabs: { key: LabTab; label: string }[] = [
+  { key: "overview", label: "Overview" },
+  { key: "datasets", label: "Datasets" },
+  { key: "features", label: "Features" },
+  { key: "notebooks", label: "Memos" },
+  { key: "experiments", label: "Experiments" },
+  { key: "backtests", label: "Backtests" },
+  { key: "models", label: "Models" },
 ];
 
-export function ResearchLab() {
-  const [activeSection, setActiveSection] = useState<LabSection>("overview");
-  const [modelComparison, setModelComparison] = useState<ModelComparisonRow[]>([]);
-  const [latestRegime, setLatestRegime] = useState<RegimeModel | null>(null);
-  const [monthlyReport, setMonthlyReport] = useState<MonthlyReport | null>(null);
-  const [modelsLoading, setModelsLoading] = useState(true);
+const currency = new Intl.NumberFormat("en-US", {
+  currency: "USD",
+  maximumFractionDigits: 2,
+  style: "currency",
+});
 
-  useEffect(() => {
-    let active = true;
+const compact = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+  notation: "compact",
+});
 
-    getPredictiveModelComparison()
-      .then((rows) => {
-        if (active) setModelComparison(rows);
-      })
-      .catch(() => {
-        if (active) setModelComparison([]);
-      })
-      .finally(() => {
-        if (active) setModelsLoading(false);
-      });
+const dateFormatter = new Intl.DateTimeFormat("en-US", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
 
-    getLatestRegimeModel()
-      .then((regime) => {
-        if (active) setLatestRegime(regime);
-      })
-      .catch(() => {
-        if (active) setLatestRegime(null);
-      });
+export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) {
+  const [activeTab, setActiveTab] = useState<LabTab>("overview");
+  const overview = initialOverview;
 
-    getCurrentMonthlyReport()
-      .then((report) => {
-        if (active) setMonthlyReport(report);
-      })
-      .catch(() => {
-        if (active) setMonthlyReport(null);
-      });
+  const highPriorityActions = useMemo(
+    () => overview?.action_items.filter((item) => item.priority === "high") ?? [],
+    [overview?.action_items],
+  );
 
-    return () => {
-      active = false;
-    };
-  }, []);
+  if (!overview) {
+    return (
+      <section className="mx-auto max-w-[1200px] rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Research Lab
+        </p>
+        <h2 className="mt-2 text-xl font-semibold">
+          {unavailable ? "Research Lab could not be loaded yet" : "Research Lab pending"}
+        </h2>
+        <p className="mt-2 text-sm text-zinc-500">
+          {unavailable
+            ? "Sign in again or refresh this page."
+            : "Research data will appear here once available."}
+        </p>
+      </section>
+    );
+  }
+
+  const summary = overview.summary;
+  const metrics = [
+    { label: "NAV", value: money(summary.nav) },
+    { label: "Memos", value: String(summary.research_memo_count) },
+    { label: "Opportunities", value: String(summary.active_opportunity_count) },
+    { label: "Datasets", value: String(summary.dataset_count) },
+    { label: "Feature sets", value: String(summary.feature_set_count) },
+    { label: "Models", value: String(summary.model_count) },
+  ];
 
   return (
-    <div className="mx-auto flex max-w-[1400px] flex-col gap-6">
+    <div className="mx-auto max-w-[1560px] space-y-5">
       <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-6 py-5 dark:border-zinc-800">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
           <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-              Research environment
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+              {summary.portfolio_name}
             </p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight">Research Lab</h2>
-            <p className="mt-1 max-w-xl text-sm text-zinc-500">
-              Hypothesis testing, feature engineering, backtests, and model governance —
-              separate from production execution.
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">
+              Research Lab
+            </h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              Generated {formatDateTime(overview.generated_at)}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={buttonSecondaryClassName}>
-              New notebook
-            </button>
-            <button type="button" className={buttonSecondaryClassName}>
-              New experiment
-            </button>
-            <button type="button" className={buttonPrimaryClassName}>
-              Run backtest
-            </button>
+          <div className="rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
+            {summary.warning_count} warning{summary.warning_count === 1 ? "" : "s"}
           </div>
         </div>
 
-        <PipelineBar />
+        <Pipeline stages={overview.pipeline} />
 
-        <div className="grid divide-y divide-zinc-200 sm:grid-cols-4 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
-          {labStats.map((stat) => (
-            <div key={stat.label} className="px-6 py-4">
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-                {stat.label}
+        <div className="grid divide-y divide-zinc-200 sm:grid-cols-2 lg:grid-cols-6 lg:divide-x lg:divide-y-0 dark:divide-zinc-800">
+          {metrics.map((metric) => (
+            <div key={metric.label} className="px-5 py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                {metric.label}
               </p>
-              <p className="mt-1 text-xl font-semibold tabular-nums">{stat.value}</p>
+              <p className="mt-2 text-xl font-semibold tabular-nums tracking-tight">
+                {metric.value}
+              </p>
             </div>
           ))}
         </div>
       </section>
 
-      <div className="flex flex-col gap-6 lg:flex-row">
-        <nav className="flex shrink-0 gap-1 overflow-x-auto lg:w-48 lg:flex-col lg:overflow-visible">
-          {sections.map((section) => (
-            <button
-              key={section}
-              type="button"
-              onClick={() => setActiveSection(section)}
-              className={`whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm transition ${
-                activeSection === section
-                  ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
-              }`}
-            >
-              {sectionLabels[section]}
-            </button>
-          ))}
-        </nav>
+      <nav className="flex gap-2 overflow-x-auto">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
+              activeTab === tab.key
+                ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
+                : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
 
-        <div className="min-w-0 flex-1">
-          {activeSection === "overview" && (
-            <OverviewPanel latestRegime={latestRegime} monthlyReport={monthlyReport} />
-          )}
-          {activeSection === "notebooks" && <NotebooksPanel />}
-          {activeSection === "datasets" && <DatasetsPanel />}
-          {activeSection === "features" && <FeaturesPanel />}
-          {activeSection === "experiments" && <ExperimentsPanel />}
-          {activeSection === "backtests" && <BacktestsPanel />}
-          {activeSection === "models" && (
-            <ModelsPanel liveRows={modelComparison} loading={modelsLoading} />
-          )}
-        </div>
-      </div>
+      {activeTab === "overview" && (
+        <OverviewPanel
+          actions={overview.action_items}
+          checks={overview.validation_checks}
+          highPriorityActions={highPriorityActions}
+          notes={overview.notes}
+        />
+      )}
+      {activeTab === "datasets" && <DatasetsPanel datasets={overview.datasets} />}
+      {activeTab === "features" && <FeaturesPanel featureSets={overview.feature_sets} />}
+      {activeTab === "notebooks" && <NotebooksPanel notebooks={overview.notebooks} />}
+      {activeTab === "experiments" && (
+        <ExperimentsPanel experiments={overview.experiments} />
+      )}
+      {activeTab === "backtests" && <BacktestsPanel backtests={overview.backtests} />}
+      {activeTab === "models" && <ModelsPanel models={overview.models} />}
     </div>
   );
 }
 
-function PipelineBar() {
+function Pipeline({ stages }: { stages: ResearchLabOverview["pipeline"] }) {
   return (
-    <div className="border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
-      <p className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-500">
-        Research pipeline
-      </p>
-      <div className="flex flex-wrap items-center gap-2">
-        {pipelineStages.map((stage, index) => (
-          <div key={stage.id} className="flex items-center gap-2">
-            <div className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
-              <p className="text-xs text-zinc-500">{stage.label}</p>
-              <p className="text-sm font-semibold tabular-nums">{stage.count}</p>
-            </div>
-            {index < pipelineStages.length - 1 && (
-              <span className="text-zinc-300 dark:text-zinc-600">→</span>
-            )}
+    <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        {stages.map((stage) => (
+          <div
+            key={stage.key}
+            className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-900 dark:bg-zinc-900/50"
+          >
+            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              {stage.label}
+            </p>
+            <p className="mt-1 text-xl font-semibold">{stage.count}</p>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
+              {stage.description}
+            </p>
           </div>
         ))}
       </div>
@@ -177,100 +190,52 @@ function PipelineBar() {
 }
 
 function OverviewPanel({
-  latestRegime,
-  monthlyReport,
+  actions,
+  checks,
+  highPriorityActions,
+  notes,
 }: {
-  latestRegime: RegimeModel | null;
-  monthlyReport: MonthlyReport | null;
+  actions: ResearchActionItem[];
+  checks: ResearchValidationCheck[];
+  highPriorityActions: ResearchActionItem[];
+  notes: string[];
 }) {
   return (
-    <div className="grid gap-6 xl:grid-cols-2">
-      <Panel title="Recent experiments" subtitle="Latest hypothesis runs">
-        <CompactTable
-          headers={["Experiment", "Status", "Sharpe"]}
-          rows={experiments.slice(0, 4).map((item) => [
-            item.name,
-            <StatusBadge key={item.id} label={item.status} />,
-            item.sharpe ?? "—",
-          ])}
-        />
+    <div className="grid gap-5 xl:grid-cols-[1fr_0.8fr]">
+      <Panel title="Research Actions" subtitle="Next work items from the current state">
+        <div className="space-y-3">
+          {actions.map((item) => (
+            <ActionItem key={item.key} item={item} />
+          ))}
+        </div>
       </Panel>
 
-      <Panel title="Recent backtests" subtitle="Validation runs with costs">
-        <CompactTable
-          headers={["Backtest", "Sharpe", "Max DD", "Status"]}
-          rows={backtests.slice(0, 4).map((item) => [
-            item.name,
-            item.sharpe,
-            item.maxDrawdown,
-            <StatusBadge key={item.id} label={item.status} />,
-          ])}
-        />
+      <Panel title="Validation Checks" subtitle="Data and model readiness">
+        <div className="space-y-3">
+          {checks.map((check) => (
+            <ValidationCheck key={check.key} check={check} />
+          ))}
+        </div>
       </Panel>
 
-      <Panel title="Current regime" subtitle="Latest HMM market-state fit">
-        {latestRegime ? (
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold">{formatLabel(latestRegime.current_regime)}</p>
-                <p className="mt-1 text-xs text-zinc-500">
-                  {latestRegime.ticker} as of {latestRegime.as_of_date}
-                </p>
-              </div>
-              <StatusBadge label={`${Number(latestRegime.confidence_score).toFixed(1)}% confidence`} />
-            </div>
-            <CompactTable
-              headers={["State", "Prob.", "Return", "Vol."]}
-              rows={latestRegime.state_probabilities.map((state) => [
-                formatLabel(state.label),
-                `${(Number(state.probability) * 100).toFixed(1)}%`,
-                `${Number(state.mean_return_pct).toFixed(2)}%`,
-                `${Number(state.volatility_pct).toFixed(1)}%`,
-              ])}
-            />
+      <Panel title="Priority Queue" subtitle="Items that block better research output">
+        {highPriorityActions.length > 0 ? (
+          <div className="space-y-3">
+            {highPriorityActions.map((item) => (
+              <ActionItem key={item.key} item={item} compactView />
+            ))}
           </div>
         ) : (
-          <p className="text-sm text-zinc-500">Regime model pending</p>
+          <p className="text-sm text-zinc-500">No high-priority research blockers.</p>
         )}
       </Panel>
 
-      <Panel title="Monthly report" subtitle="Current generated investment summary">
-        {monthlyReport ? (
-          <div className="space-y-4">
-            <p className="text-sm leading-6 text-zinc-700 dark:text-zinc-300">
-              {monthlyReport.commentary}
+      <Panel title="Lab Notes">
+        <div className="space-y-3">
+          {notes.map((note) => (
+            <p key={note} className="text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+              {note}
             </p>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <MiniMetric label="NAV" value={monthlyReport.nav} />
-              <MiniMetric label="Trades" value={String(monthlyReport.monthly_trade_count)} />
-              <MiniMetric label="Memos" value={String(monthlyReport.monthly_memo_count)} />
-            </div>
-          </div>
-        ) : (
-          <p className="text-sm text-zinc-500">Monthly report pending</p>
-        )}
-      </Panel>
-
-      <Panel title="Data validation" subtitle="Point-in-time integrity checks" className="xl:col-span-2">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            "Missing-value checks",
-            "Duplicate detection",
-            "Timestamp validation",
-            "Corporate-action adjustment",
-            "Survivorship-bias prevention",
-            "Point-in-time handling",
-            "Data-version tracking",
-            "Look-ahead-bias prevention",
-          ].map((check) => (
-            <div
-              key={check}
-              className="flex items-center justify-between rounded-lg border border-zinc-200 px-3 py-2.5 dark:border-zinc-800"
-            >
-              <span className="text-sm text-zinc-700 dark:text-zinc-300">{check}</span>
-              <span className="text-xs font-medium text-zinc-500">Active</span>
-            </div>
           ))}
         </div>
       </Panel>
@@ -278,235 +243,246 @@ function OverviewPanel({
   );
 }
 
-function NotebooksPanel() {
+function DatasetsPanel({ datasets }: { datasets: ResearchDataset[] }) {
   return (
-    <Panel title="Notebooks" subtitle="Exploratory research — not connected to live execution">
+    <Panel title="Datasets" subtitle="Research data stores currently available">
       <DataTable
-        headers={["Notebook", "Owner", "Last edited", "Linked experiment", "Status"]}
-        rows={notebooks.map((item) => [
-          <span key={item.id} className="font-medium">{item.name}</span>,
-          item.owner,
-          item.lastEdited,
-          item.linkedExperiment ?? "—",
-          <StatusBadge key={`${item.id}-status`} label={item.status} />,
+        empty="No datasets are available yet."
+        headers={["Dataset", "Rows", "Instruments", "Latest", "Status", "Validation"]}
+        rows={datasets.map((dataset) => [
+          <div key={dataset.key}>
+            <p className="font-medium">{dataset.name}</p>
+            <p className="text-xs text-zinc-500">{dataset.source}</p>
+          </div>,
+          compact.format(dataset.row_count),
+          String(dataset.instrument_count),
+          dataset.latest_observation ? formatDate(dataset.latest_observation) : "-",
+          <StatusBadge key={dataset.key} status={dataset.status} />,
+          dataset.validation_summary,
         ])}
       />
     </Panel>
   );
 }
 
-function DatasetsPanel() {
+function FeaturesPanel({ featureSets }: { featureSets: ResearchFeatureSet[] }) {
   return (
-    <Panel title="Datasets" subtitle="Versioned research data with validation status">
+    <Panel title="Feature Sets" subtitle="Model-ready feature coverage by version">
       <DataTable
-        headers={["Dataset", "Source", "Records", "Frequency", "Version", "Updated", "Validation"]}
-        rows={datasets.map((item) => [
-          <span key={item.id} className="font-medium">{item.name}</span>,
-          item.source,
-          item.records,
-          item.frequency,
-          item.version,
-          item.updated,
-          <StatusBadge key={`${item.id}-val`} label={item.validation} />,
+        empty="No feature snapshots are available yet."
+        headers={["Version", "Snapshots", "Names", "Features", "Range", "Quality", "Status"]}
+        rows={featureSets.map((featureSet) => [
+          featureSet.feature_version,
+          compact.format(featureSet.snapshot_count),
+          String(featureSet.instrument_count),
+          String(featureSet.feature_count),
+          featureSet.first_as_of_date && featureSet.last_as_of_date
+            ? `${formatDate(featureSet.first_as_of_date)} to ${formatDate(featureSet.last_as_of_date)}`
+            : "-",
+          featureSet.average_quality_score ?? "-",
+          <StatusBadge key={featureSet.feature_version} status={featureSet.status} />,
         ])}
       />
-    </Panel>
-  );
-}
-
-function FeaturesPanel() {
-  return (
-    <Panel title="Feature registry" subtitle="Reusable signals and factors for models">
-      <DataTable
-        headers={["Feature", "Version", "Category", "Used by", "Updated"]}
-        rows={features.map((item) => [
-          <span key={item.id} className="font-medium">{item.name}</span>,
-          item.version,
-          item.category,
-          `${item.usedBy} models`,
-          item.updated,
-        ])}
-      />
-    </Panel>
-  );
-}
-
-function ExperimentsPanel() {
-  return (
-    <Panel title="Experiments" subtitle="Tracked hypothesis → model development">
-      <DataTable
-        headers={["Experiment", "Hypothesis", "Model", "Owner", "Status", "Sharpe", "Created"]}
-        rows={experiments.map((item) => [
-          <span key={item.id} className="font-medium">{item.name}</span>,
-          <span key={`${item.id}-hyp`} className="max-w-xs truncate text-zinc-500">{item.hypothesis}</span>,
-          item.modelType,
-          item.owner,
-          <StatusBadge key={`${item.id}-status`} label={item.status} />,
-          item.sharpe ?? "—",
-          item.created,
-        ])}
-      />
-    </Panel>
-  );
-}
-
-function BacktestsPanel() {
-  return (
-    <Panel title="Backtests" subtitle="Walk-forward, cost-adjusted, benchmark-compared">
-      <DataTable
-        headers={[
-          "Backtest",
-          "Strategy",
-          "Period",
-          "Sharpe",
-          "Max DD",
-          "Alpha",
-          "Walk-fwd",
-          "Costs",
-          "Status",
-        ]}
-        rows={backtests.map((item) => [
-          <span key={item.id} className="font-medium">{item.name}</span>,
-          item.strategy,
-          item.period,
-          item.sharpe,
-          item.maxDrawdown,
-          item.benchmarkAlpha,
-          item.walkForward ? "Yes" : "No",
-          item.costsIncluded ? "Yes" : "No",
-          <StatusBadge key={`${item.id}-status`} label={item.status} />,
-        ])}
-      />
-    </Panel>
-  );
-}
-
-function ModelsPanel({
-  liveRows,
-  loading,
-}: {
-  liveRows: ModelComparisonRow[];
-  loading: boolean;
-}) {
-  const hasLiveRows = liveRows.length > 0;
-
-  return (
-    <div className="space-y-6">
-      <Panel title="Model comparison" subtitle="Registry entries with validation progress">
-        {hasLiveRows ? (
-          <DataTable
-            headers={[
-              "Model",
-              "Horizon",
-              "Rows",
-              "Val MAE",
-              "Val R2",
-              "Direction",
-              "P05 Residual",
-            ]}
-            rows={liveRows.map((item) => [
-              <div key={item.model_version_id}>
-                <p className="font-medium">{item.model_name}</p>
-                <p className="mt-0.5 text-xs text-zinc-500">{item.model_version}</p>
-              </div>,
-              item.horizon_days ? `${item.horizon_days}D` : "-",
-              `${item.training_rows ?? 0}/${item.validation_rows ?? 0}`,
-              formatNumber(item.validation_mae),
-              formatNumber(item.validation_r2),
-              item.validation_directional_accuracy
-                ? `${(Number(item.validation_directional_accuracy) * 100).toFixed(1)}%`
-                : "-",
-              formatNumber(item.residual_p05_pct),
-            ])}
-          />
-        ) : loading ? (
-          <p className="text-sm text-zinc-500">Loading models</p>
-        ) : (
-          <DataTable
-            headers={[
-              "Model",
-              "Version",
-              "Stage",
-              "Sharpe",
-              "OOS Sharpe",
-              "Validation",
-              "Confidence",
-            ]}
-            rows={models.map((item) => [
-              <div key={item.id}>
-                <p className="font-medium">{item.name}</p>
-                <p className="mt-0.5 text-xs text-zinc-500">{item.purpose}</p>
-              </div>,
-              item.version,
-              <StatusBadge key={`${item.id}-stage`} label={item.stage} />,
-              item.sharpe,
-              item.oosSharpe,
-              `${item.validationsPassed}/${item.validationsTotal}`,
-              <StatusBadge key={`${item.id}-conf`} label={item.confidence} />,
-            ])}
-          />
-        )}
-      </Panel>
-
-      <Panel title="Validation requirements" subtitle="From model governance — all must pass before promotion">
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {validationChecks.map((check, index) => (
-            <div
-              key={check}
-              className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2.5 dark:border-zinc-800"
+      {featureSets.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {featureSets.slice(0, 3).map((featureSet) => (
+            <p
+              key={featureSet.feature_version}
+              className="text-sm leading-6 text-zinc-600 dark:text-zinc-300"
             >
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-zinc-300 text-[10px] font-medium text-zinc-500 dark:border-zinc-600">
-                {index + 1}
-              </span>
-              <span className="text-sm text-zinc-700 dark:text-zinc-300">{check}</span>
-            </div>
+              {featureSet.feature_version}: {featureSet.notes}
+            </p>
           ))}
         </div>
-      </Panel>
+      )}
+    </Panel>
+  );
+}
+
+function NotebooksPanel({ notebooks }: { notebooks: ResearchNotebook[] }) {
+  return (
+    <Panel title="Research Memos" subtitle="User-owned analyst work from Ticker Analyst">
+      <DataTable
+        empty="No research memos are available yet."
+        headers={["Memo", "Date", "Class", "Status", "Summary"]}
+        rows={notebooks.map((notebook) => [
+          <div key={notebook.id}>
+            <p className="font-medium">{notebook.title}</p>
+            <p className="text-xs text-zinc-500">{notebook.ticker}</p>
+          </div>,
+          formatDate(notebook.memo_date),
+          formatLabel(notebook.classification),
+          <StatusBadge key={notebook.id} status={notebook.status} />,
+          <p key={`${notebook.id}-summary`} className="line-clamp-2 max-w-xl">
+            {notebook.summary}
+          </p>,
+        ])}
+      />
+    </Panel>
+  );
+}
+
+function ExperimentsPanel({
+  experiments,
+}: {
+  experiments: ResearchExperiment[];
+}) {
+  return (
+    <Panel title="Experiments" subtitle="Model versions and research trials">
+      <DataTable
+        empty="No experiments are registered yet."
+        headers={["Experiment", "Type", "Metric", "Feature set", "Status", "Created"]}
+        rows={experiments.map((experiment) => [
+          <div key={experiment.id}>
+            <p className="font-medium">{experiment.name}</p>
+            <p className="line-clamp-1 text-xs text-zinc-500">{experiment.hypothesis}</p>
+          </div>,
+          formatLabel(experiment.experiment_type),
+          experiment.validation_metric && experiment.validation_value
+            ? `${experiment.validation_metric}: ${experiment.validation_value}`
+            : "-",
+          experiment.feature_version ?? "-",
+          <StatusBadge key={experiment.id} status={experiment.status} />,
+          formatDate(experiment.created_at),
+        ])}
+      />
+    </Panel>
+  );
+}
+
+function BacktestsPanel({ backtests }: { backtests: ResearchBacktest[] }) {
+  return (
+    <Panel title="Backtests" subtitle="Validation templates and available run context">
+      <div className="grid gap-4 xl:grid-cols-2">
+        {backtests.map((backtest) => (
+          <div
+            key={backtest.id}
+            className="rounded-lg border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-900/50"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-medium">{backtest.name}</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {backtest.benchmark ?? "No benchmark"} / {backtest.cost_model}
+                </p>
+              </div>
+              <StatusBadge status={backtest.status} />
+            </div>
+            <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+              {backtest.strategy}
+            </p>
+            <p className="mt-3 text-sm leading-6 text-zinc-500">{backtest.notes}</p>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function ModelsPanel({ models }: { models: ResearchModel[] }) {
+  return (
+    <Panel title="Model Registry" subtitle="Predictive models available to the analyst">
+      <DataTable
+        empty="No trained models are registered yet."
+        headers={["Model", "Horizon", "Rows", "Accuracy", "R2", "Status"]}
+        rows={models.map((model) => [
+          <div key={model.model_version_id}>
+            <p className="font-medium">{model.model_name}</p>
+            <p className="text-xs text-zinc-500">{model.model_version}</p>
+          </div>,
+          model.horizon_days ? `${model.horizon_days}d` : "-",
+          `${model.training_rows ?? 0} / ${model.validation_rows ?? 0}`,
+          model.validation_directional_accuracy
+            ? `${Number(model.validation_directional_accuracy).toFixed(2)}%`
+            : "-",
+          model.validation_r2 ?? "-",
+          <StatusBadge key={model.model_version_id} status={model.status} />,
+        ])}
+      />
+    </Panel>
+  );
+}
+
+function ActionItem({
+  compactView,
+  item,
+}: {
+  compactView?: boolean;
+  item: ResearchActionItem;
+}) {
+  const content = (
+    <div className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 transition hover:border-zinc-200 dark:border-zinc-900 dark:bg-zinc-900/50 dark:hover:border-zinc-700">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">{item.label}</p>
+          <p className="mt-1 text-xs text-zinc-500">{item.owner_area}</p>
+        </div>
+        <PriorityBadge priority={item.priority} />
+      </div>
+      {!compactView && (
+        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          {item.detail}
+        </p>
+      )}
+    </div>
+  );
+
+  if (!item.action_path) return content;
+  return <Link href={item.action_path}>{content}</Link>;
+}
+
+function ValidationCheck({ check }: { check: ResearchValidationCheck }) {
+  return (
+    <div className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-900 dark:bg-zinc-900/50">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-medium">{check.label}</p>
+        <StatusBadge status={check.status} />
+      </div>
+      <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+        {check.detail}
+      </p>
     </div>
   );
 }
 
 function Panel({
-  title,
-  subtitle,
   children,
-  className = "",
+  subtitle,
+  title,
 }: {
+  children: ReactNode;
+  subtitle?: string;
   title: string;
-  subtitle: string;
-  children: React.ReactNode;
-  className?: string;
 }) {
   return (
-    <section
-      className={`overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 ${className}`}
-    >
-      <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="mb-4">
         <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="mt-0.5 text-sm text-zinc-500">{subtitle}</p>
+        {subtitle && <p className="mt-1 text-sm text-zinc-500">{subtitle}</p>}
       </div>
-      <div className="p-5">{children}</div>
+      {children}
     </section>
   );
 }
 
 function DataTable({
+  empty,
   headers,
   rows,
 }: {
+  empty: string;
   headers: string[];
-  rows: React.ReactNode[][];
+  rows: ReactNode[][];
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-left text-sm">
+      <table className="w-full min-w-[900px] text-left text-sm">
         <thead>
           <tr className="border-b border-zinc-200 dark:border-zinc-800">
             {headers.map((header) => (
               <th
                 key={header}
-                className="pb-3 pr-4 text-xs font-medium uppercase tracking-wider text-zinc-500 last:pr-0"
+                className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500"
               >
                 {header}
               </th>
@@ -522,90 +498,86 @@ function DataTable({
               {row.map((cell, cellIndex) => (
                 <td
                   key={cellIndex}
-                  className="py-3 pr-4 text-zinc-800 last:pr-0 dark:text-zinc-200"
+                  className="px-5 py-3 align-middle text-zinc-700 dark:text-zinc-300"
                 >
                   {cell}
                 </td>
               ))}
             </tr>
           ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function CompactTable({
-  headers,
-  rows,
-}: {
-  headers: string[];
-  rows: React.ReactNode[][];
-}) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
-        <thead>
-          <tr>
-            {headers.map((header) => (
-              <th
-                key={header}
-                className="pb-2 pr-3 text-xs font-medium uppercase tracking-wider text-zinc-500"
+          {rows.length === 0 && (
+            <tr>
+              <td
+                colSpan={headers.length}
+                className="px-5 py-10 text-center text-sm text-zinc-500"
               >
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-t border-zinc-100 dark:border-zinc-900">
-              {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="py-2.5 pr-3 text-zinc-800 dark:text-zinc-200">
-                  {cell}
-                </td>
-              ))}
+                {empty}
+              </td>
             </tr>
-          ))}
+          )}
         </tbody>
       </table>
     </div>
   );
 }
 
-function MiniMetric({ label, value }: { label: string; value: string }) {
+function StatusBadge({ status }: { status: string }) {
+  const styles = statusStyle(status);
   return (
-    <div className="rounded-lg border border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
-      <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-        {label}
-      </p>
-      <p className="mt-1 text-base font-semibold tabular-nums">{value}</p>
-    </div>
-  );
-}
-
-function StatusBadge({ label }: { label: string }) {
-  const formatted = label
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-
-  return (
-    <span className="inline-flex rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
-      {formatted}
+    <span className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${styles}`}>
+      {formatLabel(status)}
     </span>
   );
 }
 
-function formatLabel(value: string) {
-  return value
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+function PriorityBadge({ priority }: { priority: string }) {
+  return (
+    <span
+      className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${
+        priority === "high"
+          ? "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300"
+          : "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+      }`}
+    >
+      {formatLabel(priority)}
+    </span>
+  );
 }
 
-function formatNumber(value: string | null) {
-  if (value === null) return "-";
-  return Number(value).toFixed(3);
+function statusStyle(status: string) {
+  if (["passed", "validated", "ready", "candidate"].includes(status)) {
+    return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
+  }
+  if (["warning", "needs_review", "blocked"].includes(status)) {
+    return "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300";
+  }
+  if (["failed", "archived"].includes(status)) {
+    return "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300";
+  }
+  return "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300";
+}
+
+function money(value: string) {
+  return currency.format(Number(value));
+}
+
+function formatDate(value: string) {
+  return dateFormatter.format(new Date(value));
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(value));
+}
+
+function formatLabel(value: string) {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }

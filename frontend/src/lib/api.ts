@@ -699,6 +699,216 @@ export type MonthlyReport = {
   commentary: string;
 };
 
+export type AttributionSummary = {
+  portfolio_id: string;
+  portfolio_name: string;
+  generated_at: string;
+  period_start: string | null;
+  period_end: string;
+  nav: string;
+  cash_balance: string;
+  invested_value: string;
+  net_external_flow: string;
+  total_deposits: string;
+  total_withdrawals: string;
+  gross_traded_value: string;
+  total_fees: string;
+  gross_realized_pnl: string;
+  unrealized_pnl: string;
+  net_pnl: string;
+  portfolio_pnl_from_nav: string;
+  reconciliation_gap: string;
+  total_return_pct: string;
+  fee_drag_pct: string;
+  turnover_pct: string;
+  hit_rate_pct: string | null;
+  profit_factor: string | null;
+  trade_count: number;
+  closed_trade_count: number;
+  winning_trade_count: number;
+  losing_trade_count: number;
+};
+
+export type AttributionRow = {
+  instrument: Instrument;
+  status: string;
+  quantity: string;
+  average_cost: string;
+  market_value: string;
+  portfolio_weight_pct: string;
+  gross_buys: string;
+  gross_sells: string;
+  gross_realized_pnl: string;
+  unrealized_pnl: string;
+  fees: string;
+  net_pnl: string;
+  contribution_pct_nav: string;
+  return_on_traded_capital_pct: string;
+  trade_count: number;
+  closed_trade_count: number;
+  win_rate_pct: string | null;
+};
+
+export type AttributionBucket = {
+  name: string;
+  exposure_pct: string;
+  market_value: string;
+  gross_traded_value: string;
+  gross_realized_pnl: string;
+  unrealized_pnl: string;
+  fees: string;
+  net_pnl: string;
+  contribution_pct_nav: string;
+  instrument_count: number;
+};
+
+export type AttributionRealizedEvent = {
+  trade_id: string;
+  trade_date: string;
+  instrument: Instrument;
+  quantity: string;
+  exit_price: string;
+  average_cost: string;
+  gross_realized_pnl: string;
+  fees: string;
+  net_realized_pnl: string;
+  return_pct: string;
+};
+
+export type AttributionReport = {
+  summary: AttributionSummary;
+  by_ticker: AttributionRow[];
+  by_asset_class: AttributionBucket[];
+  by_sector: AttributionBucket[];
+  realized_events: AttributionRealizedEvent[];
+  notes: string[];
+};
+
+export type ResearchLabSummary = {
+  portfolio_name: string;
+  nav: string;
+  research_memo_count: number;
+  active_opportunity_count: number;
+  dataset_count: number;
+  feature_set_count: number;
+  model_count: number;
+  backtest_count: number;
+  warning_count: number;
+};
+
+export type ResearchPipelineStage = {
+  key: string;
+  label: string;
+  count: number;
+  description: string;
+};
+
+export type ResearchDataset = {
+  key: string;
+  name: string;
+  source: string;
+  row_count: number;
+  instrument_count: number;
+  latest_observation: string | null;
+  frequency: string;
+  status: string;
+  validation_summary: string;
+};
+
+export type ResearchFeatureSet = {
+  feature_version: string;
+  snapshot_count: number;
+  instrument_count: number;
+  feature_count: number;
+  first_as_of_date: string | null;
+  last_as_of_date: string | null;
+  average_quality_score: string | null;
+  status: string;
+  notes: string;
+};
+
+export type ResearchNotebook = {
+  id: string;
+  title: string;
+  ticker: string;
+  classification: string;
+  memo_date: string;
+  status: string;
+  linked_recommendation_id: string | null;
+  summary: string;
+};
+
+export type ResearchExperiment = {
+  id: string;
+  name: string;
+  experiment_type: string;
+  status: string;
+  hypothesis: string;
+  feature_version: string | null;
+  horizon_days: number | null;
+  validation_metric: string | null;
+  validation_value: string | null;
+  created_at: string;
+};
+
+export type ResearchBacktest = {
+  id: string;
+  name: string;
+  status: string;
+  strategy: string;
+  benchmark: string | null;
+  cost_model: string;
+  latest_run_at: string | null;
+  primary_metric: string | null;
+  notes: string;
+};
+
+export type ResearchModel = {
+  model_version_id: string;
+  model_name: string;
+  model_version: string;
+  purpose: string;
+  feature_version: string | null;
+  horizon_days: number | null;
+  training_rows: number | null;
+  validation_rows: number | null;
+  validation_directional_accuracy: string | null;
+  validation_r2: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type ResearchValidationCheck = {
+  key: string;
+  label: string;
+  status: string;
+  detail: string;
+};
+
+export type ResearchActionItem = {
+  key: string;
+  label: string;
+  priority: string;
+  owner_area: string;
+  detail: string;
+  action_path: string | null;
+};
+
+export type ResearchLabOverview = {
+  generated_at: string;
+  summary: ResearchLabSummary;
+  pipeline: ResearchPipelineStage[];
+  datasets: ResearchDataset[];
+  feature_sets: ResearchFeatureSet[];
+  notebooks: ResearchNotebook[];
+  experiments: ResearchExperiment[];
+  backtests: ResearchBacktest[];
+  models: ResearchModel[];
+  validation_checks: ResearchValidationCheck[];
+  action_items: ResearchActionItem[];
+  notes: string[];
+};
+
 export type RiskPolicyLimit = {
   key: string;
   label: string;
@@ -1051,6 +1261,14 @@ export function createFactorBacktest(payload: BacktestRunInput, options?: ApiReq
 
 export function getCurrentMonthlyReport(options?: ApiRequestOptions) {
   return fetchApi<MonthlyReport>("/api/reports/monthly", options);
+}
+
+export function getAttributionReport(options?: ApiRequestOptions) {
+  return fetchApi<AttributionReport>("/api/attribution/overview", options);
+}
+
+export function getResearchLabOverview(options?: ApiRequestOptions) {
+  return fetchApi<ResearchLabOverview>("/api/research-lab/overview", options);
 }
 
 export function getRiskCentreOverview(options?: ApiRequestOptions) {
