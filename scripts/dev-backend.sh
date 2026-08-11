@@ -45,7 +45,7 @@ echo "→ Starting Celery worker + beat..."
 PIDS+=($!)
 
 echo "→ Starting API at http://${API_HOST}:${API_PORT}"
-"$VENV/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT" &
+"$VENV/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT" --reload &
 PIDS+=($!)
 
 echo

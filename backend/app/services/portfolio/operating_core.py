@@ -43,6 +43,8 @@ from app.models import (
     TradeStatus,
 )
 from app.services.administration.system_log import record_system_log
+from app.services.market_data.fx_convert import price_in_portfolio_base
+from app.services.market_data.fx_refresh import load_fx_rates, refresh_fx_rates
 from app.services.market_data.quote_cache import get_mark_price, get_mark_prices
 from app.services.portfolio.calculations import (
     DEFAULT_RISK_LIMITS,
@@ -392,7 +394,14 @@ async def get_trade_journal(
 ) -> TradeJournalResponse:
     portfolio = await get_or_create_default_portfolio(session, user)
     trades = await _list_trades(session, portfolio.id, limit=limit)
-    entries = [_trade_journal_entry_response(trade) for trade in trades]
+    fx_rates = await _ensure_fx_rates(
+        session,
+        portfolio=portfolio,
+        instruments=[trade.instrument for trade in trades],
+    )
+    entries = [
+        _trade_journal_entry_response(trade, portfolio, fx_rates) for trade in trades
+    ]
     summary = _trade_journal_summary(entries)
 
     logger.info(
@@ -469,6 +478,10 @@ async def create_manual_trade(
     portfolio = await get_or_create_default_portfolio(session, user)
     instrument = await upsert_instrument(session, payload.instrument)
 
+    fx_rates = await _ensure_fx_rates(
+        session, portfolio=portfolio, instruments=[instrument]
+    )
+
     trade = Trade(
         portfolio_id=portfolio.id,
         instrument_id=instrument.id,
@@ -487,7 +500,7 @@ async def create_manual_trade(
     session.add(trade)
     await session.flush()
 
-    cash_values = _trade_cash_ledger_values(trade, instrument)
+    cash_values = _trade_cash_ledger_values(trade, instrument, portfolio, fx_rates)
     session.add(CashLedgerEntry(portfolio_id=portfolio.id, **cash_values))
 
     await _rebuild_positions_from_filled_trades(session, portfolio)
@@ -545,8 +558,18 @@ async def update_manual_trade(
     if trade is None:
         raise TradeNotFoundError("Trade was not found.")
 
-    old_cash_values = _trade_cash_ledger_values(trade, trade.instrument)
+    old_cash_values = _trade_cash_ledger_values(
+        trade,
+        trade.instrument,
+        portfolio,
+        await _ensure_fx_rates(
+            session, portfolio=portfolio, instruments=[trade.instrument]
+        ),
+    )
     instrument = await upsert_instrument(session, payload.instrument)
+    fx_rates = await _ensure_fx_rates(
+        session, portfolio=portfolio, instruments=[instrument]
+    )
 
     trade.instrument_id = instrument.id
     trade.instrument = instrument
@@ -560,7 +583,7 @@ async def update_manual_trade(
     trade.broker_reference = payload.broker_reference
     await session.flush()
 
-    await _sync_trade_cash_entry(session, portfolio, trade, instrument, old_cash_values)
+    await _sync_trade_cash_entry(session, portfolio, trade, instrument, old_cash_values, fx_rates)
     await _rebuild_positions_from_filled_trades(session, portfolio)
     await record_system_log(
         session,
@@ -670,6 +693,7 @@ async def _sync_trade_cash_entry(
     trade: Trade,
     instrument: Instrument,
     old_cash_values: dict,
+    fx_rates: dict,
 ) -> None:
     entry = await session.scalar(
         select(CashLedgerEntry).where(
@@ -684,7 +708,7 @@ async def _sync_trade_cash_entry(
             old_cash_values,
         )
 
-    new_values = _trade_cash_ledger_values(trade, instrument)
+    new_values = _trade_cash_ledger_values(trade, instrument, portfolio, fx_rates)
     if entry is None:
         session.add(CashLedgerEntry(portfolio_id=portfolio.id, **new_values))
         logger.info(
@@ -744,23 +768,30 @@ async def _rebuild_positions_from_filled_trades(
         )
     )
 
+    fx_rates = await _ensure_fx_rates(
+        session,
+        portfolio=portfolio,
+        instruments=[trade.instrument for trade in trades],
+    )
+
     states: dict[UUID, dict] = {}
     for trade in trades:
+        trade_price = _trade_price_in_base(trade, trade.instrument, portfolio, fx_rates)
         state = states.setdefault(
             trade.instrument_id,
             {
                 "instrument": trade.instrument,
                 "quantity": Decimal("0"),
                 "average_cost": Decimal("0"),
-                "last_price": trade.executed_price,
+                "last_price": trade_price,
                 "opened_at": trade.trade_date,
             },
         )
-        state["last_price"] = trade.executed_price
+        state["last_price"] = trade_price
 
         if trade.side == TradeSide.BUY.value:
             previous_cost = state["quantity"] * state["average_cost"]
-            new_cost = trade.quantity * trade.executed_price
+            new_cost = trade.quantity * trade_price
             new_quantity = state["quantity"] + trade.quantity
             state["average_cost"] = (previous_cost + new_cost) / new_quantity
             state["quantity"] = new_quantity
@@ -811,8 +842,14 @@ async def _rebuild_positions_from_filled_trades(
     )
 
 
-def _trade_cash_ledger_values(trade: Trade, instrument: Instrument) -> dict:
-    price = trade.executed_price or Decimal("0")
+def _trade_cash_ledger_values(
+    trade: Trade,
+    instrument: Instrument,
+    portfolio: Portfolio,
+    fx_rates: dict,
+) -> dict:
+    native_price = trade.executed_price or Decimal("0")
+    price = _trade_price_in_base(trade, instrument, portfolio, fx_rates)
     trade_value = money(trade.quantity * price)
     amount = -(trade_value + trade.fees)
     if trade.side == TradeSide.SELL.value:
@@ -821,14 +858,58 @@ def _trade_cash_ledger_values(trade: Trade, instrument: Instrument) -> dict:
     return {
         "entry_date": trade.trade_date.date(),
         "amount": amount,
-        "currency": instrument.currency,
+        "currency": portfolio.base_currency,
         "entry_type": f"trade_{trade.side}",
         "platform": trade.broker_reference or "manual",
         "description": (
-            f"{trade.side.upper()} {trade.quantity} {instrument.ticker} @ {price}"
+            f"{trade.side.upper()} {trade.quantity} {instrument.ticker} @ {native_price}"
         ),
         "source_reference": _trade_source_reference(trade.id),
     }
+
+
+async def _ensure_fx_rates(
+    session: AsyncSession,
+    *,
+    portfolio: Portfolio,
+    instruments: list[Instrument],
+) -> dict:
+    fx_rates = await load_fx_rates(session)
+    base = portfolio.base_currency.strip().upper()
+    needs_fx = any(
+        instrument.currency.strip().upper() != base for instrument in instruments
+    )
+    if needs_fx and fx_rates.get(("USD", "NGN")) is None:
+        await refresh_fx_rates(session)
+        fx_rates = await load_fx_rates(session)
+    return fx_rates
+
+
+def _trade_price_in_base(
+    trade: Trade,
+    instrument: Instrument,
+    portfolio: Portfolio,
+    fx_rates: dict,
+) -> Decimal:
+    native_price = trade.executed_price or Decimal("0")
+    converted = price_in_portfolio_base(
+        native_price,
+        instrument,
+        portfolio.base_currency,
+        fx_rates,
+    )
+    if converted is None:
+        logger.warning(
+            "trade_price_not_converted",
+            extra={
+                "trade_id": str(trade.id),
+                "ticker": instrument.ticker,
+                "instrument_currency": instrument.currency,
+                "portfolio_base": portfolio.base_currency,
+            },
+        )
+        return native_price
+    return converted
 
 
 def _trade_source_reference(trade_id: UUID) -> str:
@@ -963,13 +1044,24 @@ def _trade_response(trade: Trade) -> TradeResponse:
     )
 
 
-def _trade_journal_entry_response(trade: Trade) -> TradeJournalEntryResponse:
-    price = trade.executed_price or Decimal("0")
-    notional_value = money(trade.quantity * price)
-    cash_impact = _trade_cash_impact(trade, notional_value)
+def _trade_journal_entry_response(
+    trade: Trade,
+    portfolio: Portfolio,
+    fx_rates: dict,
+) -> TradeJournalEntryResponse:
+    native_price = trade.executed_price or Decimal("0")
+    base_price = _trade_price_in_base(trade, trade.instrument, portfolio, fx_rates)
+    notional_value = money(trade.quantity * base_price)
+    fees_in_base = money(
+        _amount_in_portfolio_base(
+            trade.fees, trade.instrument, portfolio, fx_rates
+        )
+    )
+    native_notional = trade.quantity * native_price
+    cash_impact = _trade_cash_impact(trade, notional_value, fees_in_base)
     fee_bps = None
-    if notional_value > 0:
-        fee_bps = ((trade.fees / notional_value) * Decimal("10000")).quantize(
+    if native_notional > 0:
+        fee_bps = ((trade.fees / native_notional) * Decimal("10000")).quantize(
             Decimal("0.01")
         )
 
@@ -987,6 +1079,7 @@ def _trade_journal_entry_response(trade: Trade) -> TradeJournalEntryResponse:
         broker_reference=trade.broker_reference,
         notional_value=notional_value,
         cash_impact=cash_impact,
+        fees_in_base=fees_in_base,
         fee_bps=fee_bps,
         has_risk_notes=bool(trade.risk_notes and trade.risk_notes.strip()),
     )
@@ -998,7 +1091,7 @@ def _trade_journal_summary(
     total_notional = money(
         sum((entry.notional_value for entry in entries), Decimal("0"))
     )
-    total_fees = money(sum((entry.fees for entry in entries), Decimal("0")))
+    total_fees = money(sum((entry.fees_in_base for entry in entries), Decimal("0")))
     net_cash_impact = money(sum((entry.cash_impact for entry in entries), Decimal("0")))
     fee_bps_values = [entry.fee_bps for entry in entries if entry.fee_bps is not None]
     average_fee_bps = None
@@ -1024,10 +1117,30 @@ def _trade_journal_summary(
     )
 
 
-def _trade_cash_impact(trade: Trade, notional_value: Decimal) -> Decimal:
+def _trade_cash_impact(
+    trade: Trade, notional_value: Decimal, fees: Decimal | None = None
+) -> Decimal:
+    trade_fees = trade.fees if fees is None else fees
     if trade.side == TradeSide.SELL.value:
-        return money(notional_value - trade.fees)
-    return money(-(notional_value + trade.fees))
+        return money(notional_value - trade_fees)
+    return money(-(notional_value + trade_fees))
+
+
+def _amount_in_portfolio_base(
+    amount: Decimal,
+    instrument: Instrument,
+    portfolio: Portfolio,
+    fx_rates: dict,
+) -> Decimal:
+    converted = price_in_portfolio_base(
+        amount,
+        instrument,
+        portfolio.base_currency,
+        fx_rates,
+    )
+    if converted is None:
+        return amount
+    return converted
 
 
 def _risk_limit_snapshot(limit: RiskLimit) -> RiskLimitSnapshot:

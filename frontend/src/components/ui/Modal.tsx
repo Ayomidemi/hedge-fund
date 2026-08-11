@@ -23,13 +23,18 @@ export function Modal({
 }: ModalProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
 
     const previousFocus = document.activeElement as HTMLElement | null;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
 
     document.body.style.overflow = "hidden";
@@ -41,7 +46,7 @@ export function Modal({
       document.removeEventListener("keydown", handleKeyDown);
       previousFocus?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -60,12 +65,12 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`relative z-10 w-full modal-panel ${
+        className={`relative z-10 flex max-h-[calc(100dvh-12rem)] w-full flex-col modal-panel ${
           size === "xl" ? "max-w-5xl" : size === "lg" ? "max-w-2xl" : "max-w-lg"
         }`}
       >
-        <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="border-b border-zinc-200 px-6 py-5 dark:border-zinc-800">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="shrink-0 border-b border-zinc-200 px-6 py-5 dark:border-zinc-800">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2
@@ -91,10 +96,10 @@ export function Modal({
             </div>
           </div>
 
-          <div className="px-6 py-5">{children}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
 
           {footer && (
-            <div className="flex items-center justify-end gap-3 border-t border-zinc-200 px-6 py-4 dark:border-zinc-800">
+            <div className="flex shrink-0 items-center justify-end gap-3 border-t border-zinc-200 px-6 py-4 dark:border-zinc-800">
               {footer}
             </div>
           )}

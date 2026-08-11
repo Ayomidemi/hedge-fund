@@ -3,6 +3,7 @@
 import { FormEvent, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { TickerCombobox } from "@/components/ticker/TickerCombobox";
 import { Modal } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/ToastProvider";
 import {
@@ -280,11 +281,11 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
           <WorkflowPanel eyebrow="Step 1" title="Ticker Intake">
             <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_220px]">
               <Field label="Ticker">
-                <input
+                <TickerCombobox
                   name="ticker"
                   required
                   autoFocus
-                  className={`${inputClassName} uppercase`}
+                  className={inputClassName}
                 />
               </Field>
               <Field label="Market">
@@ -573,11 +574,11 @@ function IdentityFields({ prefill }: { prefill: TickerPrefill | null }) {
   return (
     <div className="grid gap-4 lg:grid-cols-4">
       <Field label="Ticker">
-        <input
+        <TickerCombobox
           name="ticker"
           required
           defaultValue={prefill?.instrument.ticker}
-          className={`${inputClassName} uppercase`}
+          className={inputClassName}
         />
       </Field>
       <Field label="Name">

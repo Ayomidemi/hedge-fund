@@ -6,13 +6,17 @@ from math import sqrt
 from urllib.parse import urlsplit
 
 import httpx
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.operating_core import InstrumentCreate
 from app.api.schemas.ticker_intelligence import (
     TickerMetricsInput,
     TickerPrefillResponse,
+    TickerSuggestionResponse,
 )
 from app.core.config import settings
+from app.models import Instrument
 from app.services.ticker_intelligence.sec_fundamentals import (
     SecFundamentals,
     calculate_sec_fundamentals,
@@ -108,6 +112,41 @@ async def prefill_ticker(
         },
     )
     return response
+
+
+async def search_ticker_suggestions(
+    session: AsyncSession,
+    query: str,
+    *,
+    limit: int = 8,
+) -> list[TickerSuggestionResponse]:
+    normalized_query = query.strip().upper()
+    if len(normalized_query) < 1:
+        return []
+
+    pattern = f"%{normalized_query}%"
+    rows = await session.scalars(
+        select(Instrument)
+        .where(or_(Instrument.ticker.ilike(pattern), Instrument.name.ilike(pattern)))
+        .order_by(
+            Instrument.ticker.ilike(f"{normalized_query}%").desc(),
+            Instrument.ticker.asc(),
+        )
+        .limit(limit)
+    )
+
+    return [
+        TickerSuggestionResponse(
+            ticker=instrument.ticker,
+            name=instrument.name,
+            asset_class=instrument.asset_class,
+            exchange=instrument.exchange,
+            currency=instrument.currency,
+            sector=instrument.sector,
+            industry=instrument.industry,
+        )
+        for instrument in rows
+    ]
 
 
 def resolve_ticker(ticker: str, market_hint: str | None = None) -> TickerResolution:

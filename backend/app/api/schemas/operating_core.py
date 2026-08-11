@@ -163,6 +163,7 @@ class TradeResponse(BaseModel):
 class TradeJournalEntryResponse(TradeResponse):
     notional_value: Decimal
     cash_impact: Decimal
+    fees_in_base: Decimal
     fee_bps: Decimal | None
     has_risk_notes: bool
 

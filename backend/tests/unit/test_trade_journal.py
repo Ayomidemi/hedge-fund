@@ -14,6 +14,10 @@ from app.services.portfolio.operating_core import (
 )
 
 
+def _portfolio():
+    return type("PortfolioLike", (), {"base_currency": "USD"})()
+
+
 class TradeJournalTests(TestCase):
     def test_trade_journal_summary_aggregates_execution_metrics(self) -> None:
         instrument = InstrumentResponse(
@@ -44,6 +48,7 @@ class TradeJournalTests(TestCase):
                     broker_reference=None,
                     notional_value=Decimal("200"),
                     cash_impact=Decimal("-201"),
+                    fees_in_base=Decimal("1"),
                     fee_bps=Decimal("50"),
                     has_risk_notes=False,
                 ),
@@ -61,6 +66,7 @@ class TradeJournalTests(TestCase):
                     broker_reference="T-1",
                     notional_value=Decimal("110"),
                     cash_impact=Decimal("109.45"),
+                    fees_in_base=Decimal("0.55"),
                     fee_bps=Decimal("50"),
                     has_risk_notes=True,
                 ),
@@ -104,7 +110,7 @@ class TradeJournalTests(TestCase):
             },
         )()
 
-        values = _trade_cash_ledger_values(trade, instrument)
+        values = _trade_cash_ledger_values(trade, instrument, _portfolio(), {})
 
         self.assertEqual(values["entry_date"], trade_time.date())
         self.assertEqual(values["amount"], Decimal("-201.25"))
@@ -140,7 +146,7 @@ class TradeJournalTests(TestCase):
             },
         )()
 
-        values = _trade_cash_ledger_values(trade, instrument)
+        values = _trade_cash_ledger_values(trade, instrument, _portfolio(), {})
 
         self.assertEqual(values["amount"], Decimal("109.45"))
         self.assertEqual(values["entry_type"], "trade_sell")

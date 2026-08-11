@@ -16,6 +16,35 @@ def is_nigerian_instrument(instrument: Instrument) -> bool:
     return ticker.endswith(".NG") or exchange in _NG_EXCHANGES
 
 
+def price_in_portfolio_base(
+    price: Decimal,
+    instrument: Instrument,
+    portfolio_base_currency: str,
+    fx_rates: dict[tuple[str, str], FxRate],
+) -> Decimal | None:
+    """Convert a native trade price into the portfolio base currency."""
+    base = portfolio_base_currency.strip().upper()
+    currency = instrument.currency.strip().upper()
+
+    if currency == base:
+        return price
+
+    if currency == "NGN" and (
+        is_nigerian_instrument(instrument) or currency == "NGN"
+    ):
+        return convert_to_usd(price, "NGN", fx_rates)
+
+    logger.warning(
+        "price_conversion_unsupported",
+        extra={
+            "ticker_symbol": instrument.ticker,
+            "instrument_currency": currency,
+            "portfolio_base": base,
+        },
+    )
+    return None
+
+
 def convert_to_usd(
     amount: Decimal,
     currency: str,

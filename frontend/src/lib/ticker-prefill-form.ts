@@ -9,7 +9,7 @@ export const TICKER_PREFILL_DEBOUNCE_MS = 600;
 export type InstrumentFormValues = {
   ticker: string;
   name: string;
-  asset_class: string;
+  asset_class: TickerPrefill["instrument"]["asset_class"];
   exchange: string;
   currency: string;
   sector: string;

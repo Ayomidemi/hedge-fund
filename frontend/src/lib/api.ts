@@ -183,6 +183,7 @@ export type Trade = {
 export type TradeJournalEntry = Trade & {
   notional_value: string;
   cash_impact: string;
+  fees_in_base: string;
   fee_bps: string | null;
   has_risk_notes: boolean;
 };
@@ -533,6 +534,8 @@ export type TickerPrefill = {
   source_warnings: string[];
   raw_sources: Record<string, unknown>;
 };
+
+export type TickerSuggestion = TickerPrefill["instrument"];
 
 export type ComparativeMetric = {
   metric: string;
@@ -1249,6 +1252,18 @@ export function getTickerPrefill(
     market && market !== "auto" ? `?market=${encodeURIComponent(market)}` : "";
   return fetchApi<TickerPrefill>(
     `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill${marketQuery}`,
+    options,
+  );
+}
+
+export function getTickerSuggestions(
+  query: string,
+  limit = 8,
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams({ query, limit: String(limit) });
+  return fetchApi<TickerSuggestion[]>(
+    `/api/ticker-intelligence/suggestions?${search.toString()}`,
     options,
   );
 }

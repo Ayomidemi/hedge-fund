@@ -130,6 +130,21 @@ class TickerMemoSummaryResponse(BaseModel):
         return value.upper()
 
 
+class TickerSuggestionResponse(BaseModel):
+    ticker: str
+    name: str
+    asset_class: str
+    exchange: str | None = None
+    currency: str
+    sector: str | None = None
+    industry: str | None = None
+
+    @field_validator("ticker")
+    @classmethod
+    def uppercase_suggestion_ticker(cls, value: str) -> str:
+        return value.upper()
+
+
 class YahooPriceBackfillCreate(BaseModel):
     ticker: str = Field(min_length=1, max_length=32)
     name: str | None = Field(default=None, max_length=255)

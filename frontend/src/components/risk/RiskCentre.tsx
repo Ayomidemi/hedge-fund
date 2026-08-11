@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { TickerCombobox } from "@/components/ticker/TickerCombobox";
+import { HorizontalBarPlot } from "@/components/ui/plots";
 import {
   captureRiskSnapshot,
   createCustomStressTest,
@@ -360,17 +362,31 @@ function StressPanel({
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_0.72fr]">
       <Panel title="Stress Results" subtitle="NAV impact under standard and custom shocks">
-        <DataTable
-          headers={["Scenario", "NAV after", "Impact", "Severity", "Worst hit"]}
-          rows={allStress.map((stress) => [
-            stress.scenario_name,
-            money(stress.nav_after),
-            `${money(stress.nav_impact)} (${pct(stress.nav_impact_pct)}%)`,
-            formatLabel(stress.severity),
-            stress.worst_positions[0]?.ticker ?? "-",
-          ])}
-          empty="No stress tests"
-        />
+        <div className="space-y-5">
+          <HorizontalBarPlot
+            data={allStress.map((stress) => ({
+              label: stress.scenario_name,
+              value: Number(stress.nav_impact_pct),
+              valueLabel: `${pct(stress.nav_impact_pct)}%`,
+              detail: stress.worst_positions[0]?.ticker
+                ? `Worst hit: ${stress.worst_positions[0].ticker}`
+                : undefined,
+              tone: Number(stress.nav_impact_pct) < 0 ? "negative" : "positive",
+            }))}
+            empty="No stress tests"
+          />
+          <DataTable
+            headers={["Scenario", "NAV after", "Impact", "Severity", "Worst hit"]}
+            rows={allStress.map((stress) => [
+              stress.scenario_name,
+              money(stress.nav_after),
+              `${money(stress.nav_impact)} (${pct(stress.nav_impact_pct)}%)`,
+              formatLabel(stress.severity),
+              stress.worst_positions[0]?.ticker ?? "-",
+            ])}
+            empty="No stress tests"
+          />
+        </div>
       </Panel>
 
       <Panel title="Custom Scenario" subtitle="Run an immediate shock test">
@@ -388,7 +404,7 @@ function StressPanel({
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Ticker">
-              <input name="ticker" className={inputClass} />
+              <TickerCombobox name="ticker" className={inputClass} />
             </Field>
             <Field label="Ticker Shock %">
               <input name="ticker_shock_pct" className={inputClass} />
@@ -429,7 +445,7 @@ function PreTradePanel({
         <form onSubmit={onSubmit} className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Ticker">
-              <input name="ticker" required className={`${inputClass} uppercase`} />
+              <TickerCombobox name="ticker" required className={inputClass} />
             </Field>
             <Field label="Name">
               <input name="name" className={inputClass} />
@@ -535,23 +551,16 @@ function BucketList({
       <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
         {title}
       </p>
-      <div className="space-y-2">
-        {buckets.map((bucket) => (
-          <div key={bucket.name}>
-            <div className="mb-1 flex items-center justify-between gap-3 text-sm">
-              <span>{formatLabel(bucket.name)}</span>
-              <span className="font-mono">{pct(bucket.exposure_pct)}%</span>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900">
-              <div
-                className="h-full bg-zinc-950 dark:bg-zinc-100"
-                style={{ width: `${Math.min(Math.max(Number(bucket.exposure_pct), 0), 100)}%` }}
-              />
-            </div>
-          </div>
-        ))}
-        {buckets.length === 0 && <p className="text-sm text-zinc-500">No exposure</p>}
-      </div>
+      <HorizontalBarPlot
+        data={buckets.map((bucket) => ({
+          label: formatLabel(bucket.name),
+          value: Number(bucket.exposure_pct),
+          valueLabel: `${pct(bucket.exposure_pct)}%`,
+          detail: money(bucket.market_value),
+          tone: "neutral",
+        }))}
+        empty="No exposure"
+      />
     </div>
   );
 }

@@ -8,13 +8,14 @@ import {
   inputClassName,
 } from "@/components/ui/form-styles";
 import type { TradeJournal as TradeJournalData, TradeJournalEntry } from "@/lib/api";
+import { formatTradeMoney } from "@/lib/ticker-prefill-form";
 
 type TradeJournalProps = {
   journal: TradeJournalData | null;
   isUnavailable: boolean;
 };
 
-const currency = new Intl.NumberFormat("en-US", {
+const usdCurrency = new Intl.NumberFormat("en-US", {
   currency: "USD",
   style: "currency",
 });
@@ -59,6 +60,8 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
       </div>
     );
   }
+
+  const baseCurrency = journal.portfolio.base_currency;
 
   const metrics = [
     { label: "Trades", value: String(journal.summary.total_trades) },
@@ -143,12 +146,13 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
                   <tr className="border-b border-zinc-200 dark:border-zinc-800">
                     <Th>Date</Th>
                     <Th>Ticker</Th>
+                    <Th>CCY</Th>
                     <Th>Side</Th>
                     <Th>Quantity</Th>
                     <Th>Price</Th>
-                    <Th>Notional</Th>
+                    <Th>Notional ({baseCurrency})</Th>
                     <Th>Fees</Th>
-                    <Th>Cash impact</Th>
+                    <Th>Cash impact ({baseCurrency})</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -166,22 +170,34 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
                       >
                         <Td>{formatDate(trade.trade_date)}</Td>
                         <Td emphasis>{trade.instrument.ticker}</Td>
+                        <Td>{trade.instrument.currency}</Td>
                         <Td>
                           <SidePill side={trade.side} />
                         </Td>
                         <Td>{Number(trade.quantity).toLocaleString()}</Td>
                         <Td align="right">
-                          {trade.executed_price ? money(trade.executed_price) : "-"}
+                          {trade.executed_price
+                            ? formatTradeMoney(
+                                trade.executed_price,
+                                trade.instrument.currency,
+                              )
+                            : "-"}
                         </Td>
-                        <Td align="right">{money(trade.notional_value)}</Td>
-                        <Td align="right">{money(trade.fees)}</Td>
-                        <Td align="right">{money(trade.cash_impact)}</Td>
+                        <Td align="right">
+                          {formatTradeMoney(trade.notional_value, baseCurrency)}
+                        </Td>
+                        <Td align="right">
+                          {formatTradeMoney(trade.fees, trade.instrument.currency)}
+                        </Td>
+                        <Td align="right">
+                          {formatTradeMoney(trade.cash_impact, baseCurrency)}
+                        </Td>
                       </tr>
                     );
                   })}
                   {filteredTrades.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-5 py-10 text-center text-sm text-zinc-500">
+                      <td colSpan={9} className="px-5 py-10 text-center text-sm text-zinc-500">
                         No trades match this filter.
                       </td>
                     </tr>
@@ -238,7 +254,9 @@ function TradeDetail({
           <h3 className="mt-1 text-xl font-semibold tracking-tight">
             {trade.instrument.ticker}
           </h3>
-          <p className="mt-1 text-sm text-zinc-500">{trade.instrument.name}</p>
+          <p className="mt-1 text-sm text-zinc-500">
+            {trade.instrument.name} · {trade.instrument.currency}
+          </p>
         </div>
         <SidePill side={trade.side} />
       </div>
@@ -252,8 +270,17 @@ function TradeDetail({
       </button>
 
       <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
+        <Metric label="Currency" value={trade.instrument.currency} />
         <Metric label="Status" value={formatLabel(trade.status)} />
         <Metric label="Exchange" value={trade.instrument.exchange || "-"} />
+        <Metric
+          label="Executed price"
+          value={
+            trade.executed_price
+              ? formatTradeMoney(trade.executed_price, trade.instrument.currency)
+              : "-"
+          }
+        />
         <Metric label="Fee bps" value={trade.fee_bps ? `${trade.fee_bps} bps` : "-"} />
         <Metric label="Broker ref" value={trade.broker_reference || "-"} />
       </dl>
@@ -332,7 +359,7 @@ function Td({
 }
 
 function money(value: string) {
-  return currency.format(Number(value));
+  return usdCurrency.format(Number(value));
 }
 
 function formatDate(value: string) {

@@ -63,7 +63,22 @@ async def _run() -> None:
 async def _refresh_cycle(session: AsyncSession) -> None:
     started_at = datetime.now(timezone.utc)
 
+    # FX rates are needed around the clock for NGN → USD conversion, even when
+    # US equity quotes are skipped outside regular hours.
+    fx_result = await refresh_fx_rates(session)
+
     if PRICE_MARKET_HOURS_ONLY and not is_us_market_open(started_at):
+        await session.commit()
+        if fx_result.rate is not None:
+            await publish_event(
+                fx_rate_updated_event(
+                    base_currency=fx_result.rate.base_currency,
+                    quote_currency=fx_result.rate.quote_currency,
+                    rate=str(fx_result.rate.rate),
+                    source=fx_result.rate.source,
+                    as_of=fx_result.rate.as_of.isoformat(),
+                )
+            )
         logger.info("price_refresh_skipped_market_closed")
         return
 
@@ -76,7 +91,6 @@ async def _refresh_cycle(session: AsyncSession) -> None:
     await session.flush()
 
     try:
-        fx_result = await refresh_fx_rates(session)
         universe = await build_price_universe(session)
         ingestion = await ingest_quotes(session, universe)
         mark_result = await mark_open_positions(session)

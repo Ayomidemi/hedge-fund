@@ -27,6 +27,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerMemoResponse,
     TickerMemoSummaryResponse,
     TickerPrefillResponse,
+    TickerSuggestionResponse,
     TrainingLabelGenerateCreate,
     TrainingLabelResponse,
     YahooPriceBackfillCreate,
@@ -47,6 +48,7 @@ from app.services.market_data.quote_cache import get_cached_quote_price
 from app.services.ticker_intelligence.market_data import (
     MarketDataUnavailableError,
     prefill_ticker,
+    search_ticker_suggestions,
 )
 from app.services.ticker_intelligence.ml_training import (
     MLTrainingDataUnavailableError,
@@ -278,6 +280,16 @@ async def read_ticker_memo(
             detail="Ticker memo not found.",
         )
     return memo
+
+
+@router.get("/suggestions", response_model=list[TickerSuggestionResponse])
+async def read_ticker_suggestions(
+    query: str = Query(min_length=1, max_length=64),
+    limit: int = Query(default=8, ge=1, le=20),
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[TickerSuggestionResponse]:
+    return await search_ticker_suggestions(session, query, limit=limit)
 
 
 @router.get("/{ticker}/prefill", response_model=TickerPrefillResponse)

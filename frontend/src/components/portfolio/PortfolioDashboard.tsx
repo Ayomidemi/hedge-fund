@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ManualTradeModal } from "@/components/portfolio/ManualTradeModal";
+import { HorizontalBarPlot } from "@/components/ui/plots";
 import {
   CashLedgerTypeBadge,
   formatPlatformLabel,
@@ -261,22 +262,16 @@ function ExposureList({
   return (
     <div>
       <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{title}</p>
-      <div className="mt-3 space-y-3">
-        {buckets.length === 0 && <p className="text-sm text-zinc-500">Nothing allocated yet</p>}
-        {buckets.map((bucket) => (
-          <div key={bucket.name}>
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-medium text-zinc-700 dark:text-zinc-300">{bucket.name}</span>
-              <span className="tabular-nums text-zinc-500">{pct(bucket.exposure_pct)}</span>
-            </div>
-            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-              <div
-                className="h-full rounded-full bg-zinc-900 dark:bg-zinc-100"
-                style={{ width: `${Math.min(Number(bucket.exposure_pct), 100)}%` }}
-              />
-            </div>
-          </div>
-        ))}
+      <div className="mt-3">
+        <HorizontalBarPlot
+          data={buckets.map((bucket) => ({
+            label: bucket.name,
+            value: Number(bucket.exposure_pct),
+            valueLabel: pct(bucket.exposure_pct),
+            tone: "neutral",
+          }))}
+          empty="Nothing allocated yet"
+        />
       </div>
     </div>
   );
