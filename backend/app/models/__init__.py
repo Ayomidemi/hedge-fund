@@ -660,6 +660,62 @@ class TickerMemo(Base, TimestampMixin):
     instrument: Mapped["Instrument"] = relationship(back_populates="ticker_memos")
 
 
+class Opportunity(Base, TimestampMixin):
+    __tablename__ = "opportunities"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    source_memo_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ticker_memos.id"), index=True
+    )
+    source_recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("model_recommendations.id"), index=True
+    )
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="discovered"
+    )
+    priority: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
+    thesis: Mapped[str] = mapped_column(Text, nullable=False)
+    research_question: Mapped[str | None] = mapped_column(Text)
+    next_action: Mapped[str | None] = mapped_column(Text)
+    time_horizon: Mapped[str | None] = mapped_column(String(64))
+    conviction_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    expected_edge_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    target_weight: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    review_by: Mapped[date | None] = mapped_column(Date)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+    status_history: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+
+    instrument: Mapped["Instrument"] = relationship()
+    source_memo: Mapped["TickerMemo | None"] = relationship(
+        foreign_keys=[source_memo_id]
+    )
+    source_recommendation: Mapped["ModelRecommendation | None"] = relationship(
+        foreign_keys=[source_recommendation_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "source_memo_id",
+            name="uq_opportunities_owner_source_memo",
+        ),
+        Index("ix_opportunities_owner_status", "owner_user_id", "status"),
+        Index("ix_opportunities_owner_priority", "owner_user_id", "priority"),
+    )
+
+
 class HumanModelDecision(Base, TimestampMixin):
     __tablename__ = "human_model_decisions"
 

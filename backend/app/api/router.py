@@ -4,6 +4,7 @@ from app.api.routes import (
     auth,
     health,
     operating_core,
+    opportunity_queue,
     reports,
     risk_centre,
     strategy_pods,
@@ -14,6 +15,7 @@ api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
 api_router.include_router(auth.router, tags=["auth"])
 api_router.include_router(operating_core.router, tags=["operating-core"])
+api_router.include_router(opportunity_queue.router, tags=["opportunity-queue"])
 api_router.include_router(ticker_intelligence.router, tags=["ticker-intelligence"])
 api_router.include_router(reports.router, tags=["reports"])
 api_router.include_router(risk_centre.router, tags=["risk-centre"])

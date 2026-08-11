@@ -205,6 +205,96 @@ export type TradeJournal = {
   trades: TradeJournalEntry[];
 };
 
+export type OpportunityStatus =
+  | "discovered"
+  | "screening"
+  | "research"
+  | "watchlist"
+  | "candidate"
+  | "approved"
+  | "active_position"
+  | "exited"
+  | "post_mortem"
+  | "rejected";
+
+export type OpportunityPriority = "low" | "medium" | "high" | "urgent";
+
+export type Opportunity = {
+  id: string;
+  instrument: Instrument;
+  source_memo_id: string | null;
+  source_recommendation_id: string | null;
+  discovered_at: string;
+  status: OpportunityStatus;
+  priority: OpportunityPriority;
+  thesis: string;
+  research_question: string | null;
+  next_action: string | null;
+  time_horizon: string | null;
+  conviction_score: string | null;
+  expected_edge_pct: string | null;
+  target_weight: string | null;
+  review_by: string | null;
+  closed_at: string | null;
+  notes: string | null;
+  status_history: Record<string, unknown>[];
+  latest_action: string | null;
+  latest_composite_score: string | null;
+  latest_confidence_score: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OpportunityCandidate = {
+  memo_id: string;
+  recommendation_id: string | null;
+  ticker: string;
+  name: string;
+  asset_class: string;
+  memo_date: string;
+  classification: string;
+  executive_view: string;
+  action: string | null;
+  composite_score: string | null;
+  confidence_score: string | null;
+};
+
+export type OpportunityQueueSummary = {
+  total: number;
+  active: number;
+  high_priority: number;
+  approved: number;
+  candidates: number;
+  next_review_by: string | null;
+  status_counts: Record<string, number>;
+};
+
+export type OpportunityQueue = {
+  generated_at: string;
+  summary: OpportunityQueueSummary;
+  opportunities: Opportunity[];
+  candidates: OpportunityCandidate[];
+  status_order: OpportunityStatus[];
+};
+
+export type OpportunityCreateInput = {
+  source_memo_id?: string;
+  instrument?: ManualTradeInput["instrument"];
+  status?: OpportunityStatus;
+  priority?: OpportunityPriority;
+  thesis?: string;
+  research_question?: string;
+  next_action?: string;
+  time_horizon?: string;
+  conviction_score?: string;
+  expected_edge_pct?: string;
+  target_weight?: string;
+  review_by?: string;
+  notes?: string;
+};
+
+export type OpportunityUpdateInput = Partial<Omit<OpportunityCreateInput, "source_memo_id" | "instrument">>;
+
 export type RiskLimit = {
   id: string;
   name: string;
@@ -857,6 +947,33 @@ export function createManualTrade(payload: ManualTradeInput, options?: ApiReques
 
 export function getTradeJournal(options?: ApiRequestOptions) {
   return fetchApi<TradeJournal>("/api/operating-core/trades", options);
+}
+
+export function getOpportunityQueue(options?: ApiRequestOptions) {
+  return fetchApi<OpportunityQueue>("/api/opportunity-queue", options);
+}
+
+export function createOpportunity(
+  payload: OpportunityCreateInput,
+  options?: ApiRequestOptions,
+) {
+  return postApi<Opportunity, OpportunityCreateInput>(
+    "/api/opportunity-queue",
+    payload,
+    options,
+  );
+}
+
+export function updateOpportunity(
+  opportunityId: string,
+  payload: OpportunityUpdateInput,
+  options?: ApiRequestOptions,
+) {
+  return patchApi<Opportunity, OpportunityUpdateInput>(
+    `/api/opportunity-queue/${encodeURIComponent(opportunityId)}`,
+    payload,
+    options,
+  );
 }
 
 export function getRecentTickerMemos(options?: ApiRequestOptions) {
