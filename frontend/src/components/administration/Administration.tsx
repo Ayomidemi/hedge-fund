@@ -2,7 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { buttonSecondaryClassName, inputClassName } from "@/components/ui/form-styles";
-import { getAdministrationOverview, type AdministrationOverview } from "@/lib/api";
+import {
+  getAdministrationLogs,
+  getAdministrationOverview,
+  type AdministrationOverview,
+  type SystemLogList,
+} from "@/lib/api";
 
 type AdministrationProps = {
   initialOverview: AdministrationOverview | null;
@@ -10,6 +15,8 @@ type AdministrationProps = {
 };
 
 type AdminTab = "logs" | "live" | "models" | "data" | "rules" | "policies";
+
+const LOG_PAGE_SIZE = 25;
 
 const tabs: { key: AdminTab; label: string }[] = [
   { key: "logs", label: "System logs" },
@@ -38,16 +45,34 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 });
 
+function buildInitialLogData(overview: AdministrationOverview): SystemLogList {
+  const totalPages =
+    overview.system_log_total > 0
+      ? Math.ceil(overview.system_log_total / LOG_PAGE_SIZE)
+      : 1;
+  return {
+    items: overview.system_logs,
+    total: overview.system_log_total,
+    page: 1,
+    page_size: LOG_PAGE_SIZE,
+    total_pages: totalPages,
+  };
+}
+
 export function Administration({
   initialOverview,
   isUnavailable,
 }: AdministrationProps) {
   const [overview, setOverview] = useState(initialOverview);
+  const [logData, setLogData] = useState<SystemLogList | null>(() =>
+    initialOverview ? buildInitialLogData(initialOverview) : null,
+  );
   const [activeTab, setActiveTab] = useState<AdminTab>("logs");
   const [logCategory, setLogCategory] = useState("all");
   const [loading, setLoading] = useState(false);
+  const [logsLoading, setLogsLoading] = useState(false);
 
-  const logCount = overview?.system_logs.length ?? 0;
+  const logCount = overview?.system_log_total ?? logData?.total ?? 0;
 
   const metrics = useMemo(() => {
     if (!overview) return [];
@@ -64,20 +89,35 @@ export function Administration({
     ];
   }, [logCount, overview]);
 
-  async function refreshLogs(category = logCategory) {
-    setLoading(true);
+  async function fetchLogs(page: number, category = logCategory) {
+    setLogsLoading(true);
     try {
-      const next = await getAdministrationOverview({
-        log_limit: 100,
+      const next = await getAdministrationLogs({
+        page,
+        page_size: LOG_PAGE_SIZE,
         log_category: category,
       });
+      setLogData(next);
+      setOverview((current) =>
+        current ? { ...current, system_log_total: next.total } : current,
+      );
+    } finally {
+      setLogsLoading(false);
+    }
+  }
+
+  async function refreshAll() {
+    setLoading(true);
+    try {
+      const next = await getAdministrationOverview();
       setOverview(next);
+      await fetchLogs(1, logCategory);
     } finally {
       setLoading(false);
     }
   }
 
-  if (!overview) {
+  if (!overview || !logData) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         {isUnavailable
@@ -102,11 +142,11 @@ export function Administration({
           </div>
           <button
             type="button"
-            onClick={() => refreshLogs()}
-            disabled={loading}
+            onClick={() => void refreshAll()}
+            disabled={loading || logsLoading}
             className={buttonSecondaryClassName}
           >
-            {loading ? "Refreshing" : "Refresh"}
+            {loading || logsLoading ? "Refreshing" : "Refresh"}
           </button>
         </div>
 
@@ -141,13 +181,14 @@ export function Administration({
 
       {activeTab === "logs" && (
         <LogsPanel
-          logs={overview.system_logs}
+          logData={logData}
           logCategory={logCategory}
-          loading={loading}
+          loading={logsLoading}
           onCategoryChange={(category) => {
             setLogCategory(category);
-            void refreshLogs(category);
+            void fetchLogs(1, category);
           }}
+          onPageChange={(page) => void fetchLogs(page)}
         />
       )}
       {activeTab === "live" && (
@@ -165,16 +206,22 @@ export function Administration({
 }
 
 function LogsPanel({
-  logs,
+  logData,
   logCategory,
   loading,
   onCategoryChange,
+  onPageChange,
 }: {
-  logs: AdministrationOverview["system_logs"];
+  logData: SystemLogList;
   logCategory: string;
   loading: boolean;
   onCategoryChange: (category: string) => void;
+  onPageChange: (page: number) => void;
 }) {
+  const { items: logs, page, total, total_pages: totalPages, page_size: pageSize } = logData;
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = Math.min(page * pageSize, total);
+
   return (
     <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
@@ -234,6 +281,35 @@ function LogsPanel({
           </p>
         )}
       </div>
+
+      {total > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <p className="text-sm text-zinc-500">
+            Showing {rangeStart}–{rangeEnd} of {total.toLocaleString()}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onPageChange(page - 1)}
+              disabled={loading || page <= 1}
+              className={buttonSecondaryClassName}
+            >
+              Previous
+            </button>
+            <span className="px-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => onPageChange(page + 1)}
+              disabled={loading || page >= totalPages}
+              className={buttonSecondaryClassName}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

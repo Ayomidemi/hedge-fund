@@ -31,7 +31,10 @@ from app.models import (
     TickerTrainingLabel,
 )
 from app.services.portfolio.operating_core import get_dashboard
-from app.services.ticker_intelligence.ml_training import list_predictive_model_comparison
+from app.services.ticker_intelligence.ml_training import (
+    HMM_REGIME_MODEL_NAME,
+    list_predictive_model_comparison,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +59,8 @@ async def build_research_lab_overview(
     notebooks = await _build_notebooks(session, user)
     models = await _build_models(session)
     experiments = await _build_experiments(session)
-    backtests = _build_backtests(models, feature_sets)
+    has_regime_model = await _has_regime_model(session)
+    backtests = _build_backtests(models, feature_sets, has_regime_model)
     active_opportunity_count = await _active_opportunity_count(session, user)
     validation_checks = _build_validation_checks(
         datasets=datasets,
@@ -70,6 +74,7 @@ async def build_research_lab_overview(
         models=models,
         notebooks=notebooks,
         active_opportunity_count=active_opportunity_count,
+        has_regime_model=has_regime_model,
     )
     warning_count = len(
         [check for check in validation_checks if check.status in {"warning", "failed"}]
@@ -118,7 +123,8 @@ async def build_research_lab_overview(
         notes=[
             "Research Lab is a live read model over the current research system.",
             "Datasets and models are shared research infrastructure; memos and opportunities are scoped to the signed-in user.",
-            "Backtest runs are executable through the ticker-intelligence ML endpoints; persistent run history can be added next.",
+            "Backtest runs are executable from the Backtests tab; persistent run history can be added next.",
+            "The Regime tab fits and displays the HMM market-regime model used by Strategy Pods.",
         ],
     )
 
@@ -352,6 +358,7 @@ async def _build_experiments(session: AsyncSession) -> list[ResearchExperimentRe
 def _build_backtests(
     models: list[ResearchModelResponse],
     feature_sets: list[ResearchFeatureSetResponse],
+    has_regime_model: bool,
 ) -> list[ResearchBacktestResponse]:
     responses = [
         ResearchBacktestResponse(
@@ -368,7 +375,7 @@ def _build_backtests(
                 else None
             ),
             notes=(
-                "Run through /api/ticker-intelligence/ml/backtests/factor."
+                "Run from the Backtests tab once feature snapshots and labels exist."
                 if feature_sets
                 else "Needs feature snapshots and training labels before it can run."
             ),
@@ -376,13 +383,17 @@ def _build_backtests(
         ResearchBacktestResponse(
             id="regime-filter-review",
             name="Regime filter review",
-            status="design",
+            status="ready" if has_regime_model else "blocked",
             strategy="Compare model signals with the latest market-regime state before allocation.",
             benchmark="SPY",
             cost_model="No trading costs until a portfolio rule is defined",
             latest_run_at=None,
-            primary_metric=None,
-            notes="Uses HMM regime context once regime snapshots are captured.",
+            primary_metric="Current regime confidence" if has_regime_model else None,
+            notes=(
+                "Review the latest HMM regime state on the Regime tab before sizing risk."
+                if has_regime_model
+                else "Fit the HMM regime model on the Regime tab first."
+            ),
         ),
     ]
     return responses
@@ -501,6 +512,7 @@ def _build_action_items(
     models: list[ResearchModelResponse],
     notebooks: list[ResearchNotebookResponse],
     active_opportunity_count: int,
+    has_regime_model: bool,
 ) -> list[ResearchActionItemResponse]:
     actions: list[ResearchActionItemResponse] = []
     price_dataset = _dataset_by_key(datasets, "market_price_bars")
@@ -550,6 +562,17 @@ def _build_action_items(
                 action_path="/research-lab",
             )
         )
+    if not has_regime_model:
+        actions.append(
+            ResearchActionItemResponse(
+                key="fit_regime_model",
+                label="Fit market regime model",
+                priority="medium",
+                owner_area="Macro research",
+                detail="Fit the HMM regime classifier on SPY before Strategy Pods can guide risk posture.",
+                action_path="/research-lab?tab=regime",
+            )
+        )
     if active_opportunity_count > 0:
         actions.append(
             ResearchActionItemResponse(
@@ -581,11 +604,18 @@ def _build_action_items(
                 priority="medium",
                 owner_area="Backtesting",
                 detail="The research data pipeline is ready for walk-forward validation.",
-                action_path="/research-lab",
+                action_path="/research-lab?tab=backtests",
             )
         )
 
     return actions[:6]
+
+
+async def _has_regime_model(session: AsyncSession) -> bool:
+    count = await session.scalar(
+        select(func.count(ModelVersion.id)).where(ModelVersion.name == HMM_REGIME_MODEL_NAME)
+    )
+    return int(count or 0) > 0
 
 
 async def _active_opportunity_count(

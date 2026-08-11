@@ -18,6 +18,14 @@ class SystemLogEntryResponse(BaseModel):
     created_at: datetime
 
 
+class SystemLogListResponse(BaseModel):
+    items: list[SystemLogEntryResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class AdministrationModelVersionResponse(BaseModel):
     id: UUID
     name: str
@@ -86,6 +94,7 @@ class AdministrationOverviewResponse(BaseModel):
     generated_at: datetime
     portfolio_name: str
     system_logs: list[SystemLogEntryResponse]
+    system_log_total: int
     model_versions: list[AdministrationModelVersionResponse]
     data_versions: list[AdministrationDataVersionResponse]
     portfolio_rules: list[AdministrationPortfolioRuleResponse]

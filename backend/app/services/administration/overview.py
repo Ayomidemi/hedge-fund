@@ -13,6 +13,7 @@ from app.api.schemas.administration import (
     FxRateResponse,
     PriceRefreshRunResponse,
     SystemLogEntryResponse,
+    SystemLogListResponse,
 )
 from app.core.auth import AuthenticatedUser
 from app.models import (
@@ -25,24 +26,53 @@ from app.models import (
     SystemLogEntry,
     TickerFeatureSnapshot,
 )
-from app.services.administration.system_log import list_system_logs
+from app.services.administration.system_log import count_system_logs, list_system_logs
 from app.services.portfolio.operating_core import get_or_create_default_portfolio
 
 logger = logging.getLogger(__name__)
+
+
+async def build_system_log_page(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    *,
+    page: int = 1,
+    page_size: int = 25,
+    category: str | None = None,
+) -> SystemLogListResponse:
+    total = await count_system_logs(session, user, category=category)
+    offset = (page - 1) * page_size
+    logs = await list_system_logs(
+        session,
+        user,
+        limit=page_size,
+        offset=offset,
+        category=category,
+    )
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    return SystemLogListResponse(
+        items=[_log_response(entry) for entry in logs],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 async def build_administration_overview(
     session: AsyncSession,
     user: AuthenticatedUser,
     *,
-    log_limit: int = 100,
+    log_limit: int = 25,
     log_category: str | None = None,
 ) -> AdministrationOverviewResponse:
     portfolio = await get_or_create_default_portfolio(session, user)
+    log_total = await count_system_logs(session, user, category=log_category)
     logs = await list_system_logs(
         session,
         user,
         limit=log_limit,
+        offset=0,
         category=log_category,
     )
     model_versions = list(
@@ -98,7 +128,7 @@ async def build_administration_overview(
         "administration_overview_loaded",
         extra={
             "owner_user_id": user.id,
-            "log_count": len(logs),
+            "log_count": log_total,
             "model_count": len(model_versions),
         },
     )
@@ -107,6 +137,7 @@ async def build_administration_overview(
         generated_at=datetime.now(timezone.utc),
         portfolio_name=portfolio.name,
         system_logs=[_log_response(entry) for entry in logs],
+        system_log_total=log_total,
         model_versions=[_model_version_response(item) for item in model_versions],
         data_versions=[
             AdministrationDataVersionResponse(

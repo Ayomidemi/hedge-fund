@@ -91,7 +91,7 @@ class ManualTradeCreate(BaseModel):
     price: Decimal = Field(gt=0)
     fees: Decimal = Field(default=Decimal("0"), ge=0)
     trade_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    rationale: str = Field(min_length=1)
+    rationale: str | None = None
     risk_notes: str | None = None
     broker_reference: str | None = None
 

@@ -75,8 +75,10 @@ async def prefill_ticker(
     resolution = resolve_ticker(ticker, market_hint=market_hint)
     if not resolution.provider_symbol:
         raise MarketDataUnavailableError("Ticker is required.")
-    if not _has_any_market_data_key():
-        raise MarketDataUnavailableError("No market data API keys are configured.")
+    if not _has_market_data_key(resolution.market):
+        raise MarketDataUnavailableError(
+            f"No {resolution.market} market data API keys are configured."
+        )
 
     context = PrefillBuildContext(
         ticker=resolution.ticker,
@@ -89,16 +91,6 @@ async def prefill_ticker(
         await _load_ngn_market_sources(context)
     else:
         await _load_us_sources(context)
-        if not _has_identity(context) and settings.hf_ngnmarket_api_key:
-            ng_context = PrefillBuildContext(
-                ticker=f"{resolution.provider_symbol}.NG",
-                requested_ticker=resolution.requested_ticker,
-                provider_symbol=resolution.provider_symbol,
-                market="NG",
-            )
-            await _load_ngn_market_sources(ng_context)
-            if _has_identity(ng_context) or ng_context.bars:
-                context = ng_context
 
     response = _build_prefill_response(context)
     logger.info(
@@ -514,25 +506,14 @@ def _is_non_actionable_provider_warning(warning: str) -> bool:
     return False
 
 
-def _has_any_market_data_key() -> bool:
+def _has_market_data_key(market: str) -> bool:
+    if market == "NG":
+        return bool(settings.hf_ngnmarket_api_key)
     return any(
         [
             settings.hf_polygon_api_key,
-            settings.hf_ngnmarket_api_key,
             settings.hf_fmp_api_key,
             settings.hf_tiingo_api_key,
-        ]
-    )
-
-
-def _has_identity(context: PrefillBuildContext) -> bool:
-    return any(
-        [
-            context.details,
-            context.fmp_profile,
-            context.tiingo_meta,
-            context.ngn_company,
-            context.ngn_etf,
         ]
     )
 

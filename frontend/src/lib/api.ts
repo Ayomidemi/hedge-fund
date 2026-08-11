@@ -400,7 +400,7 @@ export type ManualTradeInput = {
   price: string;
   fees: string;
   trade_date?: string;
-  rationale: string;
+  rationale?: string;
   risk_notes?: string;
   broker_reference?: string;
 };
@@ -1317,6 +1317,134 @@ export function createFactorBacktest(payload: BacktestRunInput, options?: ApiReq
   );
 }
 
+export type RegimeModelFitInput = {
+  ticker?: string;
+  source?: string;
+  state_count?: number;
+  lookback_days?: number;
+};
+
+export function fitRegimeModel(payload: RegimeModelFitInput, options?: ApiRequestOptions) {
+  return postApi<RegimeModel, RegimeModelFitInput>(
+    "/api/ticker-intelligence/ml/regime/hmm",
+    payload,
+    options,
+  );
+}
+
+export type YahooPriceBackfillInput = {
+  ticker: string;
+  start_date: string;
+  end_date?: string;
+  name?: string;
+  asset_class?: string;
+  exchange?: string;
+  currency?: string;
+  yahoo_symbol?: string;
+};
+
+export type PriceBackfillResult = {
+  ticker: string;
+  source: string;
+  start_date: string;
+  end_date: string;
+  rows_fetched: number;
+  rows_saved: number;
+};
+
+export type TrainingLabelGenerateInput = {
+  ticker: string;
+  benchmark_ticker?: string;
+  horizons?: number[];
+  source?: string;
+};
+
+export type TrainingLabelResult = {
+  ticker: string;
+  benchmark_ticker: string | null;
+  horizons: number[];
+  labels_generated: number;
+  first_as_of_date: string | null;
+  last_as_of_date: string | null;
+};
+
+export type PriceFeatureBuildInput = {
+  tickers: string[];
+  source?: string;
+  feature_version?: string;
+};
+
+export type PriceFeatureBuildResult = {
+  feature_version: string;
+  source: string;
+  tickers: string[];
+  snapshots_saved: number;
+  first_as_of_date: string | null;
+  last_as_of_date: string | null;
+};
+
+export type PredictiveModelTrainInput = {
+  tickers: string[];
+  horizon_days?: number;
+  benchmark_ticker?: string;
+  feature_version?: string;
+  label_source?: string;
+  ridge_alpha?: string;
+};
+
+export type PredictiveModelTrainResult = {
+  model_version_id: string;
+  model_name: string;
+  model_version: string;
+  horizon_days: number;
+  feature_version: string;
+  training_rows: number;
+  validation_rows: number;
+  feature_names: string[];
+  metrics: Record<string, unknown>;
+};
+
+export function backfillYahooPrices(
+  payload: YahooPriceBackfillInput,
+  options?: ApiRequestOptions,
+) {
+  return postApi<PriceBackfillResult, YahooPriceBackfillInput>(
+    "/api/ticker-intelligence/ml/prices/yahoo/backfill",
+    payload,
+    options,
+  );
+}
+
+export function generateTrainingLabels(
+  payload: TrainingLabelGenerateInput,
+  options?: ApiRequestOptions,
+) {
+  return postApi<TrainingLabelResult, TrainingLabelGenerateInput>(
+    "/api/ticker-intelligence/ml/labels",
+    payload,
+    options,
+  );
+}
+
+export function buildPriceFeatures(payload: PriceFeatureBuildInput, options?: ApiRequestOptions) {
+  return postApi<PriceFeatureBuildResult, PriceFeatureBuildInput>(
+    "/api/ticker-intelligence/ml/features/price",
+    payload,
+    options,
+  );
+}
+
+export function trainPredictiveModel(
+  payload: PredictiveModelTrainInput,
+  options?: ApiRequestOptions,
+) {
+  return postApi<PredictiveModelTrainResult, PredictiveModelTrainInput>(
+    "/api/ticker-intelligence/ml/train",
+    payload,
+    options,
+  );
+}
+
 export function getCurrentMonthlyReport(options?: ApiRequestOptions) {
   return fetchApi<MonthlyReport>("/api/reports/monthly", options);
 }
@@ -1482,10 +1610,19 @@ export type FxRateSnapshot = {
   is_stale: boolean;
 };
 
+export type SystemLogList = {
+  items: SystemLogEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
 export type AdministrationOverview = {
   generated_at: string;
   portfolio_name: string;
   system_logs: SystemLogEntry[];
+  system_log_total: number;
   model_versions: AdministrationModelVersion[];
   data_versions: AdministrationDataVersion[];
   portfolio_rules: AdministrationPortfolioRule[];
@@ -1506,6 +1643,23 @@ export function getAdministrationOverview(
   const query = search.toString();
   return fetchApi<AdministrationOverview>(
     `/api/administration/overview${query ? `?${query}` : ""}`,
+    options,
+  );
+}
+
+export function getAdministrationLogs(
+  params?: { page?: number; page_size?: number; log_category?: string },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.page) search.set("page", String(params.page));
+  if (params?.page_size) search.set("page_size", String(params.page_size));
+  if (params?.log_category && params.log_category !== "all") {
+    search.set("log_category", params.log_category);
+  }
+  const query = search.toString();
+  return fetchApi<SystemLogList>(
+    `/api/administration/logs${query ? `?${query}` : ""}`,
     options,
   );
 }

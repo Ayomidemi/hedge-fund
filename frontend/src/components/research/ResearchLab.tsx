@@ -15,9 +15,17 @@ import {
   runResearchDataPipeline,
   type ResearchPipelineRun,
 } from "@/lib/api";
+import { BacktestsPanel } from "@/components/research/BacktestsPanel";
+import { PipelineStepsPanel } from "@/components/research/PipelineStepsPanel";
+import { RegimePanel } from "@/components/research/RegimePanel";
+import {
+  dateYearsAgoValue,
+  parseTickerList,
+  todayDateValue,
+  uniqueTickers,
+} from "@/components/research/research-lab-ui";
 import type {
   ResearchActionItem,
-  ResearchBacktest,
   ResearchDataset,
   ResearchExperiment,
   ResearchFeatureSet,
@@ -39,6 +47,7 @@ type LabTab =
   | "notebooks"
   | "experiments"
   | "backtests"
+  | "regime"
   | "models";
 
 const tabs: { key: LabTab; label: string }[] = [
@@ -48,8 +57,11 @@ const tabs: { key: LabTab; label: string }[] = [
   { key: "notebooks", label: "Memos" },
   { key: "experiments", label: "Experiments" },
   { key: "backtests", label: "Backtests" },
+  { key: "regime", label: "Regime" },
   { key: "models", label: "Models" },
 ];
+
+const validTabs = new Set<LabTab>(tabs.map((tab) => tab.key));
 
 const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
@@ -70,8 +82,13 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) {
   const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const initialTab =
+    requestedTab && validTabs.has(requestedTab as LabTab)
+      ? (requestedTab as LabTab)
+      : "overview";
   const [overview, setOverview] = useState(initialOverview);
-  const [activeTab, setActiveTab] = useState<LabTab>("overview");
+  const [activeTab, setActiveTab] = useState<LabTab>(initialTab);
   const [pipelineRun, setPipelineRun] = useState<ResearchPipelineRun | null>(null);
   const [pipelinePending, setPipelinePending] = useState(false);
   const requestedTicker = searchParams.get("ticker") ?? "";
@@ -213,6 +230,7 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
         pending={pipelinePending}
         result={pipelineRun}
         onSubmit={handleRunPipeline}
+        onStepComplete={() => void reloadOverview()}
       />
 
       <nav className="flex gap-2 overflow-x-auto">
@@ -246,7 +264,17 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
       {activeTab === "experiments" && (
         <ExperimentsPanel experiments={overview.experiments} />
       )}
-      {activeTab === "backtests" && <BacktestsPanel backtests={overview.backtests} />}
+      {activeTab === "backtests" && (
+        <BacktestsPanel
+          backtests={overview.backtests}
+          defaultTickers={defaultTrainingTickers}
+          defaultHorizon={requestedHorizon}
+          onComplete={() => void reloadOverview()}
+        />
+      )}
+      {activeTab === "regime" && (
+        <RegimePanel active={activeTab === "regime"} onUpdated={() => void reloadOverview()} />
+      )}
       {activeTab === "models" && <ModelsPanel models={overview.models} />}
     </div>
   );
@@ -279,12 +307,14 @@ function TrainingRunPanel({
   defaultTickers,
   defaultHorizon,
   onSubmit,
+  onStepComplete,
   pending,
   result,
 }: {
   defaultTickers: string[];
   defaultHorizon: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onStepComplete?: () => void;
   pending: boolean;
   result: ResearchPipelineRun | null;
 }) {
@@ -432,6 +462,12 @@ function TrainingRunPanel({
           )}
         </div>
       )}
+
+      <PipelineStepsPanel
+        defaultTickers={defaultTickers}
+        defaultHorizon={defaultHorizon}
+        onComplete={onStepComplete}
+      />
     </section>
   );
 }
@@ -604,35 +640,6 @@ function ExperimentsPanel({
           formatDate(experiment.created_at),
         ])}
       />
-    </Panel>
-  );
-}
-
-function BacktestsPanel({ backtests }: { backtests: ResearchBacktest[] }) {
-  return (
-    <Panel title="Backtests" subtitle="Validation templates and available run context">
-      <div className="grid gap-4 xl:grid-cols-2">
-        {backtests.map((backtest) => (
-          <div
-            key={backtest.id}
-            className="rounded-lg border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-900 dark:bg-zinc-900/50"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-medium">{backtest.name}</p>
-                <p className="mt-1 text-xs text-zinc-500">
-                  {backtest.benchmark ?? "No benchmark"} / {backtest.cost_model}
-                </p>
-              </div>
-              <StatusBadge status={backtest.status} />
-            </div>
-            <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
-              {backtest.strategy}
-            </p>
-            <p className="mt-3 text-sm leading-6 text-zinc-500">{backtest.notes}</p>
-          </div>
-        ))}
-      </div>
     </Panel>
   );
 }
@@ -827,19 +834,6 @@ function defaultTrainingUniverse(
     .slice(0, 20);
 }
 
-function parseTickerList(value: string) {
-  return uniqueTickers(
-    value
-      .split(/[\s,]+/)
-      .map((ticker) => ticker.trim().toUpperCase())
-      .filter(Boolean),
-  );
-}
-
-function uniqueTickers(tickers: string[]) {
-  return Array.from(new Set(tickers));
-}
-
 function formatPipelineStep(value: string) {
   return value
     .replace("price_backfill:", "Price backfill / ")
@@ -850,16 +844,6 @@ function formatPipelineStep(value: string) {
 
 function textValue(formData: FormData, key: string) {
   return String(formData.get(key) ?? "").trim();
-}
-
-function todayDateValue() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function dateYearsAgoValue(years: number) {
-  const date = new Date();
-  date.setFullYear(date.getFullYear() - years);
-  return date.toISOString().slice(0, 10);
 }
 
 function Field({

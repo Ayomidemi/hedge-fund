@@ -9,3 +9,5 @@ class AdministrationRouteTests(TestCase):
 
         self.assertIn("/api/administration/overview", paths)
         self.assertIn("get", paths["/api/administration/overview"])
+        self.assertIn("/api/administration/logs", paths)
+        self.assertIn("get", paths["/api/administration/logs"])

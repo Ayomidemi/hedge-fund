@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser
@@ -54,22 +54,44 @@ async def record_system_log(
     return entry
 
 
+def _system_log_filters(
+    user: AuthenticatedUser,
+    *,
+    category: str | None = None,
+):
+    filters = [SystemLogEntry.owner_user_id == user.id]
+    if category and category != "all":
+        filters.append(SystemLogEntry.category == category)
+    return filters
+
+
+async def count_system_logs(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    *,
+    category: str | None = None,
+) -> int:
+    statement = select(func.count()).select_from(SystemLogEntry).where(
+        *_system_log_filters(user, category=category)
+    )
+    return int(await session.scalar(statement) or 0)
+
+
 async def list_system_logs(
     session: AsyncSession,
     user: AuthenticatedUser,
     *,
-    limit: int = 100,
+    limit: int = 25,
+    offset: int = 0,
     category: str | None = None,
 ) -> list[SystemLogEntry]:
     statement = (
         select(SystemLogEntry)
-        .where(SystemLogEntry.owner_user_id == user.id)
+        .where(*_system_log_filters(user, category=category))
         .order_by(SystemLogEntry.created_at.desc())
+        .offset(offset)
         .limit(limit)
     )
-    if category and category != "all":
-        statement = statement.where(SystemLogEntry.category == category)
-
     return list(await session.scalars(statement))
 
 

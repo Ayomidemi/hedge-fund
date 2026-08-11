@@ -1,11 +1,13 @@
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest import TestCase
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, patch
 
 from app.services.ticker_intelligence.market_data import (
     PrefillBuildContext,
     _build_prefill_response,
     normalize_massive_base_url,
+    prefill_ticker,
     resolve_ticker,
 )
 
@@ -149,3 +151,47 @@ class MarketDataPrefillTests(TestCase):
         self.assertEqual(response.metrics.current_price, Decimal("480"))
         self.assertEqual(response.metrics.market_cap_billion, Decimal("8000.00"))
         self.assertEqual(response.metrics.pe_ratio, Decimal("18.7"))
+
+
+class MarketDataPrefillRoutingTests(IsolatedAsyncioTestCase):
+    async def test_ng_market_hint_only_calls_ngn_sources(self) -> None:
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data._has_market_data_key",
+                return_value=True,
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_sources",
+                new_callable=AsyncMock,
+            ) as load_us_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_market_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_market_sources,
+        ):
+            response = await prefill_ticker("DANGCEM", market_hint="NG")
+
+        self.assertEqual(response.instrument.ticker, "DANGCEM.NG")
+        load_ngn_market_sources.assert_awaited_once()
+        load_us_sources.assert_not_awaited()
+
+    async def test_us_market_hint_only_calls_us_sources(self) -> None:
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data._has_market_data_key",
+                return_value=True,
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_sources",
+                new_callable=AsyncMock,
+            ) as load_us_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_market_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_market_sources,
+        ):
+            response = await prefill_ticker("MTN", market_hint="US")
+
+        self.assertEqual(response.instrument.ticker, "MTN")
+        load_us_sources.assert_awaited_once()
+        load_ngn_market_sources.assert_not_awaited()

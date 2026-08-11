@@ -21,9 +21,11 @@ import {
 import {
   instrumentFieldsFromPrefill,
   isVisiblePrefillWarning,
+  marketFromTickerSuggestion,
   normalizeTickerInput,
   shouldPrefillTicker,
   TICKER_PREFILL_DEBOUNCE_MS,
+  type TickerMarket,
 } from "@/lib/ticker-prefill-form";
 
 type ManualTradeModalProps = {
@@ -54,7 +56,7 @@ export function ManualTradeModal({
   const [prefillLoading, setPrefillLoading] = useState(false);
   const [prefillWarnings, setPrefillWarnings] = useState<string[]>([]);
   const [prefillProvider, setPrefillProvider] = useState<string | null>(null);
-  const [market, setMarket] = useState("auto");
+  const [market, setMarket] = useState<TickerMarket>("US");
   const [instrument, setInstrument] = useState<InstrumentState>(emptyInstrument);
   const [side, setSide] = useState<ManualTradeInput["side"]>("buy");
   const [quantity, setQuantity] = useState("");
@@ -111,7 +113,7 @@ export function ManualTradeModal({
         setRationale(initialTrade.rationale);
         setRiskNotes(initialTrade.risk_notes ?? "");
         setBrokerReference(initialTrade.broker_reference ?? "");
-        setMarket("auto");
+        setMarket(marketFromInstrument(initialTrade.instrument));
         return;
       }
 
@@ -124,7 +126,7 @@ export function ManualTradeModal({
       setRationale("");
       setRiskNotes("");
       setBrokerReference("");
-      setMarket("auto");
+      setMarket("US");
     });
 
     return () => {
@@ -158,7 +160,7 @@ export function ManualTradeModal({
       try {
         const result = await getTickerPrefill(
           ticker,
-          market === "auto" ? undefined : market,
+          market,
         );
         if (prefillRequestId.current !== requestId) return;
 
@@ -215,6 +217,7 @@ export function ManualTradeModal({
       sector: suggestion.sector ?? "",
       industry: suggestion.industry ?? "",
     }));
+    setMarket(marketFromTickerSuggestion(suggestion));
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -234,7 +237,7 @@ export function ManualTradeModal({
       price,
       fees,
       trade_date: tradeDate ? new Date(tradeDate).toISOString() : undefined,
-      rationale,
+      rationale: rationale.trim() || undefined,
       risk_notes: riskNotes || undefined,
       broker_reference: brokerReference || undefined,
     };
@@ -273,7 +276,7 @@ export function ManualTradeModal({
       description={
         isEditing
           ? "Update the execution record. The cash movement and position book will be rebuilt from the trade ledger."
-          : "Enter a ticker — instrument details and price fill in automatically after you pause typing."
+          : "Choose the market, then enter a ticker. Instrument details and price fill in automatically after you pause typing."
       }
       size="lg"
       footer={
@@ -314,14 +317,13 @@ export function ManualTradeModal({
               placeholder="e.g. AAPL or SEPLAT"
             />
           </Field>
-          <Field label="Market">
+          <Field label="Country">
             <select
               value={market}
-              onChange={(event) => setMarket(event.target.value)}
+              onChange={(event) => setMarket(event.target.value as TickerMarket)}
               className={inputClassName}
               disabled={isEditing}
             >
-              <option value="auto">Auto</option>
               <option value="US">US</option>
               <option value="NG">Nigeria</option>
             </select>
@@ -477,7 +479,6 @@ export function ManualTradeModal({
 
         <Field label="Rationale">
           <textarea
-            required
             rows={3}
             value={rationale}
             onChange={(event) => setRationale(event.target.value)}
@@ -515,6 +516,19 @@ function normalizeAssetClass(value: string): InstrumentState["asset_class"] {
     return value;
   }
   return "equity";
+}
+
+function marketFromInstrument(instrument: TradeJournalEntry["instrument"]): TickerMarket {
+  const exchange = (instrument.exchange ?? "").trim().toUpperCase();
+  if (
+    instrument.currency === "NGN" ||
+    exchange === "NGX" ||
+    exchange === "NG" ||
+    instrument.ticker.endsWith(".NG")
+  ) {
+    return "NG";
+  }
+  return "US";
 }
 
 function Field({

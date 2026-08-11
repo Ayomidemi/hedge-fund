@@ -493,7 +493,7 @@ async def create_manual_trade(
         limit_price=None,
         executed_price=payload.price,
         fees=payload.fees,
-        rationale=payload.rationale,
+        rationale=payload.rationale or "",
         risk_notes=payload.risk_notes,
         broker_reference=payload.broker_reference,
     )
@@ -578,7 +578,7 @@ async def update_manual_trade(
     trade.quantity = payload.quantity
     trade.executed_price = payload.price
     trade.fees = payload.fees
-    trade.rationale = payload.rationale
+    trade.rationale = payload.rationale or ""
     trade.risk_notes = payload.risk_notes
     trade.broker_reference = payload.broker_reference
     await session.flush()

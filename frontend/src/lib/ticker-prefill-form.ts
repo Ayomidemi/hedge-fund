@@ -1,4 +1,4 @@
-import type { TickerPrefill } from "@/lib/api";
+import type { TickerPrefill, TickerSuggestion } from "@/lib/api";
 
 /** Minimum ticker length before we hit the prefill API. */
 export const TICKER_PREFILL_MIN_LENGTH = 2;
@@ -15,6 +15,8 @@ export type InstrumentFormValues = {
   sector: string;
   industry: string;
 };
+
+export type TickerMarket = "US" | "NG";
 
 export function normalizeTickerInput(value: string): string {
   return value.trim().toUpperCase();
@@ -77,4 +79,14 @@ export function formatTradeMoney(value: string, currencyCode: string): string {
   } catch {
     return `${currencyCode} ${Number(value).toLocaleString()}`;
   }
+}
+
+export function marketFromTickerSuggestion(
+  suggestion: TickerSuggestion,
+): TickerMarket {
+  const exchange = (suggestion.exchange ?? "").trim().toUpperCase();
+  if (suggestion.currency === "NGN" || exchange === "NGX" || exchange === "NG") {
+    return "NG";
+  }
+  return "US";
 }

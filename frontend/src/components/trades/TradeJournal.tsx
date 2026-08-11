@@ -286,7 +286,7 @@ function TradeDetail({
       </dl>
 
       <div className="mt-5 space-y-4">
-        <Note title="Rationale" value={trade.rationale} />
+        <Note title="Rationale" value={trade.rationale || "No rationale recorded."} />
         <Note title="Risk notes" value={trade.risk_notes || "No risk notes recorded."} />
       </div>
     </aside>

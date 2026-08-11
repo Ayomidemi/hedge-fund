@@ -13,6 +13,7 @@ import {
   getTickerMLReport,
   getTickerPrefill,
   runResearchDataPipeline,
+  type TickerSuggestion,
   type TickerAIDraft,
   type TickerAIDraftInput,
   type TickerAnalysis,
@@ -22,6 +23,10 @@ import {
   type TickerMemoSummary,
   type TickerPrefill,
 } from "@/lib/api";
+import {
+  marketFromTickerSuggestion,
+  type TickerMarket,
+} from "@/lib/ticker-prefill-form";
 
 type TickerAnalystProps = {
   recentMemos: TickerMemoSummary[];
@@ -68,6 +73,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     useState<TickerAnalysisInput | null>(null);
   const [prefillData, setPrefillData] = useState<TickerPrefill | null>(null);
   const [prefillWarnings, setPrefillWarnings] = useState<string[]>([]);
+  const [intakeMarket, setIntakeMarket] = useState<TickerMarket>("US");
   const [selectedMemo, setSelectedMemo] = useState<TickerMemo | null>(null);
   const [memoLoadingId, setMemoLoadingId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<
@@ -86,6 +92,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     setBaseAnalysisInput(null);
     setPrefillData(null);
     setPrefillWarnings([]);
+    setIntakeMarket("US");
     setError(null);
     window.setTimeout(() => formRef.current?.reset(), 0);
   }
@@ -99,8 +106,14 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     setBaseAnalysisInput(null);
     setPrefillData(null);
     setPrefillWarnings([]);
+    setIntakeMarket("US");
     setError(null);
     router.refresh();
+  }
+
+  function applyTickerSuggestion(suggestion: TickerSuggestion | null) {
+    if (!suggestion) return;
+    setIntakeMarket(marketFromTickerSuggestion(suggestion));
   }
 
   async function handleOpenMemo(memoId: string) {
@@ -286,11 +299,18 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
                   required
                   autoFocus
                   className={inputClassName}
+                  onSelect={applyTickerSuggestion}
                 />
               </Field>
-              <Field label="Market">
-                <select name="market" defaultValue="auto" className={inputClassName}>
-                  <option value="auto">Auto</option>
+              <Field label="Country">
+                <select
+                  name="market"
+                  value={intakeMarket}
+                  onChange={(event) =>
+                    setIntakeMarket(event.target.value as TickerMarket)
+                  }
+                  className={inputClassName}
+                >
                   <option value="US">US</option>
                   <option value="NG">Nigeria</option>
                 </select>
