@@ -5,9 +5,13 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.ticker_intelligence.market_data import (
     PrefillBuildContext,
+    ProviderResult,
     _build_prefill_response,
+    _load_ngn_identity_sources,
+    _load_us_identity_sources,
     normalize_massive_base_url,
     prefill_ticker,
+    resolve_prefill_scope,
     resolve_ticker,
 )
 
@@ -28,6 +32,12 @@ class MarketDataPrefillTests(TestCase):
         self.assertEqual(hint_resolution.ticker, "DANGCEM.NG")
         self.assertEqual(prefix_resolution.provider_symbol, "DANGCEM")
         self.assertEqual(prefix_resolution.market, "NG")
+
+    def test_resolves_prefill_scope(self) -> None:
+        self.assertEqual(resolve_prefill_scope("analysis"), "analysis")
+        self.assertEqual(resolve_prefill_scope("full"), "analysis")
+        self.assertEqual(resolve_prefill_scope("identity"), "identity")
+        self.assertEqual(resolve_prefill_scope(None), "identity")
 
     def test_builds_prefill_from_details_ratios_and_bars(self) -> None:
         bars = []
@@ -195,3 +205,156 @@ class MarketDataPrefillRoutingTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.instrument.ticker, "MTN")
         load_us_sources.assert_awaited_once()
         load_ngn_market_sources.assert_not_awaited()
+
+    async def test_identity_scope_uses_us_identity_sources(self) -> None:
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data._has_market_data_key",
+                return_value=True,
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_sources",
+                new_callable=AsyncMock,
+            ) as load_us_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_identity_sources",
+                new_callable=AsyncMock,
+            ) as load_us_identity_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_market_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_market_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_identity_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_identity_sources,
+        ):
+            response = await prefill_ticker("AAPL", market_hint="US", scope="identity")
+
+        self.assertEqual(response.instrument.ticker, "AAPL")
+        load_us_identity_sources.assert_awaited_once()
+        load_us_sources.assert_not_awaited()
+        load_ngn_market_sources.assert_not_awaited()
+        load_ngn_identity_sources.assert_not_awaited()
+
+    async def test_identity_scope_uses_ng_identity_sources(self) -> None:
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data._has_market_data_key",
+                return_value=True,
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_sources",
+                new_callable=AsyncMock,
+            ) as load_us_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_identity_sources",
+                new_callable=AsyncMock,
+            ) as load_us_identity_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_market_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_market_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_identity_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_identity_sources,
+        ):
+            response = await prefill_ticker("DANGCEM", market_hint="NG", scope="identity")
+
+        self.assertEqual(response.instrument.ticker, "DANGCEM.NG")
+        load_ngn_identity_sources.assert_awaited_once()
+        load_ngn_market_sources.assert_not_awaited()
+        load_us_sources.assert_not_awaited()
+        load_us_identity_sources.assert_not_awaited()
+
+    async def test_us_identity_loader_fetches_profile_and_quote_only(self) -> None:
+        calls: list[str] = []
+
+        async def fake_safe_get(_client, path, params=None):
+            calls.append(path)
+            if path == "/v3/profile/AAPL":
+                return ProviderResult(
+                    payload=[
+                        {
+                            "companyName": "Apple Inc.",
+                            "currency": "USD",
+                            "exchangeShortName": "NASDAQ",
+                        }
+                    ]
+                )
+            if path == "/v3/quote/AAPL":
+                return ProviderResult(payload=[{"price": 220.1, "marketCap": 3_000}])
+            return ProviderResult()
+
+        context = PrefillBuildContext(
+            ticker="AAPL",
+            provider_symbol="AAPL",
+            market="US",
+            scope="identity",
+        )
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_fmp_api_key",
+                "fmp",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_polygon_api_key",
+                "polygon",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_tiingo_api_key",
+                "tiingo",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._safe_get",
+                side_effect=fake_safe_get,
+            ),
+        ):
+            await _load_us_identity_sources(context)
+
+        self.assertEqual(calls, ["/v3/profile/AAPL", "/v3/quote/AAPL"])
+        self.assertEqual(context.fmp_profile["companyName"], "Apple Inc.")
+        self.assertEqual(context.fmp_quote["price"], 220.1)
+        self.assertEqual(context.providers, ["fmp"])
+
+    async def test_ng_identity_loader_uses_company_search_before_etfs(self) -> None:
+        calls: list[str] = []
+
+        async def fake_safe_get(_client, path, params=None):
+            calls.append(path)
+            return ProviderResult(
+                payload={
+                    "data": {
+                        "data": [
+                            {
+                                "symbol": "DANGCEM",
+                                "name": "Dangote Cement Plc",
+                                "price": 480,
+                            }
+                        ]
+                    }
+                }
+            )
+
+        context = PrefillBuildContext(
+            ticker="DANGCEM.NG",
+            provider_symbol="DANGCEM",
+            market="NG",
+            scope="identity",
+        )
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_ngnmarket_api_key",
+                "ngn",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._safe_get",
+                side_effect=fake_safe_get,
+            ),
+        ):
+            await _load_ngn_identity_sources(context)
+
+        self.assertEqual(calls, ["/companies"])
+        self.assertEqual(context.ngn_company["name"], "Dangote Cement Plc")
+        self.assertEqual(context.providers, ["ngnmarket"])

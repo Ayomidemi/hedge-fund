@@ -1,13 +1,14 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { TickerCombobox } from "@/components/ticker/TickerCombobox";
+import { TickerSelector } from "@/components/ticker/TickerSelector";
 import { HorizontalBarPlot } from "@/components/ui/plots";
 import {
   captureRiskSnapshot,
   createCustomStressTest,
   createPreTradeRiskCheck,
   getRiskCentreOverview,
+  type TickerPrefill,
   type PreTradeRiskInput,
   type PreTradeRiskCheck,
   type RiskCentreOverview,
@@ -402,10 +403,13 @@ function StressPanel({
               <input name="cash_shock_pct" defaultValue="0" className={inputClass} />
             </Field>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Ticker">
-              <TickerCombobox name="ticker" className={inputClass} />
-            </Field>
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_160px]">
+            <TickerSelector
+              tickerName="ticker"
+              marketName="ticker_market"
+              fetchDetailsOnSelect={false}
+              className={inputClass}
+            />
             <Field label="Ticker Shock %">
               <input name="ticker_shock_pct" className={inputClass} />
             </Field>
@@ -439,18 +443,31 @@ function PreTradePanel({
   pending: boolean;
   result: PreTradeRiskCheck | null;
 }) {
+  const [prefill, setPrefill] = useState<TickerPrefill | null>(null);
+  const instrument = prefill?.instrument;
+
   return (
     <div className="grid gap-5 xl:grid-cols-[0.8fr_1fr]">
       <Panel title="Pro-Forma Trade" subtitle="Check risk before the trade journal">
         <form onSubmit={onSubmit} className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Ticker">
-              <TickerCombobox name="ticker" required className={inputClass} />
-            </Field>
-            <Field label="Name">
-              <input name="name" className={inputClass} />
-            </Field>
-          </div>
+          <TickerSelector
+            tickerName="ticker"
+            marketName="market"
+            required
+            onDetails={setPrefill}
+            className={inputClass}
+          />
+          <input type="hidden" name="name" value={instrument?.name ?? ""} />
+          <input
+            type="hidden"
+            name="asset_class"
+            value={instrument?.asset_class ?? "equity"}
+          />
+          <input type="hidden" name="currency" value={instrument?.currency ?? "USD"} />
+          <input type="hidden" name="exchange" value={instrument?.exchange ?? ""} />
+          <input type="hidden" name="sector" value={instrument?.sector ?? ""} />
+          <input type="hidden" name="industry" value={instrument?.industry ?? ""} />
+          <SelectedInstrumentSummary prefill={prefill} />
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Side">
               <select name="side" defaultValue="buy" className={inputClass}>
@@ -462,36 +479,22 @@ function PreTradePanel({
               <input name="quantity" required className={inputClass} />
             </Field>
             <Field label="Price">
-              <input name="price" required className={inputClass} />
+              <input
+                key={prefill?.instrument.ticker ?? "price"}
+                name="price"
+                required
+                defaultValue={
+                  prefill?.metrics.current_price
+                    ? String(prefill.metrics.current_price)
+                    : ""
+                }
+                className={inputClass}
+              />
             </Field>
           </div>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-1">
             <Field label="Fees">
               <input name="fees" defaultValue="0" className={inputClass} />
-            </Field>
-            <Field label="Asset Class">
-              <select name="asset_class" defaultValue="equity" className={inputClass}>
-                <option value="equity">Equity</option>
-                <option value="etf">ETF</option>
-                <option value="bond">Bond</option>
-                <option value="commodity">Commodity</option>
-                <option value="cash_equivalent">Cash Equivalent</option>
-                <option value="other">Other</option>
-              </select>
-            </Field>
-            <Field label="Currency">
-              <input name="currency" defaultValue="USD" className={`${inputClass} uppercase`} />
-            </Field>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="Exchange">
-              <input name="exchange" className={inputClass} />
-            </Field>
-            <Field label="Sector">
-              <input name="sector" className={inputClass} />
-            </Field>
-            <Field label="Industry">
-              <input name="industry" className={inputClass} />
             </Field>
           </div>
           <Field label="Rationale">
@@ -535,6 +538,30 @@ function PreTradePanel({
           <p className="text-sm text-zinc-500">No pre-trade check yet</p>
         )}
       </Panel>
+    </div>
+  );
+}
+
+function SelectedInstrumentSummary({ prefill }: { prefill: TickerPrefill | null }) {
+  if (!prefill) {
+    return (
+      <p className="rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-500 dark:border-zinc-800">
+        Select a ticker to load instrument details.
+      </p>
+    );
+  }
+
+  const instrument = prefill.instrument;
+  return (
+    <div className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
+      <p className="font-medium">
+        {instrument.ticker} · {instrument.currency}
+      </p>
+      <p className="mt-1 text-xs text-zinc-500">
+        {instrument.name}
+        {instrument.exchange ? ` · ${instrument.exchange}` : ""}
+        {instrument.sector ? ` · ${instrument.sector}` : ""}
+      </p>
     </div>
   );
 }

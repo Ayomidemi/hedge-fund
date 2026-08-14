@@ -3,10 +3,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from math import sqrt
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import and_, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.operating_core import InstrumentCreate
@@ -23,6 +24,8 @@ from app.services.ticker_intelligence.sec_fundamentals import (
 )
 
 logger = logging.getLogger(__name__)
+
+PrefillScope = Literal["identity", "analysis"]
 
 
 class MarketDataUnavailableError(RuntimeError):
@@ -49,6 +52,7 @@ class PrefillBuildContext:
     requested_ticker: str = ""
     provider_symbol: str = ""
     market: str = "US"
+    scope: PrefillScope = "analysis"
     details: dict = field(default_factory=dict)
     ratios: dict = field(default_factory=dict)
     bars: list[dict | list] = field(default_factory=list)
@@ -68,11 +72,13 @@ class PrefillBuildContext:
 async def prefill_ticker(
     ticker: str,
     market_hint: str | None = None,
+    scope: str | None = "analysis",
 ) -> TickerPrefillResponse:
     if settings.market_data_provider == "disabled":
         raise MarketDataUnavailableError("Market data provider is not configured.")
 
     resolution = resolve_ticker(ticker, market_hint=market_hint)
+    prefill_scope = resolve_prefill_scope(scope)
     if not resolution.provider_symbol:
         raise MarketDataUnavailableError("Ticker is required.")
     if not _has_market_data_key(resolution.market):
@@ -85,12 +91,19 @@ async def prefill_ticker(
         requested_ticker=resolution.requested_ticker,
         provider_symbol=resolution.provider_symbol,
         market=resolution.market,
+        scope=prefill_scope,
     )
 
     if resolution.market == "NG":
-        await _load_ngn_market_sources(context)
+        if prefill_scope == "identity":
+            await _load_ngn_identity_sources(context)
+        else:
+            await _load_ngn_market_sources(context)
     else:
-        await _load_us_sources(context)
+        if prefill_scope == "identity":
+            await _load_us_identity_sources(context)
+        else:
+            await _load_us_sources(context)
 
     response = _build_prefill_response(context)
     logger.info(
@@ -98,6 +111,7 @@ async def prefill_ticker(
         extra={
             "ticker_symbol": response.instrument.ticker,
             "market": context.market,
+            "scope": context.scope,
             "provider": response.provider,
             "warning_count": len(response.source_warnings),
             "bar_count": len(context.bars),
@@ -110,6 +124,7 @@ async def search_ticker_suggestions(
     session: AsyncSession,
     query: str,
     *,
+    market_hint: str = "US",
     limit: int = 8,
 ) -> list[TickerSuggestionResponse]:
     normalized_query = query.strip().upper()
@@ -117,9 +132,21 @@ async def search_ticker_suggestions(
         return []
 
     pattern = f"%{normalized_query}%"
+    market = resolve_market_hint(market_hint)
+    ng_market_filter = or_(
+        Instrument.currency == "NGN",
+        Instrument.exchange.in_(["NGX", "NG"]),
+        Instrument.ticker.ilike("%.NG"),
+    )
+    market_filter = ng_market_filter if market == "NG" else not_(ng_market_filter)
     rows = await session.scalars(
         select(Instrument)
-        .where(or_(Instrument.ticker.ilike(pattern), Instrument.name.ilike(pattern)))
+        .where(
+            and_(
+                market_filter,
+                or_(Instrument.ticker.ilike(pattern), Instrument.name.ilike(pattern)),
+            )
+        )
         .order_by(
             Instrument.ticker.ilike(f"{normalized_query}%").desc(),
             Instrument.ticker.asc(),
@@ -141,10 +168,24 @@ async def search_ticker_suggestions(
     ]
 
 
+def resolve_market_hint(market_hint: str | None = None) -> str:
+    normalized_market = (market_hint or "").strip().upper()
+    if normalized_market in {"NG", "NIGERIA", "NGX"}:
+        return "NG"
+    return "US"
+
+
+def resolve_prefill_scope(scope: str | None = None) -> PrefillScope:
+    normalized_scope = (scope or "").strip().lower()
+    if normalized_scope in {"analysis", "full", "research"}:
+        return "analysis"
+    return "identity"
+
+
 def resolve_ticker(ticker: str, market_hint: str | None = None) -> TickerResolution:
     requested_ticker = ticker.strip()
     normalized_ticker = requested_ticker.upper().replace(" ", "")
-    normalized_market = (market_hint or "").strip().upper()
+    normalized_market = resolve_market_hint(market_hint)
 
     if normalized_ticker.startswith("NGX:"):
         symbol = normalized_ticker.split(":", 1)[1]
@@ -154,7 +195,7 @@ def resolve_ticker(ticker: str, market_hint: str | None = None) -> TickerResolut
         symbol = normalized_ticker.removesuffix(".NG")
         return TickerResolution(requested_ticker, f"{symbol}.NG", symbol, "NG")
 
-    if normalized_market in {"NG", "NIGERIA", "NGX"}:
+    if normalized_market == "NG":
         return TickerResolution(
             requested_ticker,
             f"{normalized_ticker}.NG",
@@ -174,11 +215,47 @@ def normalize_massive_base_url(base_url: str) -> str:
     return normalized
 
 
+async def _load_us_identity_sources(context: PrefillBuildContext) -> None:
+    """Light selector prefill for US-listed instruments.
+
+    This path avoids fundamentals, SEC facts, and historical bars. It only
+    gathers enough identity data to seed forms and, when cheap, a current mark.
+    """
+    if settings.hf_fmp_api_key:
+        await _load_fmp_identity_sources(context)
+        if _has_named_instrument(context) and _latest_price(context) is not None:
+            return
+
+    if settings.hf_polygon_api_key and not _has_named_instrument(context):
+        await _load_polygon_identity_sources(context)
+
+    if settings.hf_tiingo_api_key and not _has_named_instrument(context):
+        await _load_tiingo_identity_sources(context)
+
+
 async def _load_us_sources(context: PrefillBuildContext) -> None:
     await _load_polygon_sources(context)
     await _fetch_sec_fundamentals(context)
     await _load_fmp_sources(context)
     await _load_tiingo_sources(context)
+
+
+async def _load_polygon_identity_sources(context: PrefillBuildContext) -> None:
+    if not settings.hf_polygon_api_key:
+        return
+
+    async with httpx.AsyncClient(
+        base_url=settings.polygon_base_url,
+        timeout=httpx.Timeout(10.0),
+        headers={"Authorization": f"Bearer {settings.hf_polygon_api_key}"},
+    ) as client:
+        details = await _safe_get(
+            client,
+            f"/v3/reference/tickers/{context.provider_symbol}",
+        )
+
+    context.details = _first_result(details.payload) or context.details
+    _record_provider(context, "massive", [details])
 
 
 async def _load_polygon_sources(context: PrefillBuildContext) -> None:
@@ -215,6 +292,24 @@ async def _load_polygon_sources(context: PrefillBuildContext) -> None:
     _record_provider(context, "massive", [details, ratios, bars])
 
 
+async def _load_fmp_identity_sources(context: PrefillBuildContext) -> None:
+    if not settings.hf_fmp_api_key:
+        return
+
+    symbol = context.provider_symbol
+    base_params = {"apikey": settings.hf_fmp_api_key}
+    async with httpx.AsyncClient(
+        base_url=settings.fmp_base_url,
+        timeout=httpx.Timeout(10.0),
+    ) as client:
+        profile = await _safe_get(client, f"/v3/profile/{symbol}", params=base_params)
+        quote = await _safe_get(client, f"/v3/quote/{symbol}", params=base_params)
+
+    context.fmp_profile = _first_list_item(profile.payload) or context.fmp_profile
+    context.fmp_quote = _first_list_item(quote.payload) or context.fmp_quote
+    _record_provider(context, "fmp", [profile, quote])
+
+
 async def _load_fmp_sources(context: PrefillBuildContext) -> None:
     if not settings.hf_fmp_api_key:
         return
@@ -239,6 +334,23 @@ async def _load_fmp_sources(context: PrefillBuildContext) -> None:
     context.fmp_ratios = _first_list_item(ratios.payload)
     context.fmp_key_metrics = _first_list_item(key_metrics.payload)
     _record_provider(context, "fmp", [profile, quote, ratios, key_metrics])
+
+
+async def _load_tiingo_identity_sources(context: PrefillBuildContext) -> None:
+    if not settings.hf_tiingo_api_key:
+        return
+
+    async with httpx.AsyncClient(
+        base_url=settings.tiingo_base_url,
+        timeout=httpx.Timeout(10.0),
+        headers={"Authorization": f"Token {settings.hf_tiingo_api_key}"},
+    ) as client:
+        meta = await _safe_get(
+            client, f"/tiingo/daily/{context.provider_symbol.lower()}"
+        )
+
+    context.tiingo_meta = meta.payload if isinstance(meta.payload, dict) else {}
+    _record_provider(context, "tiingo", [meta])
 
 
 async def _load_tiingo_sources(context: PrefillBuildContext) -> None:
@@ -266,6 +378,34 @@ async def _load_tiingo_sources(context: PrefillBuildContext) -> None:
     if tiingo_bars and not context.bars:
         context.bars = tiingo_bars
     _record_provider(context, "tiingo", [meta, prices])
+
+
+async def _load_ngn_identity_sources(context: PrefillBuildContext) -> None:
+    if not settings.hf_ngnmarket_api_key:
+        context.warnings.append("NGN Market API key is missing.")
+        return
+
+    symbol = context.provider_symbol
+    results: list[ProviderResult] = []
+    async with httpx.AsyncClient(
+        base_url=settings.ngnmarket_base_url,
+        timeout=httpx.Timeout(10.0),
+        headers={"Authorization": f"Bearer {settings.hf_ngnmarket_api_key}"},
+    ) as client:
+        companies = await _safe_get(
+            client,
+            "/companies",
+            params={"search": symbol, "limit": "10"},
+        )
+        results.append(companies)
+        context.ngn_company = _find_symbol_payload(companies.payload, symbol)
+
+        if not context.ngn_company:
+            etfs = await _safe_get(client, "/etfs")
+            results.append(etfs)
+            context.ngn_etf = _find_symbol_payload(etfs.payload, symbol)
+
+    _record_provider(context, "ngnmarket", results)
 
 
 async def _load_ngn_market_sources(context: PrefillBuildContext) -> None:
@@ -489,6 +629,12 @@ def _has_prefill_coverage(
         for field_name in TickerMetricsInput.model_fields
     )
     return has_identity or has_classification or has_metric
+
+
+def _has_named_instrument(context: PrefillBuildContext) -> bool:
+    ticker = context.ticker.strip().upper()
+    name = _instrument_name(context).strip().upper()
+    return bool(name and name != ticker)
 
 
 def _is_non_actionable_provider_warning(warning: str) -> bool:

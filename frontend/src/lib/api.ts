@@ -549,6 +549,8 @@ export type TickerPrefill = {
 
 export type TickerSuggestion = TickerPrefill["instrument"];
 
+export type TickerPrefillScope = "identity" | "analysis";
+
 export type ComparativeMetric = {
   metric: string;
   value: string;
@@ -1324,22 +1326,26 @@ export function getTickerMemo(memoId: string, options?: ApiRequestOptions) {
 export function getTickerPrefill(
   ticker: string,
   market?: string,
+  scope: TickerPrefillScope = "identity",
   options?: ApiRequestOptions,
 ) {
-  const marketQuery =
-    market && market !== "auto" ? `?market=${encodeURIComponent(market)}` : "";
+  const search = new URLSearchParams({ scope });
+  if (market && market !== "auto") {
+    search.set("market", market);
+  }
   return fetchApi<TickerPrefill>(
-    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill${marketQuery}`,
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/prefill?${search.toString()}`,
     options,
   );
 }
 
 export function getTickerSuggestions(
   query: string,
+  market = "US",
   limit = 8,
   options?: ApiRequestOptions,
 ) {
-  const search = new URLSearchParams({ query, limit: String(limit) });
+  const search = new URLSearchParams({ query, market, limit: String(limit) });
   return fetchApi<TickerSuggestion[]>(
     `/api/ticker-intelligence/suggestions?${search.toString()}`,
     options,

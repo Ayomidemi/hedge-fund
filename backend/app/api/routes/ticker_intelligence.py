@@ -378,22 +378,29 @@ async def read_ticker_memo(
 @router.get("/suggestions", response_model=list[TickerSuggestionResponse])
 async def read_ticker_suggestions(
     query: str = Query(min_length=1, max_length=64),
+    market: str = Query(default="US", min_length=2, max_length=16),
     limit: int = Query(default=8, ge=1, le=20),
     _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[TickerSuggestionResponse]:
-    return await search_ticker_suggestions(session, query, limit=limit)
+    return await search_ticker_suggestions(
+        session,
+        query,
+        market_hint=market,
+        limit=limit,
+    )
 
 
 @router.get("/{ticker}/prefill", response_model=TickerPrefillResponse)
 async def read_ticker_prefill(
     ticker: str,
     market: str | None = Query(default=None, max_length=16),
+    scope: str = Query(default="identity", max_length=16),
     _user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TickerPrefillResponse:
     try:
-        response = await prefill_ticker(ticker, market_hint=market)
+        response = await prefill_ticker(ticker, market_hint=market, scope=scope)
     except MarketDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

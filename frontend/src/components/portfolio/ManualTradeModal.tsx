@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
-import { TickerCombobox } from "@/components/ticker/TickerCombobox";
+import { TickerSelector } from "@/components/ticker/TickerSelector";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   buttonPrimaryClassName,
@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/form-styles";
 import {
   createManualTrade,
-  getTickerPrefill,
+  type TickerPrefill,
   type TickerSuggestion,
   updateManualTrade,
   type ManualTradeInput,
@@ -23,8 +23,6 @@ import {
   isVisiblePrefillWarning,
   marketFromTickerSuggestion,
   normalizeTickerInput,
-  shouldPrefillTicker,
-  TICKER_PREFILL_DEBOUNCE_MS,
   type TickerMarket,
 } from "@/lib/ticker-prefill-form";
 
@@ -67,7 +65,6 @@ export function ManualTradeModal({
   const [riskNotes, setRiskNotes] = useState("");
   const [brokerReference, setBrokerReference] = useState("");
 
-  const prefillRequestId = useRef(0);
   const priceTouchedRef = useRef(false);
   const instrumentEditedRef = useRef(false);
   const openedSessionRef = useRef<string | null>(null);
@@ -134,73 +131,6 @@ export function ManualTradeModal({
     };
   }, [open, initialTrade]);
 
-  // Debounce ticker separately — prefill only reacts to this, not other fields.
-  const [debouncedTicker, setDebouncedTicker] = useState("");
-
-  useEffect(() => {
-    if (!open) return;
-    const timer = window.setTimeout(() => {
-      setDebouncedTicker(instrument.ticker);
-    }, TICKER_PREFILL_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [instrument.ticker, open]);
-
-  useEffect(() => {
-    if (!open || isEditing) return;
-
-    const ticker = normalizeTickerInput(debouncedTicker);
-    if (!shouldPrefillTicker(ticker)) {
-      return;
-    }
-
-    const requestId = ++prefillRequestId.current;
-
-    void (async () => {
-      setPrefillLoading(true);
-      try {
-        const result = await getTickerPrefill(
-          ticker,
-          market,
-        );
-        if (prefillRequestId.current !== requestId) return;
-
-        const fields = instrumentFieldsFromPrefill(result);
-
-        if (!instrumentEditedRef.current) {
-          setInstrument((current) => ({
-            ...current,
-            ...fields,
-            ticker: fields.ticker || current.ticker,
-          }));
-        } else {
-          // User already edited details — only sync ticker normalisation + currency.
-          setInstrument((current) => ({
-            ...current,
-            ticker: fields.ticker || current.ticker,
-            currency: fields.currency,
-          }));
-        }
-
-        setPrefillProvider(result.provider);
-        setPrefillWarnings(
-          result.source_warnings.filter(isVisiblePrefillWarning),
-        );
-
-        if (!priceTouchedRef.current && result.metrics.current_price) {
-          setPrice(String(result.metrics.current_price));
-        }
-      } catch {
-        if (prefillRequestId.current !== requestId) return;
-        setPrefillProvider(null);
-        setPrefillWarnings([]);
-      } finally {
-        if (prefillRequestId.current === requestId) {
-          setPrefillLoading(false);
-        }
-      }
-    })();
-  }, [debouncedTicker, market, open, isEditing]);
-
   function markInstrumentEdited() {
     instrumentEditedRef.current = true;
   }
@@ -218,6 +148,36 @@ export function ManualTradeModal({
       industry: suggestion.industry ?? "",
     }));
     setMarket(marketFromTickerSuggestion(suggestion));
+  }
+
+  function applyTickerDetails(prefill: TickerPrefill | null) {
+    if (!prefill) {
+      setPrefillProvider(null);
+      setPrefillWarnings([]);
+      return;
+    }
+
+    const fields = instrumentFieldsFromPrefill(prefill);
+    if (!instrumentEditedRef.current) {
+      setInstrument((current) => ({
+        ...current,
+        ...fields,
+        ticker: fields.ticker || current.ticker,
+      }));
+    } else {
+      setInstrument((current) => ({
+        ...current,
+        ticker: fields.ticker || current.ticker,
+        currency: fields.currency,
+      }));
+    }
+
+    setPrefillProvider(prefill.provider);
+    setPrefillWarnings(prefill.source_warnings.filter(isVisiblePrefillWarning));
+
+    if (!priceTouchedRef.current && prefill.metrics.current_price) {
+      setPrice(String(prefill.metrics.current_price));
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -276,7 +236,7 @@ export function ManualTradeModal({
       description={
         isEditing
           ? "Update the execution record. The cash movement and position book will be rebuilt from the trade ledger."
-          : "Choose the market, then enter a ticker. Instrument details and price fill in automatically after you pause typing."
+          : "Choose the country first, then select a ticker. Instrument details and price fill in from that selection."
       }
       size="lg"
       footer={
@@ -301,33 +261,25 @@ export function ManualTradeModal({
       }
     >
       <form id="manual-trade-form" onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_120px_100px]">
-          <Field label="Ticker">
-            <TickerCombobox
-              required
-              value={instrument.ticker}
-              onChange={(ticker) =>
-                setInstrument((current) => ({
-                  ...current,
-                  ticker,
-                }))
-              }
-              onSelect={applyTickerSuggestion}
-              className={inputClassName}
-              placeholder="e.g. AAPL or SEPLAT"
-            />
-          </Field>
-          <Field label="Country">
-            <select
-              value={market}
-              onChange={(event) => setMarket(event.target.value as TickerMarket)}
-              className={inputClassName}
-              disabled={isEditing}
-            >
-              <option value="US">US</option>
-              <option value="NG">Nigeria</option>
-            </select>
-          </Field>
+        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_100px]">
+          <TickerSelector
+            required
+            disabled={isEditing}
+            market={market}
+            value={instrument.ticker}
+            onMarketChange={setMarket}
+            onTickerChange={(ticker) =>
+              setInstrument((current) => ({
+                ...current,
+                ticker,
+              }))
+            }
+            onSuggestion={applyTickerSuggestion}
+            onDetails={applyTickerDetails}
+            onLoadingChange={setPrefillLoading}
+            className={inputClassName}
+            placeholder="e.g. AAPL or SEPLAT"
+          />
           <Field label="Currency">
             <input
               readOnly

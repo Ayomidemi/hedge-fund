@@ -3,7 +3,7 @@
 import { FormEvent, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { TickerCombobox } from "@/components/ticker/TickerCombobox";
+import { TickerSelector } from "@/components/ticker/TickerSelector";
 import { Modal } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/ToastProvider";
 import {
@@ -11,9 +11,7 @@ import {
   createTickerAnalysis,
   getTickerMemo,
   getTickerMLReport,
-  getTickerPrefill,
   runResearchDataPipeline,
-  type TickerSuggestion,
   type TickerAIDraft,
   type TickerAIDraftInput,
   type TickerAnalysis,
@@ -24,7 +22,7 @@ import {
   type TickerPrefill,
 } from "@/lib/api";
 import {
-  marketFromTickerSuggestion,
+  normalizeTickerInput,
   type TickerMarket,
 } from "@/lib/ticker-prefill-form";
 
@@ -74,6 +72,7 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
   const [prefillData, setPrefillData] = useState<TickerPrefill | null>(null);
   const [prefillWarnings, setPrefillWarnings] = useState<string[]>([]);
   const [intakeMarket, setIntakeMarket] = useState<TickerMarket>("US");
+  const [tickerLookupLoading, setTickerLookupLoading] = useState(false);
   const [selectedMemo, setSelectedMemo] = useState<TickerMemo | null>(null);
   const [memoLoadingId, setMemoLoadingId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<
@@ -111,11 +110,6 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     router.refresh();
   }
 
-  function applyTickerSuggestion(suggestion: TickerSuggestion | null) {
-    if (!suggestion) return;
-    setIntakeMarket(marketFromTickerSuggestion(suggestion));
-  }
-
   async function handleOpenMemo(memoId: string) {
     setMemoLoadingId(memoId);
     setError(null);
@@ -136,27 +130,24 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
 
     const tickerFormData = new FormData(form);
     const ticker = textValue(tickerFormData, "ticker");
-    const market = textValue(tickerFormData, "market");
     if (!ticker) {
       setError("Enter a ticker first.");
       return;
     }
 
-    setPendingAction("prefill");
-    setError(null);
-    setPrefillWarnings([]);
-
-    try {
-      const result = await getTickerPrefill(ticker, market);
-      fillFormFromPrefill(form, result);
-      setPrefillData(result);
-      setPrefillWarnings(result.source_warnings.filter(isAnalystVisibleWarning));
-      setStep("prefill");
-    } catch {
-      setError("Ticker prefill was not available.");
-    } finally {
-      setPendingAction(null);
+    if (
+      !prefillData ||
+      normalizeTickerInput(prefillData.instrument.ticker) !== normalizeTickerInput(ticker)
+    ) {
+      setError("Select a ticker from the dropdown before continuing.");
+      return;
     }
+
+    setError(null);
+
+    fillFormFromPrefill(form, prefillData);
+    setPrefillWarnings(prefillData.source_warnings.filter(isAnalystVisibleWarning));
+    setStep("prefill");
   }
 
   async function handleGenerateDraft() {
@@ -292,29 +283,21 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
 
         {step === "ticker" && (
           <WorkflowPanel eyebrow="Step 1" title="Ticker Intake">
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_220px]">
-              <Field label="Ticker">
-                <TickerCombobox
-                  name="ticker"
-                  required
-                  autoFocus
-                  className={inputClassName}
-                  onSelect={applyTickerSuggestion}
-                />
-              </Field>
-              <Field label="Country">
-                <select
-                  name="market"
-                  value={intakeMarket}
-                  onChange={(event) =>
-                    setIntakeMarket(event.target.value as TickerMarket)
-                  }
-                  className={inputClassName}
-                >
-                  <option value="US">US</option>
-                  <option value="NG">Nigeria</option>
-                </select>
-              </Field>
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+              <TickerSelector
+                required
+                autoFocus
+                detailsScope="analysis"
+                market={intakeMarket}
+                onMarketChange={(nextMarket) => {
+                  setIntakeMarket(nextMarket);
+                  setPrefillData(null);
+                }}
+                onTickerChange={() => setPrefillData(null)}
+                onDetails={setPrefillData}
+                onLoadingChange={setTickerLookupLoading}
+                className={inputClassName}
+              />
               <Field label="Time Horizon">
                 <input
                   name="time_horizon"
@@ -325,8 +308,8 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
             </div>
             <WorkflowActions
               backLabel="Cancel"
-              nextLabel={pendingAction === "prefill" ? "Fetching..." : "Continue"}
-              nextDisabled={pendingAction !== null}
+              nextLabel={tickerLookupLoading ? "Fetching..." : "Continue"}
+              nextDisabled={pendingAction !== null || tickerLookupLoading}
               onBack={returnToHistory}
               onNext={handlePrefill}
             />
@@ -594,11 +577,11 @@ function IdentityFields({ prefill }: { prefill: TickerPrefill | null }) {
   return (
     <div className="grid gap-4 lg:grid-cols-4">
       <Field label="Ticker">
-        <TickerCombobox
+        <input
           name="ticker"
           required
           defaultValue={prefill?.instrument.ticker}
-          className={inputClassName}
+          className={`${inputClassName} uppercase`}
         />
       </Field>
       <Field label="Name">
