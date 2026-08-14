@@ -128,3 +128,62 @@ class ResearchLabOverviewResponse(BaseModel):
     validation_checks: list[ResearchValidationCheckResponse]
     action_items: list[ResearchActionItemResponse]
     notes: list[str] = Field(default_factory=list)
+
+
+class SavedBacktestRunResponse(BaseModel):
+    id: UUID
+    name: str
+    status: str
+    engine_version: str
+    parameters: dict
+    start_date: date | None = None
+    end_date: date | None = None
+    horizon_days: int
+    rebalance_count: int
+    cumulative_return_pct: Decimal
+    benchmark_return_pct: Decimal | None = None
+    alpha_pct: Decimal | None = None
+    annualized_return_pct: Decimal
+    annualized_volatility_pct: Decimal
+    sharpe_ratio: Decimal
+    max_drawdown_pct: Decimal
+    hit_rate_pct: Decimal
+    turnover_pct: Decimal
+    cost_drag_pct: Decimal
+    regime_filter_applied: bool
+    skipped_by_regime: int
+    created_at: datetime
+    periods: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ResearchExperimentRecordResponse(BaseModel):
+    id: UUID
+    name: str
+    experiment_type: str
+    status: str
+    hypothesis: str
+    parameters: dict
+    metrics: dict
+    primary_metric: str | None = None
+    primary_value: Decimal | None = None
+    model_version_id: UUID | None = None
+    backtest_run_id: UUID | None = None
+    created_at: datetime
+
+
+class ResearchNoteCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list, max_length=10)
+    experiment_id: UUID | None = None
+
+
+class ResearchNoteResponse(BaseModel):
+    id: UUID
+    title: str
+    body: str
+    tags: list[str]
+    experiment_id: UUID | None = None
+    created_at: datetime
+    updated_at: datetime

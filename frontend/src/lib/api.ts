@@ -114,6 +114,18 @@ async function patchApi<TResponse, TPayload>(
   return response.json() as Promise<TResponse>;
 }
 
+async function deleteApi(path: string, options?: ApiRequestOptions): Promise<void> {
+  const accessToken = await resolveAccessToken(options?.accessToken);
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "DELETE",
+    headers: buildAuthHeaders(accessToken),
+  });
+
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
+}
+
 export type HealthResponse = {
   status: string;
 };
@@ -638,6 +650,8 @@ export type BacktestPeriod = {
   alpha_pct: string | null;
   turnover_pct: string;
   cost_drag_pct: string;
+  regime: string | null;
+  skipped_by_regime: boolean;
 };
 
 export type BacktestRunInput = {
@@ -649,6 +663,9 @@ export type BacktestRunInput = {
   top_n?: number;
   min_names_per_period?: number;
   transaction_cost_bps?: string;
+  slippage_bps?: string;
+  execution_lag_days?: number;
+  regime_filter?: boolean;
 };
 
 export type BacktestRun = {
@@ -669,8 +686,69 @@ export type BacktestRun = {
   hit_rate_pct: string;
   turnover_pct: string;
   cost_drag_pct: string;
+  regime_filter_applied: boolean;
+  skipped_by_regime: number;
   periods: BacktestPeriod[];
   warnings: string[];
+};
+
+export type SavedBacktestRun = {
+  id: string;
+  name: string;
+  status: string;
+  engine_version: string;
+  parameters: Record<string, unknown>;
+  start_date: string | null;
+  end_date: string | null;
+  horizon_days: number;
+  rebalance_count: number;
+  cumulative_return_pct: string;
+  benchmark_return_pct: string | null;
+  alpha_pct: string | null;
+  annualized_return_pct: string;
+  annualized_volatility_pct: string;
+  sharpe_ratio: string;
+  max_drawdown_pct: string;
+  hit_rate_pct: string;
+  turnover_pct: string;
+  cost_drag_pct: string;
+  regime_filter_applied: boolean;
+  skipped_by_regime: number;
+  created_at: string;
+  periods: BacktestPeriod[];
+  warnings: string[];
+};
+
+export type ResearchExperimentRecord = {
+  id: string;
+  name: string;
+  experiment_type: string;
+  status: string;
+  hypothesis: string;
+  parameters: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  primary_metric: string | null;
+  primary_value: string | null;
+  model_version_id: string | null;
+  backtest_run_id: string | null;
+  created_at: string;
+};
+
+export type ResearchNote = {
+  id: string;
+  title: string;
+  body: string;
+  tags: string[];
+  experiment_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResearchNoteInput = {
+  title: string;
+  body: string;
+  tags?: string[];
+  experiment_id?: string | null;
 };
 
 export type MonthlyReport = {
@@ -1455,6 +1533,46 @@ export function getAttributionReport(options?: ApiRequestOptions) {
 
 export function getResearchLabOverview(options?: ApiRequestOptions) {
   return fetchApi<ResearchLabOverview>("/api/research-lab/overview", options);
+}
+
+export function getResearchExperiments(limit = 50, options?: ApiRequestOptions) {
+  return fetchApi<ResearchExperimentRecord[]>(
+    `/api/research-lab/experiments?limit=${limit}`,
+    options,
+  );
+}
+
+export function getSavedBacktests(limit = 25, options?: ApiRequestOptions) {
+  return fetchApi<SavedBacktestRun[]>(
+    `/api/research-lab/backtests?limit=${limit}`,
+    options,
+  );
+}
+
+export function getSavedBacktest(backtestId: string, options?: ApiRequestOptions) {
+  return fetchApi<SavedBacktestRun>(
+    `/api/research-lab/backtests/${backtestId}`,
+    options,
+  );
+}
+
+export function getResearchNotes(options?: ApiRequestOptions) {
+  return fetchApi<ResearchNote[]>("/api/research-lab/notes", options);
+}
+
+export function createResearchNote(
+  payload: ResearchNoteInput,
+  options?: ApiRequestOptions,
+) {
+  return postApi<ResearchNote, ResearchNoteInput>(
+    "/api/research-lab/notes",
+    payload,
+    options,
+  );
+}
+
+export function deleteResearchNote(noteId: string, options?: ApiRequestOptions) {
+  return deleteApi(`/api/research-lab/notes/${noteId}`, options);
 }
 
 export function runResearchDataPipeline(

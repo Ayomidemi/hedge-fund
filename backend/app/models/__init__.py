@@ -935,6 +935,112 @@ class PriceRefreshRun(Base, TimestampMixin):
     )
 
 
+class BacktestRun(Base, TimestampMixin):
+    """Persisted walk-forward backtest run. Periods and parameters are stored
+    so results are reproducible and comparable across research iterations."""
+
+    __tablename__ = "backtest_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    engine_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed")
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    start_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    rebalance_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cumulative_return_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    benchmark_return_pct: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    alpha_pct: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    annualized_return_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    annualized_volatility_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    sharpe_ratio: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    max_drawdown_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    hit_rate_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    turnover_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    cost_drag_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, default=Decimal("0")
+    )
+    regime_filter_applied: Mapped[bool] = mapped_column(nullable=False, default=False)
+    skipped_by_regime: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    periods: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+
+    __table_args__ = (
+        Index("ix_backtest_runs_owner_created", "owner_user_id", "created_at"),
+    )
+
+
+class ResearchExperiment(Base, TimestampMixin):
+    """Tracked research trial. One row per pipeline run, training run, backtest,
+    or regime fit so research history is auditable and comparable."""
+
+    __tablename__ = "research_experiments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    experiment_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed")
+    hypothesis: Mapped[str] = mapped_column(Text, nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    primary_metric: Mapped[str | None] = mapped_column(String(128))
+    primary_value: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    model_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("model_versions.id"), index=True
+    )
+    backtest_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("backtest_runs.id"), index=True
+    )
+
+    __table_args__ = (
+        Index("ix_research_experiments_owner_created", "owner_user_id", "created_at"),
+    )
+
+
+class ResearchNote(Base, TimestampMixin):
+    """Lab notebook entry. Markdown research notes optionally linked to a
+    tracked experiment."""
+
+    __tablename__ = "research_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    experiment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("research_experiments.id"), index=True
+    )
+
+    __table_args__ = (
+        Index("ix_research_notes_owner_created", "owner_user_id", "created_at"),
+    )
+
+
 class SystemLogEntry(Base, TimestampMixin):
     __tablename__ = "system_log_entries"
 

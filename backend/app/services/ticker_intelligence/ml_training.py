@@ -42,6 +42,7 @@ from app.api.schemas.ticker_intelligence import (
     YahooPriceBackfillCreate,
 )
 from app.models import (
+    BacktestRun,
     CashLedgerEntry,
     Instrument,
     MarketPriceBar,
@@ -834,14 +835,42 @@ async def get_latest_market_regime_model(
     return _regime_response_from_artifact(model_version, model_version.features or {})
 
 
+DEFENSIVE_REGIMES = {"stress", "shock"}
+
+
 async def run_factor_backtest(
     session: AsyncSession,
     payload: BacktestRunCreate,
+    user: AuthenticatedUser | None = None,
 ) -> BacktestRunResponse:
     dataset = await _load_backtest_dataset(session, payload)
     if not dataset:
         raise MLTrainingDataUnavailableError(
             "No labeled feature rows are available for this backtest."
+        )
+
+    warnings: list[str] = []
+    regime_timeline: list[tuple[date, str]] | None = None
+    if payload.regime_filter:
+        regime_timeline = await _historical_regime_timeline(session, payload)
+        if regime_timeline is None:
+            warnings.append(
+                "Regime filter requested but benchmark price history is insufficient; running unfiltered."
+            )
+        else:
+            warnings.append(
+                "Regime filter labels use cluster centroids fit on the full lookback; treat early periods as partially in-sample."
+            )
+
+    total_cost_bps = payload.transaction_cost_bps + payload.slippage_bps
+    lag_fraction = (
+        Decimal(payload.execution_lag_days) / Decimal(payload.horizon_days)
+        if payload.horizon_days > 0
+        else Decimal("0")
+    )
+    if payload.execution_lag_days > 0:
+        warnings.append(
+            f"Execution lag of {payload.execution_lag_days} trading day(s) approximated by scaling each period's return accrual."
         )
 
     rows_by_date: dict[date, list[dict]] = {}
@@ -850,8 +879,8 @@ async def run_factor_backtest(
 
     periods: list[BacktestPeriodResponse] = []
     previous_selection: set[str] = set()
-    warnings: list[str] = []
     selected_counts: list[int] = []
+    skipped_by_regime = 0
 
     for as_of_date in sorted(rows_by_date):
         candidates = rows_by_date[as_of_date]
@@ -859,6 +888,41 @@ async def run_factor_backtest(
             warnings.append(
                 f"{as_of_date.isoformat()} skipped; only {len(candidates)} candidates."
             )
+            continue
+
+        regime_label = (
+            _regime_label_for_date(regime_timeline, as_of_date)
+            if regime_timeline is not None
+            else None
+        )
+        if regime_label in DEFENSIVE_REGIMES:
+            # Defensive regime: exit to cash. Pay costs on the exit if we held
+            # names, then sit out the period at a 0% gross return.
+            exit_turnover = (
+                Decimal("100.0000") if previous_selection else Decimal("0.0000")
+            )
+            cost_drag = _cost_drag_pct(exit_turnover, total_cost_bps)
+            benchmark_return = _period_benchmark_return(candidates)
+            strategy_return = _quantize(Decimal("0") - cost_drag)
+            periods.append(
+                BacktestPeriodResponse(
+                    as_of_date=as_of_date,
+                    selected_tickers=[],
+                    strategy_return_pct=strategy_return,
+                    benchmark_return_pct=benchmark_return,
+                    alpha_pct=(
+                        _quantize(strategy_return - benchmark_return)
+                        if benchmark_return is not None
+                        else None
+                    ),
+                    turnover_pct=exit_turnover,
+                    cost_drag_pct=cost_drag,
+                    regime=regime_label,
+                    skipped_by_regime=True,
+                )
+            )
+            skipped_by_regime += 1
+            previous_selection = set()
             continue
 
         ranked = sorted(
@@ -870,10 +934,12 @@ async def run_factor_backtest(
         selected_tickers = [item["ticker"] for item in selected]
         selection_set = set(selected_tickers)
         turnover = _selection_turnover(previous_selection, selection_set)
-        cost_drag = _cost_drag_pct(turnover, payload.transaction_cost_bps)
+        cost_drag = _cost_drag_pct(turnover, total_cost_bps)
         gross_return = _average_decimal(
             [item["forward_return_pct"] for item in selected]
         )
+        if lag_fraction > 0:
+            gross_return = _quantize(gross_return * (Decimal("1") - lag_fraction))
         strategy_return = _quantize(gross_return - cost_drag)
         benchmark_return = _period_benchmark_return(selected)
         alpha = (
@@ -890,6 +956,8 @@ async def run_factor_backtest(
                 alpha_pct=alpha,
                 turnover_pct=turnover,
                 cost_drag_pct=cost_drag,
+                regime=regime_label,
+                skipped_by_regime=False,
             )
         )
         selected_counts.append(len(selected))
@@ -935,6 +1003,90 @@ async def run_factor_backtest(
     turnover = _average_decimal([period.turnover_pct for period in periods])
     cost_drag = sum((period.cost_drag_pct for period in periods), Decimal("0"))
 
+    regime_filter_applied = regime_timeline is not None
+    run_name = f"{BACKTEST_ENGINE_VERSION}:{payload.horizon_days}d" + (
+        "+regime" if regime_filter_applied else ""
+    )
+    max_drawdown = _max_drawdown_from_returns(strategy_returns)
+
+    backtest_id = uuid.uuid4()
+    if user is not None:
+        run = BacktestRun(
+            owner_user_id=user.id,
+            name=run_name,
+            engine_version=BACKTEST_ENGINE_VERSION,
+            status="completed",
+            parameters={
+                "tickers": sorted(
+                    {ticker.strip().upper() for ticker in payload.tickers}
+                ),
+                "benchmark_ticker": payload.benchmark_ticker,
+                "horizon_days": payload.horizon_days,
+                "feature_version": payload.feature_version,
+                "label_source": payload.label_source,
+                "top_n": payload.top_n,
+                "min_names_per_period": payload.min_names_per_period,
+                "transaction_cost_bps": str(payload.transaction_cost_bps),
+                "slippage_bps": str(payload.slippage_bps),
+                "execution_lag_days": payload.execution_lag_days,
+                "regime_filter": payload.regime_filter,
+            },
+            start_date=periods[0].as_of_date,
+            end_date=periods[-1].as_of_date,
+            horizon_days=payload.horizon_days,
+            rebalance_count=len(periods),
+            cumulative_return_pct=cumulative_return,
+            benchmark_return_pct=benchmark_cumulative,
+            alpha_pct=alpha,
+            annualized_return_pct=annualized_return,
+            annualized_volatility_pct=annualized_volatility,
+            sharpe_ratio=sharpe,
+            max_drawdown_pct=max_drawdown,
+            hit_rate_pct=hit_rate,
+            turnover_pct=turnover,
+            cost_drag_pct=_quantize(cost_drag),
+            regime_filter_applied=regime_filter_applied,
+            skipped_by_regime=skipped_by_regime,
+            periods=[period.model_dump(mode="json") for period in periods],
+            warnings=warnings,
+        )
+        session.add(run)
+        await session.flush()
+        backtest_id = run.id
+
+        from app.services.research_lab.experiments import record_experiment
+
+        await record_experiment(
+            session,
+            owner_user_id=user.id,
+            name=f"Factor backtest {payload.horizon_days}d"
+            + (" with regime filter" if regime_filter_applied else ""),
+            experiment_type="backtest",
+            hypothesis=(
+                "Top-ranked momentum and trend names outperform the benchmark "
+                "after transaction costs and slippage."
+                + (
+                    " Standing aside in stress regimes improves risk-adjusted returns."
+                    if regime_filter_applied
+                    else ""
+                )
+            ),
+            parameters=dict(run.parameters),
+            metrics={
+                "cumulative_return_pct": str(cumulative_return),
+                "sharpe_ratio": str(sharpe),
+                "max_drawdown_pct": str(max_drawdown),
+                "hit_rate_pct": str(hit_rate),
+                "alpha_pct": str(alpha) if alpha is not None else None,
+                "rebalance_count": len(periods),
+                "skipped_by_regime": skipped_by_regime,
+            },
+            primary_metric="sharpe_ratio",
+            primary_value=sharpe,
+            backtest_run_id=run.id,
+        )
+        await session.commit()
+
     logger.info(
         "factor_backtest_completed",
         extra={
@@ -942,12 +1094,14 @@ async def run_factor_backtest(
             "rebalance_count": len(periods),
             "horizon_days": payload.horizon_days,
             "cumulative_return_pct": str(cumulative_return),
+            "regime_filter_applied": regime_filter_applied,
+            "persisted": user is not None,
         },
     )
 
     return BacktestRunResponse(
-        backtest_id=uuid.uuid4(),
-        name=f"{BACKTEST_ENGINE_VERSION}:{payload.horizon_days}d",
+        backtest_id=backtest_id,
+        name=run_name,
         start_date=periods[0].as_of_date,
         end_date=periods[-1].as_of_date,
         horizon_days=payload.horizon_days,
@@ -961,13 +1115,66 @@ async def run_factor_backtest(
         annualized_return_pct=annualized_return,
         annualized_volatility_pct=annualized_volatility,
         sharpe_ratio=sharpe,
-        max_drawdown_pct=_max_drawdown_from_returns(strategy_returns),
+        max_drawdown_pct=max_drawdown,
         hit_rate_pct=hit_rate,
         turnover_pct=turnover,
         cost_drag_pct=_quantize(cost_drag),
+        regime_filter_applied=regime_filter_applied,
+        skipped_by_regime=skipped_by_regime,
         periods=periods,
         warnings=warnings,
     )
+
+
+async def _historical_regime_timeline(
+    session: AsyncSession,
+    payload: BacktestRunCreate,
+    state_count: int = 4,
+) -> list[tuple[date, str]] | None:
+    """Assign a regime label to every historical benchmark observation using
+    the same clustering as the HMM regime model, so backtests can filter
+    allocation decisions by market state."""
+    benchmark_ticker = (payload.benchmark_ticker or "SPY").strip().upper()
+    instrument = await _get_instrument(session, benchmark_ticker)
+    if instrument is None:
+        return None
+
+    bars = await _load_price_points(session, instrument.id, payload.label_source)
+    observations = _regime_observations(bars)
+    if len(observations) < state_count * 8:
+        return None
+
+    import numpy as np
+
+    points = np.array(
+        [
+            [
+                float(observation["daily_return_pct"]),
+                float(observation["realized_volatility_pct"]),
+            ]
+            for observation in observations
+        ]
+    )
+    assignments, means, _ = _cluster_regime_points(points, state_count)
+    labels = _regime_labels(means)
+    return [
+        (observation["as_of_date"], labels[int(assignment)])
+        for observation, assignment in zip(observations, assignments)
+    ]
+
+
+def _regime_label_for_date(
+    timeline: list[tuple[date, str]],
+    as_of_date: date,
+) -> str | None:
+    """Most recent regime label at or before the given date."""
+    from bisect import bisect_right
+
+    dates = [entry[0] for entry in timeline]
+    index = bisect_right(dates, as_of_date)
+    if index == 0:
+        return None
+    return timeline[index - 1][1]
 
 
 async def build_comparative_analysis(

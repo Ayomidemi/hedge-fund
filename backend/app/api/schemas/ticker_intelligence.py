@@ -364,6 +364,9 @@ class BacktestRunCreate(BaseModel):
     top_n: int = Field(default=5, ge=1, le=50)
     min_names_per_period: int = Field(default=3, ge=1, le=100)
     transaction_cost_bps: Decimal = Field(default=Decimal("10"), ge=0, le=250)
+    slippage_bps: Decimal = Field(default=Decimal("5"), ge=0, le=250)
+    execution_lag_days: int = Field(default=1, ge=0, le=10)
+    regime_filter: bool = False
 
 
 class BacktestPeriodResponse(BaseModel):
@@ -374,6 +377,8 @@ class BacktestPeriodResponse(BaseModel):
     alpha_pct: Decimal | None = None
     turnover_pct: Decimal
     cost_drag_pct: Decimal
+    regime: str | None = None
+    skipped_by_regime: bool = False
 
 
 class BacktestRunResponse(BaseModel):
@@ -394,5 +399,7 @@ class BacktestRunResponse(BaseModel):
     hit_rate_pct: Decimal
     turnover_pct: Decimal
     cost_drag_pct: Decimal
+    regime_filter_applied: bool = False
+    skipped_by_regime: int = 0
     periods: list[BacktestPeriodResponse]
     warnings: list[str] = Field(default_factory=list)

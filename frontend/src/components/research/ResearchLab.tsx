@@ -16,6 +16,7 @@ import {
   type ResearchPipelineRun,
 } from "@/lib/api";
 import { BacktestsPanel } from "@/components/research/BacktestsPanel";
+import { NotebookPanel } from "@/components/research/NotebookPanel";
 import { PipelineStepsPanel } from "@/components/research/PipelineStepsPanel";
 import { RegimePanel } from "@/components/research/RegimePanel";
 import {
@@ -42,6 +43,7 @@ type ResearchLabProps = {
 
 type LabTab =
   | "overview"
+  | "notebook"
   | "datasets"
   | "features"
   | "notebooks"
@@ -52,6 +54,7 @@ type LabTab =
 
 const tabs: { key: LabTab; label: string }[] = [
   { key: "overview", label: "Overview" },
+  { key: "notebook", label: "Notebook" },
   { key: "datasets", label: "Datasets" },
   { key: "features", label: "Features" },
   { key: "notebooks", label: "Memos" },
@@ -258,6 +261,12 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
           notes={overview.notes}
         />
       )}
+      {activeTab === "notebook" && (
+        <NotebookPanel
+          active={activeTab === "notebook"}
+          experiments={overview.experiments}
+        />
+      )}
       {activeTab === "datasets" && <DatasetsPanel datasets={overview.datasets} />}
       {activeTab === "features" && <FeaturesPanel featureSets={overview.feature_sets} />}
       {activeTab === "notebooks" && <NotebooksPanel notebooks={overview.notebooks} />}
@@ -269,6 +278,10 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
           backtests={overview.backtests}
           defaultTickers={defaultTrainingTickers}
           defaultHorizon={requestedHorizon}
+          hasRegimeModel={overview.backtests.some(
+            (backtest) =>
+              backtest.id === "regime-filter-review" && backtest.status === "ready",
+          )}
           onComplete={() => void reloadOverview()}
         />
       )}
@@ -645,14 +658,25 @@ function ExperimentsPanel({
 }
 
 function ModelsPanel({ models }: { models: ResearchModel[] }) {
+  const bestModelId = bestModelVersionId(models);
   return (
-    <Panel title="Model Registry" subtitle="Predictive models available to the analyst">
+    <Panel
+      title="Model Registry"
+      subtitle="Predictive models compared side by side; best directional accuracy is highlighted"
+    >
       <DataTable
         empty="No trained models are registered yet."
         headers={["Model", "Horizon", "Rows", "Accuracy", "R2", "Status"]}
         rows={models.map((model) => [
           <div key={model.model_version_id}>
-            <p className="font-medium">{model.model_name}</p>
+            <p className="font-medium">
+              {model.model_name}
+              {model.model_version_id === bestModelId && (
+                <span className="ml-2 rounded-md bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                  Best
+                </span>
+              )}
+            </p>
             <p className="text-xs text-zinc-500">{model.model_version}</p>
           </div>,
           model.horizon_days ? `${model.horizon_days}d` : "-",
@@ -666,6 +690,21 @@ function ModelsPanel({ models }: { models: ResearchModel[] }) {
       />
     </Panel>
   );
+}
+
+function bestModelVersionId(models: ResearchModel[]): string | null {
+  let best: ResearchModel | null = null;
+  for (const model of models) {
+    if (model.validation_directional_accuracy === null) continue;
+    if (
+      best === null ||
+      Number(model.validation_directional_accuracy) >
+        Number(best.validation_directional_accuracy)
+    ) {
+      best = model;
+    }
+  }
+  return best?.model_version_id ?? null;
 }
 
 function ActionItem({

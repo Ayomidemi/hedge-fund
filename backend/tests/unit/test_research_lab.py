@@ -14,6 +14,15 @@ class ResearchLabTests(TestCase):
 
         self.assertIn("/api/research-lab/overview", paths)
         self.assertIn("get", paths["/api/research-lab/overview"])
+        self.assertIn("/api/research-lab/experiments", paths)
+        self.assertIn("get", paths["/api/research-lab/experiments"])
+        self.assertIn("/api/research-lab/backtests", paths)
+        self.assertIn("get", paths["/api/research-lab/backtests"])
+        self.assertIn("/api/research-lab/backtests/{backtest_id}", paths)
+        self.assertIn("/api/research-lab/notes", paths)
+        self.assertIn("post", paths["/api/research-lab/notes"])
+        self.assertIn("/api/research-lab/notes/{note_id}", paths)
+        self.assertIn("delete", paths["/api/research-lab/notes/{note_id}"])
 
     def test_feature_status_requires_meaningful_cross_section(self) -> None:
         self.assertEqual(

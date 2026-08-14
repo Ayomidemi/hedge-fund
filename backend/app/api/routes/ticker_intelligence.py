@@ -1,3 +1,4 @@
+from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -45,6 +46,7 @@ from app.services.ticker_intelligence.analysis import (
     list_ticker_memos,
 )
 from app.services.market_data.quote_cache import get_cached_quote_price
+from app.services.research_lab.experiments import record_experiment
 from app.services.ticker_intelligence.market_data import (
     MarketDataUnavailableError,
     prefill_ticker,
@@ -114,10 +116,40 @@ async def create_yahoo_price_backfill(
 @router.post("/ml/pipeline/run", response_model=ResearchPipelineRunResponse)
 async def create_research_pipeline_run(
     payload: ResearchPipelineRunCreate,
-    _user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> ResearchPipelineRunResponse:
-    return await run_research_data_pipeline(session, payload)
+    result = await run_research_data_pipeline(session, payload)
+    failed_steps = [step for step in result.steps if step.status == "failed"]
+    await record_experiment(
+        session,
+        owner_user_id=user.id,
+        name=f"Data pipeline run ({len(result.tickers)} tickers, {result.horizon_days}d)",
+        experiment_type="pipeline",
+        status="needs_review" if failed_steps else "completed",
+        hypothesis="Fresh point-in-time prices, labels, and features improve model readiness.",
+        parameters={
+            "tickers": result.tickers,
+            "benchmark_ticker": result.benchmark_ticker,
+            "start_date": result.start_date.isoformat(),
+            "end_date": result.end_date.isoformat(),
+            "horizon_days": result.horizon_days,
+            "train_model": payload.train_model,
+        },
+        metrics={
+            "steps_completed": len(
+                [step for step in result.steps if step.status == "completed"]
+            ),
+            "steps_failed": len(failed_steps),
+            "warnings": len(result.warnings),
+            "model_trained": result.model_version_id is not None,
+        },
+        primary_metric="steps_failed",
+        primary_value=Decimal(len(failed_steps)),
+        model_version_id=result.model_version_id,
+    )
+    await session.commit()
+    return result
 
 
 @router.post("/ml/labels", response_model=TrainingLabelResponse)
@@ -153,16 +185,40 @@ async def create_price_feature_snapshots(
 @router.post("/ml/regime/hmm", response_model=RegimeModelResponse)
 async def create_hmm_regime_model(
     payload: RegimeModelFitCreate,
-    _user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> RegimeModelResponse:
     try:
-        return await fit_market_regime_model(session, payload)
+        result = await fit_market_regime_model(session, payload)
     except MLTrainingDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+    await record_experiment(
+        session,
+        owner_user_id=user.id,
+        name=f"HMM regime fit ({result.ticker}, {len(result.state_probabilities)} states)",
+        experiment_type="regime",
+        hypothesis="Return and volatility observations cluster into persistent market regimes.",
+        parameters={
+            "ticker": result.ticker,
+            "state_count": payload.state_count,
+            "lookback_days": payload.lookback_days,
+            "source": payload.source,
+        },
+        metrics={
+            "current_regime": result.current_regime,
+            "confidence_score": str(result.confidence_score),
+            "as_of_date": result.as_of_date.isoformat(),
+        },
+        primary_metric="confidence_score",
+        primary_value=result.confidence_score,
+        model_version_id=result.model_version_id,
+    )
+    await session.commit()
+    return result
 
 
 @router.get("/ml/regime/latest", response_model=RegimeModelResponse)
@@ -182,11 +238,11 @@ async def read_latest_hmm_regime_model(
 @router.post("/ml/backtests/factor", response_model=BacktestRunResponse)
 async def create_factor_backtest(
     payload: BacktestRunCreate,
-    _user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> BacktestRunResponse:
     try:
-        return await run_factor_backtest(session, payload)
+        return await run_factor_backtest(session, payload, user)
     except MLTrainingDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -197,16 +253,53 @@ async def create_factor_backtest(
 @router.post("/ml/train", response_model=PredictiveModelTrainResponse)
 async def create_predictive_model_training_run(
     payload: PredictiveModelTrainCreate,
-    _user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> PredictiveModelTrainResponse:
     try:
-        return await train_predictive_model(session, payload)
+        result = await train_predictive_model(session, payload)
     except MLTrainingDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+
+    accuracy = _decimal_or_none(
+        result.metrics.get("validation_directional_accuracy")
+    )
+    await record_experiment(
+        session,
+        owner_user_id=user.id,
+        name=f"Model training {result.horizon_days}d ({result.model_version})",
+        experiment_type="training",
+        hypothesis="Price features carry predictive signal for benchmark-relative forward returns.",
+        parameters={
+            "tickers": sorted({ticker.strip().upper() for ticker in payload.tickers}),
+            "horizon_days": payload.horizon_days,
+            "benchmark_ticker": payload.benchmark_ticker,
+            "feature_version": payload.feature_version,
+            "ridge_alpha": str(payload.ridge_alpha),
+        },
+        metrics={
+            "training_rows": result.training_rows,
+            "validation_rows": result.validation_rows,
+            **{key: str(value) for key, value in result.metrics.items()},
+        },
+        primary_metric="validation_directional_accuracy",
+        primary_value=accuracy,
+        model_version_id=result.model_version_id,
+    )
+    await session.commit()
+    return result
+
+
+def _decimal_or_none(value) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 @router.post("/ml/predict", response_model=PredictiveModelPredictionResponse)

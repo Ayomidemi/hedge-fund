@@ -21,11 +21,13 @@ from app.api.schemas.research_lab import (
 )
 from app.core.auth import AuthenticatedUser
 from app.models import (
+    BacktestRun,
     Instrument,
     MarketPriceBar,
     ModelRecommendation,
     ModelVersion,
     Opportunity,
+    ResearchExperiment,
     TickerFeatureSnapshot,
     TickerMemo,
     TickerTrainingLabel,
@@ -58,9 +60,29 @@ async def build_research_lab_overview(
     feature_sets = await _build_feature_sets(session)
     notebooks = await _build_notebooks(session, user)
     models = await _build_models(session)
-    experiments = await _build_experiments(session)
+    experiments = await _build_experiments(session, user)
     has_regime_model = await _has_regime_model(session)
-    backtests = _build_backtests(models, feature_sets, has_regime_model)
+    latest_backtest_run = await session.scalar(
+        select(BacktestRun)
+        .where(BacktestRun.owner_user_id == user.id)
+        .order_by(BacktestRun.created_at.desc())
+        .limit(1)
+    )
+    saved_backtest_count = int(
+        await session.scalar(
+            select(func.count(BacktestRun.id)).where(
+                BacktestRun.owner_user_id == user.id
+            )
+        )
+        or 0
+    )
+    backtests = _build_backtests(
+        models,
+        feature_sets,
+        has_regime_model,
+        latest_backtest_run,
+        saved_backtest_count,
+    )
     active_opportunity_count = await _active_opportunity_count(session, user)
     validation_checks = _build_validation_checks(
         datasets=datasets,
@@ -102,14 +124,14 @@ async def build_research_lab_overview(
             dataset_count=len(datasets),
             feature_set_count=len(feature_sets),
             model_count=len(models),
-            backtest_count=len(backtests),
+            backtest_count=saved_backtest_count,
             warning_count=warning_count,
         ),
         pipeline=_build_pipeline(
             memo_count=len(notebooks),
             opportunity_count=active_opportunity_count,
             experiment_count=len(experiments),
-            backtest_count=len(backtests),
+            backtest_count=saved_backtest_count,
             model_count=len(models),
         ),
         datasets=datasets,
@@ -122,9 +144,10 @@ async def build_research_lab_overview(
         action_items=action_items,
         notes=[
             "Research Lab is a live read model over the current research system.",
-            "Datasets and models are shared research infrastructure; memos and opportunities are scoped to the signed-in user.",
-            "Backtest runs are executable from the Backtests tab; persistent run history can be added next.",
-            "The Regime tab fits and displays the HMM market-regime model used by Strategy Pods.",
+            "Datasets and models are shared research infrastructure; memos, experiments, backtests, and notebook entries are scoped to the signed-in user.",
+            "Backtest runs are saved automatically with parameters and periods so results stay reproducible.",
+            "Every pipeline run, training run, backtest, and regime fit is tracked as an experiment.",
+            "The Regime tab fits and displays the HMM market-regime model used by Strategy Pods and the regime-filtered backtest.",
         ],
     )
 
@@ -323,13 +346,46 @@ async def _build_models(session: AsyncSession) -> list[ResearchModelResponse]:
     return responses
 
 
-async def _build_experiments(session: AsyncSession) -> list[ResearchExperimentResponse]:
+async def _build_experiments(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> list[ResearchExperimentResponse]:
+    records = list(
+        await session.scalars(
+            select(ResearchExperiment)
+            .where(ResearchExperiment.owner_user_id == user.id)
+            .order_by(ResearchExperiment.created_at.desc())
+            .limit(25)
+        )
+    )
+    experiments: list[ResearchExperimentResponse] = []
+    for record in records:
+        parameters = record.parameters or {}
+        experiments.append(
+            ResearchExperimentResponse(
+                id=record.id,
+                name=record.name,
+                experiment_type=record.experiment_type,
+                status=record.status,
+                hypothesis=record.hypothesis,
+                feature_version=_string_or_none(parameters.get("feature_version")),
+                horizon_days=_int_or_none(parameters.get("horizon_days")),
+                validation_metric=record.primary_metric,
+                validation_value=record.primary_value,
+                created_at=record.created_at,
+            )
+        )
+
+    if experiments:
+        return experiments
+
+    # No tracked experiments yet: fall back to registered model versions so
+    # existing research work stays visible until new runs are recorded.
     model_versions = list(
         await session.scalars(
             select(ModelVersion).order_by(ModelVersion.created_at.desc()).limit(12)
         )
     )
-    experiments: list[ResearchExperimentResponse] = []
     for model_version in model_versions:
         metrics = model_version.metrics or {}
         validation_value = _first_decimal(
@@ -359,38 +415,46 @@ def _build_backtests(
     models: list[ResearchModelResponse],
     feature_sets: list[ResearchFeatureSetResponse],
     has_regime_model: bool,
+    latest_run: BacktestRun | None,
+    saved_run_count: int,
 ) -> list[ResearchBacktestResponse]:
     responses = [
         ResearchBacktestResponse(
             id="factor-ranker-walk-forward",
             name="Factor ranker walk-forward",
             status="ready" if feature_sets else "blocked",
-            strategy="Rank model-ready feature snapshots and rebalance into top names.",
+            strategy="Rank model-ready feature snapshots and rebalance into top names, with slippage and execution-lag costs.",
             benchmark="SPY",
-            cost_model="Configurable bps per rebalance",
-            latest_run_at=models[0].created_at if models else None,
+            cost_model="Transaction + slippage bps per rebalance",
+            latest_run_at=latest_run.created_at if latest_run else None,
             primary_metric=(
-                "Directional accuracy"
-                if models and models[0].validation_directional_accuracy is not None
-                else None
+                f"Sharpe {latest_run.sharpe_ratio}" if latest_run else None
             ),
             notes=(
-                "Run from the Backtests tab once feature snapshots and labels exist."
-                if feature_sets
-                else "Needs feature snapshots and training labels before it can run."
+                f"{saved_run_count} saved run(s). Run and compare from the Backtests tab."
+                if saved_run_count
+                else (
+                    "Run from the Backtests tab once feature snapshots and labels exist."
+                    if feature_sets
+                    else "Needs feature snapshots and training labels before it can run."
+                )
             ),
         ),
         ResearchBacktestResponse(
             id="regime-filter-review",
-            name="Regime filter review",
+            name="Regime-filtered factor ranker",
             status="ready" if has_regime_model else "blocked",
-            strategy="Compare model signals with the latest market-regime state before allocation.",
+            strategy="Same factor ranker, but exits to cash when the HMM regime model classifies the market as stressed.",
             benchmark="SPY",
-            cost_model="No trading costs until a portfolio rule is defined",
-            latest_run_at=None,
+            cost_model="Transaction + slippage bps, including regime exit costs",
+            latest_run_at=(
+                latest_run.created_at
+                if latest_run and latest_run.regime_filter_applied
+                else None
+            ),
             primary_metric="Current regime confidence" if has_regime_model else None,
             notes=(
-                "Review the latest HMM regime state on the Regime tab before sizing risk."
+                "Enable the regime filter toggle in the backtest form to run it."
                 if has_regime_model
                 else "Fit the HMM regime model on the Regime tab first."
             ),
