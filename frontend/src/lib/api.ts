@@ -189,6 +189,9 @@ export type Trade = {
   fees: string;
   rationale: string;
   risk_notes: string | null;
+  pre_trade_check_id: string | null;
+  risk_decision: string | null;
+  risk_override_reason: string | null;
   broker_reference: string | null;
 };
 
@@ -414,6 +417,8 @@ export type ManualTradeInput = {
   trade_date?: string;
   rationale?: string;
   risk_notes?: string;
+  pre_trade_check_id?: string;
+  risk_override_reason?: string;
   broker_reference?: string;
 };
 
@@ -1158,10 +1163,12 @@ export type PreTradeRiskInput = {
   quantity: string;
   price: string;
   fees: string;
+  trade_date?: string;
   rationale?: string;
 };
 
 export type PreTradeRiskCheck = {
+  id: string;
   decision: string;
   risk_level: string;
   cash_impact: string;

@@ -142,6 +142,7 @@ class PreTradeRiskCheckCreate(BaseModel):
 
 
 class PreTradeRiskCheckResponse(BaseModel):
+    id: UUID
     decision: str
     risk_level: str
     cash_impact: Decimal

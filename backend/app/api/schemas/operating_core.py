@@ -93,6 +93,8 @@ class ManualTradeCreate(BaseModel):
     trade_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     rationale: str | None = None
     risk_notes: str | None = None
+    pre_trade_check_id: UUID | None = None
+    risk_override_reason: str | None = None
     broker_reference: str | None = None
 
 
@@ -157,6 +159,9 @@ class TradeResponse(BaseModel):
     fees: Decimal
     rationale: str
     risk_notes: str | None
+    pre_trade_check_id: UUID | None = None
+    risk_decision: str | None = None
+    risk_override_reason: str | None = None
     broker_reference: str | None
 
 

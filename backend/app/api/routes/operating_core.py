@@ -18,6 +18,8 @@ from app.api.schemas.operating_core import (
 from app.core.auth import AuthenticatedUser, require_authenticated_user
 from app.db.session import get_session
 from app.services.portfolio.operating_core import (
+    TradeNotFoundError,
+    TradeRiskApprovalError,
     create_cash_adjustment,
     create_cash_deposit,
     create_cash_withdrawal,
@@ -26,7 +28,6 @@ from app.services.portfolio.operating_core import (
     get_trade_journal,
     list_cash_ledger_history,
     update_manual_trade,
-    TradeNotFoundError,
 )
 
 router = APIRouter(prefix="/operating-core")
@@ -118,7 +119,13 @@ async def add_manual_trade(
     user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TradeResponse:
-    return await create_manual_trade(session, payload, user)
+    try:
+        return await create_manual_trade(session, payload, user)
+    except TradeRiskApprovalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
 
 @router.patch("/trades/{trade_id}", response_model=TradeResponse)

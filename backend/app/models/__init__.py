@@ -298,6 +298,11 @@ class Trade(Base, TimestampMixin):
     fees: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=0)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     risk_notes: Mapped[str | None] = mapped_column(Text)
+    pre_trade_risk_check_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pre_trade_risk_checks.id"), index=True
+    )
+    risk_decision: Mapped[str | None] = mapped_column(String(32))
+    risk_override_reason: Mapped[str | None] = mapped_column(Text)
     broker_reference: Mapped[str | None] = mapped_column(String(255))
 
     portfolio: Mapped["Portfolio"] = relationship(back_populates="trades")
@@ -448,6 +453,32 @@ class RiskPolicyVersion(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_risk_policy_versions_name_version", "name", "version", unique=True),
+    )
+
+
+class PreTradeRiskCheck(Base, TimestampMixin):
+    __tablename__ = "pre_trade_risk_checks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    cash_impact: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    request_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    request_fingerprint: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    result_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    messages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    __table_args__ = (
+        Index("ix_pre_trade_risk_checks_owner_checked", "owner_user_id", "checked_at"),
     )
 
 

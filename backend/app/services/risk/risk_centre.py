@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from math import sqrt
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +32,7 @@ from app.models import (
     MarketPriceBar,
     Portfolio,
     PortfolioRiskSnapshot,
+    PreTradeRiskCheck,
     Position,
     PositionRiskSnapshot,
     RiskMeasurement,
@@ -39,6 +41,8 @@ from app.models import (
     StressTestResult,
 )
 from app.services.administration.system_log import record_system_log
+from app.services.market_data.fx_convert import convert_to_usd
+from app.services.market_data.fx_refresh import load_fx_rates, refresh_fx_rates
 from app.services.portfolio.calculations import money, percent
 from app.services.portfolio.operating_core import get_or_create_default_portfolio
 
@@ -56,6 +60,13 @@ RISK_HIERARCHY = [
     "defensive",
     "halt",
 ]
+
+REQUIRED_DATA_LIMIT_KEYS = {
+    "max_portfolio_volatility_pct",
+    "max_var_95_pct",
+    "max_expected_shortfall_95_pct",
+    "max_liquidity_days",
+}
 
 DEFAULT_POLICY_LIMITS = [
     {
@@ -188,6 +199,7 @@ class PortfolioRiskState:
     cash_balance: Decimal
     invested_value: Decimal
     positions: list[RiskPosition]
+    base_currency: str = "USD"
 
 
 @dataclass(frozen=True)
@@ -414,13 +426,65 @@ async def check_pre_trade_risk(
     payload: PreTradeRiskCheckCreate,
     user: AuthenticatedUser,
 ) -> PreTradeRiskCheckResponse:
+    risk_check = await create_pre_trade_risk_check_record(
+        session,
+        payload,
+        user,
+        commit=True,
+    )
+    return _pre_trade_response_from_record(risk_check)
+
+
+async def create_pre_trade_risk_check_record(
+    session: AsyncSession,
+    payload: PreTradeRiskCheckCreate,
+    user: AuthenticatedUser,
+    *,
+    commit: bool = False,
+) -> PreTradeRiskCheck:
     state, price_histories = await _load_current_state(session, user)
-    pro_forma_state, cash_impact, messages = _apply_trade_to_state(state, payload)
+    fx_rates = await _load_fx_rates_for_pre_trade(session, state, payload)
+    pro_forma_state, cash_impact, messages = _apply_trade_to_state(
+        state,
+        payload,
+        fx_rates=fx_rates,
+    )
     overview = build_risk_overview_from_state(pro_forma_state, price_histories)
     failed_checks = [check for check in overview.measurements if not check.passed]
     decision = _pre_trade_decision(
-        overview.snapshot.risk_level, failed_checks, messages
+        overview.snapshot.risk_level,
+        failed_checks,
+        messages,
+        overview.stress_tests,
     )
+    checked_at = datetime.now(timezone.utc)
+    result = PreTradeRiskCheckResponse(
+        id=UUID(int=0),
+        decision=decision,
+        risk_level=overview.snapshot.risk_level,
+        cash_impact=cash_impact,
+        pro_forma_snapshot=overview.snapshot,
+        checks=overview.measurements,
+        stress_tests=overview.stress_tests,
+        messages=messages,
+    )
+    record = PreTradeRiskCheck(
+        owner_user_id=user.id,
+        portfolio_id=state.portfolio_id,
+        checked_at=checked_at,
+        decision=decision,
+        risk_level=overview.snapshot.risk_level,
+        cash_impact=cash_impact,
+        request_payload=payload.model_dump(mode="json"),
+        request_fingerprint=pre_trade_request_fingerprint(payload),
+        result_payload=result.model_dump(mode="json"),
+        messages=messages,
+    )
+    session.add(record)
+    await session.flush()
+
+    result = result.model_copy(update={"id": record.id})
+    record.result_payload = result.model_dump(mode="json")
 
     await record_system_log(
         session,
@@ -435,7 +499,8 @@ async def check_pre_trade_risk(
             "risk_level": overview.snapshot.risk_level,
         },
     )
-    await session.commit()
+    if commit:
+        await session.commit()
 
     logger.info(
         "pre_trade_risk_checked",
@@ -449,15 +514,36 @@ async def check_pre_trade_risk(
         },
     )
 
-    return PreTradeRiskCheckResponse(
-        decision=decision,
-        risk_level=overview.snapshot.risk_level,
-        cash_impact=cash_impact,
-        pro_forma_snapshot=overview.snapshot,
-        checks=overview.measurements,
-        stress_tests=overview.stress_tests,
-        messages=messages,
+    return record
+
+
+async def load_matching_pre_trade_risk_check(
+    session: AsyncSession,
+    check_id: UUID,
+    payload: PreTradeRiskCheckCreate,
+    user: AuthenticatedUser,
+) -> PreTradeRiskCheck | None:
+    state, _ = await _load_current_state(session, user)
+    record = await session.scalar(
+        select(PreTradeRiskCheck).where(
+            PreTradeRiskCheck.id == check_id,
+            PreTradeRiskCheck.owner_user_id == user.id,
+            PreTradeRiskCheck.portfolio_id == state.portfolio_id,
+        )
     )
+    if record is None:
+        return None
+    if record.request_fingerprint != pre_trade_request_fingerprint(payload):
+        return None
+    return record
+
+
+def _pre_trade_response_from_record(
+    record: PreTradeRiskCheck,
+) -> PreTradeRiskCheckResponse:
+    payload = dict(record.result_payload or {})
+    payload["id"] = record.id
+    return PreTradeRiskCheckResponse.model_validate(payload)
 
 
 def build_risk_overview_from_state(
@@ -590,7 +676,14 @@ def evaluate_risk_policy(
     for limit in DEFAULT_POLICY_LIMITS:
         value = metrics.get(limit["key"])
         threshold = Decimal(limit["threshold_value"])
-        passed = _limit_passed(value, threshold, limit["direction"])
+        missing_required = (
+            value is None
+            and bool(state.positions)
+            and str(limit["key"]) in REQUIRED_DATA_LIMIT_KEYS
+        )
+        passed = False if missing_required else _limit_passed(
+            value, threshold, limit["direction"]
+        )
         checks.append(
             RiskMeasurementResponse(
                 key=limit["key"],
@@ -600,7 +693,11 @@ def evaluate_risk_policy(
                 unit=limit["unit"],
                 threshold_value=threshold,
                 passed=passed,
-                severity=limit["severity"] if not passed else "info",
+                severity="warning"
+                if missing_required
+                else limit["severity"]
+                if not passed
+                else "info",
                 message=_limit_message(limit, value, threshold, passed),
             )
         )
@@ -788,6 +885,7 @@ async def _load_current_state(
         cash_balance=cash_balance,
         invested_value=invested_value,
         positions=risk_positions,
+        base_currency=portfolio.base_currency,
     )
     histories = await _load_price_histories(session, risk_positions)
     return state, histories
@@ -1224,17 +1322,92 @@ def _correlation(first: list[float], second: list[float]) -> Decimal | None:
     return _decimal4(covariance / sqrt(first_var * second_var))
 
 
+async def _load_fx_rates_for_pre_trade(
+    session: AsyncSession,
+    state: PortfolioRiskState,
+    payload: PreTradeRiskCheckCreate,
+) -> dict:
+    base = state.base_currency.strip().upper()
+    currency = payload.instrument.currency.strip().upper()
+    if currency == base:
+        return {}
+
+    fx_rates = await load_fx_rates(session)
+    if currency == "NGN" and base == "USD" and fx_rates.get(("USD", "NGN")) is None:
+        await refresh_fx_rates(session)
+        fx_rates = await load_fx_rates(session)
+    return fx_rates
+
+
+def _pre_trade_price_in_base(
+    state: PortfolioRiskState,
+    payload: PreTradeRiskCheckCreate,
+    fx_rates: dict,
+    messages: list[str],
+) -> Decimal:
+    base = state.base_currency.strip().upper()
+    currency = payload.instrument.currency.strip().upper()
+    if currency == base:
+        return payload.price
+
+    if currency == "NGN" and base == "USD":
+        converted = convert_to_usd(payload.price, "NGN", fx_rates)
+        if converted is not None:
+            return converted
+
+    messages.append(
+        f"{payload.instrument.ticker} price could not be converted from "
+        f"{currency} to {base} for pre-trade risk."
+    )
+    return payload.price
+
+
+def pre_trade_request_fingerprint(payload: PreTradeRiskCheckCreate) -> dict:
+    instrument = payload.instrument
+    return {
+        "ticker": instrument.ticker.strip().upper(),
+        "name": instrument.name.strip(),
+        "asset_class": instrument.asset_class.strip().lower(),
+        "exchange": _optional_fingerprint_value(instrument.exchange),
+        "currency": instrument.currency.strip().upper(),
+        "sector": _optional_fingerprint_value(instrument.sector),
+        "industry": _optional_fingerprint_value(instrument.industry),
+        "side": payload.side.strip().lower(),
+        "quantity": _decimal_fingerprint(payload.quantity),
+        "price": _decimal_fingerprint(payload.price),
+        "fees": _decimal_fingerprint(payload.fees),
+    }
+
+
+def _optional_fingerprint_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _decimal_fingerprint(value: Decimal) -> str:
+    normalized = value.normalize()
+    text = format(normalized, "f")
+    if "." not in text:
+        return text
+    return text.rstrip("0").rstrip(".") or "0"
+
+
 def _apply_trade_to_state(
     state: PortfolioRiskState,
     payload: PreTradeRiskCheckCreate,
+    *,
+    fx_rates: dict,
 ) -> tuple[PortfolioRiskState, Decimal, list[str]]:
     ticker = payload.instrument.ticker.upper()
-    trade_value = money(payload.quantity * payload.price)
+    messages: list[str] = []
+    trade_price = _pre_trade_price_in_base(state, payload, fx_rates, messages)
+    trade_value = money(payload.quantity * trade_price)
     cash_impact = -(trade_value + payload.fees)
     if payload.side == "sell":
         cash_impact = trade_value - payload.fees
 
-    messages: list[str] = []
     positions = list(state.positions)
     existing_index = next(
         (
@@ -1255,9 +1428,9 @@ def _apply_trade_to_state(
                 asset_class=payload.instrument.asset_class,
                 sector=payload.instrument.sector,
                 quantity=payload.quantity if payload.side == "buy" else Decimal("0"),
-                average_cost=payload.price,
+                average_cost=trade_price,
                 market_value=(
-                    money(payload.quantity * payload.price)
+                    money(payload.quantity * trade_price)
                     if payload.side == "buy"
                     else Decimal("0")
                 ),
@@ -1274,7 +1447,7 @@ def _apply_trade_to_state(
         if quantity < 0:
             messages.append("Sell quantity exceeds the current position.")
             quantity = Decimal("0")
-        market_value = money(quantity * payload.price)
+        market_value = money(quantity * trade_price)
         positions[existing_index] = RiskPosition(
             instrument_id=existing.instrument_id,
             ticker=existing.ticker,
@@ -1284,7 +1457,7 @@ def _apply_trade_to_state(
             quantity=quantity,
             average_cost=existing.average_cost,
             market_value=market_value,
-            unrealized_pnl=money((payload.price - existing.average_cost) * quantity),
+            unrealized_pnl=money((trade_price - existing.average_cost) * quantity),
         )
 
     positions = [position for position in positions if position.quantity > 0]
@@ -1305,6 +1478,7 @@ def _apply_trade_to_state(
             cash_balance=cash_balance,
             invested_value=invested_value,
             positions=positions,
+            base_currency=state.base_currency,
         ),
         cash_impact,
         messages,
@@ -1315,18 +1489,24 @@ def _pre_trade_decision(
     risk_level: str,
     failed_checks: list[RiskMeasurementResponse],
     messages: list[str],
+    stress_tests: list[StressTestResultResponse],
 ) -> str:
     if any(
         "exceeds the current position" in message
         or "no existing long position" in message
+        or "could not be converted" in message
         for message in messages
     ):
         return "reject"
+    stress_severities = {stress.severity for stress in stress_tests}
     if risk_level == "halt":
         return "reject"
-    if risk_level in {"reduce", "suspend", "defensive"}:
+    if risk_level in {"reduce", "suspend", "defensive"} or stress_severities & {
+        "halt",
+        "reduce",
+    }:
         return "reduce_or_review"
-    if failed_checks:
+    if failed_checks or "warning" in stress_severities:
         return "review"
     return "approve"
 

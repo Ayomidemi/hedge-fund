@@ -283,11 +283,18 @@ function TradeDetail({
         />
         <Metric label="Fee bps" value={trade.fee_bps ? `${trade.fee_bps} bps` : "-"} />
         <Metric label="Broker ref" value={trade.broker_reference || "-"} />
+        <Metric
+          label="Risk"
+          value={trade.risk_decision ? formatLabel(trade.risk_decision) : "-"}
+        />
       </dl>
 
       <div className="mt-5 space-y-4">
         <Note title="Rationale" value={trade.rationale || "No rationale recorded."} />
         <Note title="Risk notes" value={trade.risk_notes || "No risk notes recorded."} />
+        {trade.risk_override_reason ? (
+          <Note title="Risk override" value={trade.risk_override_reason} />
+        ) : null}
       </div>
     </aside>
   );

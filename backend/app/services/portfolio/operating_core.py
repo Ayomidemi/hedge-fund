@@ -31,6 +31,7 @@ from app.api.schemas.operating_core import (
     TradeJournalSummaryResponse,
     TradeResponse,
 )
+from app.api.schemas.risk_centre import PreTradeRiskCheckCreate
 from app.models import (
     CashLedgerEntry,
     Instrument,
@@ -65,6 +66,50 @@ logger = logging.getLogger(__name__)
 
 class TradeNotFoundError(RuntimeError):
     pass
+
+
+class TradeRiskApprovalError(RuntimeError):
+    pass
+
+
+async def _ensure_trade_risk_approval(
+    session: AsyncSession,
+    payload: ManualTradeCreate,
+    user: AuthenticatedUser,
+):
+    if payload.pre_trade_check_id is None:
+        raise TradeRiskApprovalError("Run a pre-trade risk check before saving.")
+
+    risk_payload = PreTradeRiskCheckCreate(
+        instrument=payload.instrument,
+        side=payload.side,
+        quantity=payload.quantity,
+        price=payload.price,
+        fees=payload.fees,
+        trade_date=payload.trade_date,
+        rationale=payload.rationale,
+    )
+    from app.services.risk.risk_centre import load_matching_pre_trade_risk_check
+
+    risk_check = await load_matching_pre_trade_risk_check(
+        session,
+        payload.pre_trade_check_id,
+        risk_payload,
+        user,
+    )
+    if risk_check is None:
+        raise TradeRiskApprovalError(
+            "Run a fresh pre-trade risk check for this exact trade."
+        )
+    if risk_check.decision == "reject":
+        raise TradeRiskApprovalError("Risk rejected this trade; it cannot be saved.")
+    if risk_check.decision != "approve" and not (
+        payload.risk_override_reason and payload.risk_override_reason.strip()
+    ):
+        raise TradeRiskApprovalError(
+            "Risk review requires an override reason before saving."
+        )
+    return risk_check
 
 
 async def get_dashboard(
@@ -476,6 +521,7 @@ async def create_manual_trade(
     user: AuthenticatedUser,
 ) -> TradeResponse:
     portfolio = await get_or_create_default_portfolio(session, user)
+    risk_check = await _ensure_trade_risk_approval(session, payload, user)
     instrument = await upsert_instrument(session, payload.instrument)
 
     fx_rates = await _ensure_fx_rates(
@@ -495,6 +541,11 @@ async def create_manual_trade(
         fees=payload.fees,
         rationale=payload.rationale or "",
         risk_notes=payload.risk_notes,
+        pre_trade_risk_check_id=risk_check.id,
+        risk_decision=risk_check.decision,
+        risk_override_reason=(
+            payload.risk_override_reason if risk_check.decision != "approve" else None
+        ),
         broker_reference=payload.broker_reference,
     )
     session.add(trade)
@@ -1040,6 +1091,9 @@ def _trade_response(trade: Trade) -> TradeResponse:
         fees=trade.fees,
         rationale=trade.rationale,
         risk_notes=trade.risk_notes,
+        pre_trade_check_id=trade.pre_trade_risk_check_id,
+        risk_decision=trade.risk_decision,
+        risk_override_reason=trade.risk_override_reason,
         broker_reference=trade.broker_reference,
     )
 
@@ -1076,6 +1130,9 @@ def _trade_journal_entry_response(
         fees=trade.fees,
         rationale=trade.rationale,
         risk_notes=trade.risk_notes,
+        pre_trade_check_id=trade.pre_trade_risk_check_id,
+        risk_decision=trade.risk_decision,
+        risk_override_reason=trade.risk_override_reason,
         broker_reference=trade.broker_reference,
         notional_value=notional_value,
         cash_impact=cash_impact,
