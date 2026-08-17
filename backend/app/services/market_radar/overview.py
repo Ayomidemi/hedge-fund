@@ -14,12 +14,14 @@ from app.api.schemas.market_radar import (
 from app.core.market_constants import RADAR_POST_CLOSE_WINDOW_HOURS
 from app.models import RadarRun, RadarSnapshot
 from app.services.market_data.sessions import ALL_JURISDICTIONS, session_for
+from app.services.market_radar.watchlist_book import list_watchlist
 
 
 async def build_radar_overview(
     session: AsyncSession,
     *,
     jurisdiction: str | None = None,
+    owner_user_id: str | None = None,
 ) -> MarketRadarOverviewResponse:
     now = datetime.now(timezone.utc)
     sessions = [
@@ -49,7 +51,13 @@ async def build_radar_overview(
 
     working = [row for row in snapshots if row.in_working_set]
     flagged = [row for row in working if row.flags]
-    industries = _group_industries(working)
+    watchlist_tickers: set[str] = set()
+    watchlist_items = []
+    if owner_user_id:
+        watchlist = await list_watchlist(session, owner_user_id=owner_user_id)
+        watchlist_items = watchlist.items
+        watchlist_tickers = {item.ticker.upper() for item in watchlist_items}
+    industries = _group_industries(working, watchlist_tickers)
 
     return MarketRadarOverviewResponse(
         generated_at=now,
@@ -58,8 +66,15 @@ async def build_radar_overview(
         working_set_count=len(working),
         flagged_count=len(flagged),
         industries=industries,
-        working_set=[_name_response(row) for row in _sorted(working)],
-        flagged=[_name_response(row) for row in _sorted(flagged)],
+        working_set=[
+            _name_response(row, watchlist_tickers) for row in _sorted(working)
+        ],
+        flagged=[_name_response(row, watchlist_tickers) for row in _sorted(flagged)],
+        watchlist=watchlist_items,
+        scan_changes=[
+            _name_response(row, watchlist_tickers)
+            for row in _sorted(_scan_changes(working))
+        ],
     )
 
 
@@ -99,7 +114,14 @@ def _run_response(run: RadarRun) -> MarketRadarRunResponse:
     )
 
 
-def _name_response(row: RadarSnapshot) -> MarketRadarNameResponse:
+def _name_response(
+    row: RadarSnapshot, watchlist_tickers: set[str] | None = None
+) -> MarketRadarNameResponse:
+    evidence = dict(row.evidence or {})
+    watchlist = bool(
+        (watchlist_tickers and row.ticker.upper() in watchlist_tickers)
+        or evidence.get("on_watchlist")
+    )
     return MarketRadarNameResponse(
         ticker=row.ticker,
         name=row.name,
@@ -116,16 +138,20 @@ def _name_response(row: RadarSnapshot) -> MarketRadarNameResponse:
         volume_ratio=row.volume_ratio,
         anomaly_score=row.anomaly_score,
         flags=list(row.flags or []),
-        evidence=dict(row.evidence or {}),
+        evidence=evidence,
         sparkline=list(row.sparkline or []),
         as_of=row.as_of,
         source_as_of=row.source_as_of,
         carried_forward=row.carried_forward,
         stale_reason=row.stale_reason,
+        on_watchlist=watchlist,
+        pinned_prior=bool(evidence.get("pinned_prior")),
     )
 
 
-def _group_industries(rows: list[RadarSnapshot]) -> list[MarketRadarIndustryResponse]:
+def _group_industries(
+    rows: list[RadarSnapshot], watchlist_tickers: set[str] | None = None
+) -> list[MarketRadarIndustryResponse]:
     grouped: dict[str, list[RadarSnapshot]] = {}
     for row in rows:
         key = row.industry or row.sector or "Unclassified"
@@ -141,7 +167,10 @@ def _group_industries(rows: list[RadarSnapshot]) -> list[MarketRadarIndustryResp
                 name_count=len(members),
                 flagged_count=len(flagged),
                 heat=_heat(flagged, members),
-                names=[_name_response(row) for row in _sorted(members)[:12]],
+                names=[
+                    _name_response(row, watchlist_tickers)
+                    for row in _sorted(members)
+                ],
             )
         )
     industries.sort(key=lambda item: (item.flagged_count, item.name_count), reverse=True)
@@ -163,3 +192,19 @@ def _heat(flagged: list[RadarSnapshot], members: list[RadarSnapshot]) -> str:
 
 def _sorted(rows: list[RadarSnapshot]) -> list[RadarSnapshot]:
     return sorted(rows, key=lambda row: row.anomaly_score, reverse=True)
+
+
+def _scan_changes(rows: list[RadarSnapshot]) -> list[RadarSnapshot]:
+    changed: list[RadarSnapshot] = []
+    for row in rows:
+        flags = set(row.flags or [])
+        evidence = row.evidence or {}
+        state = str(evidence.get("scan_state") or "")
+        if "scan_lurch" in flags or state in {
+            "accelerating",
+            "rebounding",
+            "selling_off",
+            "cooling",
+        }:
+            changed.append(row)
+    return changed

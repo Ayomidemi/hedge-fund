@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.market_constants import RADAR_SECTOR_ETFS
-from app.models import Instrument, Opportunity, Position
+from app.models import Instrument, Opportunity, Position, RadarWatchlistItem
 from app.services.market_data.sessions import jurisdiction_for_ticker
 from app.services.market_data.universe import quote_symbol_for
 from app.services.market_radar.scoring import RadarCandidate
@@ -75,5 +75,22 @@ async def load_always_watched(session: AsyncSession) -> AlwaysWatchedSet:
                 source="book",
                 always_watched=True,
             )
+
+    watch_rows = await session.scalars(select(RadarWatchlistItem))
+    for item in watch_rows:
+        ticker = item.ticker.upper()
+        existing = candidates.get(ticker)
+        if existing is not None:
+            existing.on_watchlist = True
+            existing.always_watched = True
+            continue
+        candidates[ticker] = RadarCandidate(
+            ticker=ticker,
+            name=item.name,
+            jurisdiction=item.jurisdiction,
+            source="watchlist",
+            always_watched=True,
+            on_watchlist=True,
+        )
 
     return AlwaysWatchedSet(candidates=candidates)

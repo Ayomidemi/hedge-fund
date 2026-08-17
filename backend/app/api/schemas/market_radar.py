@@ -64,6 +64,8 @@ class MarketRadarNameResponse(BaseModel):
     source_as_of: datetime | None = None
     carried_forward: bool = False
     stale_reason: str | None = None
+    on_watchlist: bool = False
+    pinned_prior: bool = False
 
 
 class MarketRadarIndustryResponse(BaseModel):
@@ -75,6 +77,73 @@ class MarketRadarIndustryResponse(BaseModel):
     names: list[MarketRadarNameResponse]
 
 
+class RadarWatchlistCreateRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=32)
+    notes: str | None = None
+    market: Literal["US", "NG"] | None = None
+
+
+class RadarWatchlistItemResponse(BaseModel):
+    ticker: str
+    name: str
+    jurisdiction: str
+    notes: str | None = None
+    added_at: datetime
+    on_watchlist: bool = True
+    price: Decimal | None = None
+    change_pct: Decimal | None = None
+    volume: int | None = None
+    volume_ratio: Decimal | None = None
+    anomaly_score: Decimal | None = None
+    flags: list[str] = Field(default_factory=list)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    sparkline: list[dict[str, Any]] = Field(default_factory=list)
+    as_of: datetime | None = None
+    source_as_of: datetime | None = None
+    carried_forward: bool = False
+    scan_state: str | None = None
+    scan_delta_change_pct: Decimal | None = None
+    scan_delta_price_pct: Decimal | None = None
+
+
+class RadarWatchlistClockResponse(BaseModel):
+    label: str
+    change_pct: Decimal | None = None
+    price_return_zscore: Any = None
+    volume_zscore: Any = None
+    volatility_ratio: Any = None
+    scan_state: Any = None
+    scan_delta_change_pct: Any = None
+    scan_delta_price_pct: Any = None
+    scan_minutes_since_prior: Any = None
+
+
+class RadarWatchlistDetailResponse(RadarWatchlistItemResponse):
+    clocks: dict[str, RadarWatchlistClockResponse]
+
+
+class RadarWatchlistListResponse(BaseModel):
+    items: list[RadarWatchlistItemResponse]
+
+
+class RadarWatchlistChartPoint(BaseModel):
+    at: datetime | None = None
+    date: str | None = None
+    price: Decimal | None = None
+    volume: int | None = None
+    change_pct: Decimal | None = None
+    source: str | None = None
+
+
+class RadarWatchlistChartResponse(BaseModel):
+    ticker: str
+    range: str
+    source: str
+    filled_from_vendor: bool = False
+    note: str | None = None
+    points: list[RadarWatchlistChartPoint] = Field(default_factory=list)
+
+
 class MarketRadarOverviewResponse(BaseModel):
     generated_at: datetime
     sessions: list[MarketRadarSessionResponse]
@@ -84,3 +153,5 @@ class MarketRadarOverviewResponse(BaseModel):
     industries: list[MarketRadarIndustryResponse]
     working_set: list[MarketRadarNameResponse]
     flagged: list[MarketRadarNameResponse]
+    watchlist: list[RadarWatchlistItemResponse] = Field(default_factory=list)
+    scan_changes: list[MarketRadarNameResponse] = Field(default_factory=list)

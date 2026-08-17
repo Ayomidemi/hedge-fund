@@ -58,6 +58,28 @@ RADAR_NG_QUOTE_REFRESH_LIMIT = 12
 RADAR_HISTORY_LOOKBACK_DAYS = 90
 RADAR_SPARKLINE_POINTS = 24
 
+# Clock 3: versus the last radar print, not versus yesterday.
+RADAR_SCAN_DELTA_CHANGE_POINTS = 8
+RADAR_SCAN_DELTA_PRICE_PCT = 5
+RADAR_WATCHLIST_CACHE_MAX_SECONDS = 600
+
+# Watchlist detail charts. 1d is the same-day scan film; longer ranges use
+# stored daily bars, with a Tiingo fill for US names when history is thin.
+RADAR_CHART_RANGES = ("1d", "1m", "3m", "1y", "5y")
+RADAR_CHART_LOOKBACK_DAYS = {
+    "1d": 1,
+    "1m": 31,
+    "3m": 93,
+    "1y": 370,
+    "5y": 1825,
+}
+RADAR_CHART_MIN_BARS = {
+    "1m": 10,
+    "3m": 30,
+    "1y": 80,
+    "5y": 200,
+}
+
 # Sector / market ETFs always watched as industry pulse (US only).
 RADAR_SECTOR_ETFS: tuple[tuple[str, str, str], ...] = (
     ("SPY", "Broad Market", "ETF"),

@@ -1105,6 +1105,30 @@ class RadarSnapshot(Base, TimestampMixin):
     )
 
 
+class RadarWatchlistItem(Base, TimestampMixin):
+    """Operator-curated names. Membership is manual; radar always watches them."""
+
+    __tablename__ = "radar_watchlist_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    jurisdiction: Mapped[str] = mapped_column(String(8), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "ticker",
+            name="uq_radar_watchlist_owner_ticker",
+        ),
+        Index("ix_radar_watchlist_owner_added", "owner_user_id", "created_at"),
+    )
+
+
 class BacktestRun(Base, TimestampMixin):
     """Persisted walk-forward backtest run. Periods and parameters are stored
     so results are reproducible and comparable across research iterations."""

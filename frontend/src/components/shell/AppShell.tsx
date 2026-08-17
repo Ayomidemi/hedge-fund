@@ -9,6 +9,7 @@ const navigationItems = [
   { label: "Cash Ledger", href: "/cash-ledger" },
   { label: "Ticker Analyst", href: "/ticker-analyst" },
   { label: "Market Radar", href: "/market-radar" },
+  { label: "Watchlist", href: "/watchlist" },
   { label: "Research Lab", href: "/research-lab" },
   { label: "Strategy Pods", href: "/strategy-pods" },
   { label: "Risk Centre", href: "/risk-centre" },
@@ -29,6 +30,7 @@ const pageTitles: Record<string, string> = {
   "Cash Ledger": "Cash Ledger History",
   "Ticker Analyst": "Ticker Research Desk",
   "Market Radar": "Market Radar",
+  Watchlist: "Watchlist Radar",
   "Research Lab": "Research Lab",
   "Strategy Pods": "Investment Pod Control",
   "Risk Centre": "Central Risk Office",
@@ -43,8 +45,11 @@ const pageTitles: Record<string, string> = {
 export function AppShell({ children, userOrgName }: AppShellProps) {
   const pathname = usePathname();
   const activeLabel =
-    navigationItems.find((item) => item.href === pathname)?.label ??
-    "Fund Dashboard";
+    navigationItems.find((item) =>
+      item.href === "/"
+        ? pathname === "/"
+        : pathname === item.href || pathname.startsWith(`${item.href}/`),
+    )?.label ?? "Fund Dashboard";
 
   return (
     <div className="flex min-h-screen bg-[#f6f7f4] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">

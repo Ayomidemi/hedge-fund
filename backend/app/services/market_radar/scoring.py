@@ -3,6 +3,11 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.core.market_constants import (
+    RADAR_SCAN_DELTA_CHANGE_POINTS,
+    RADAR_SCAN_DELTA_PRICE_PCT,
+)
+
 
 @dataclass
 class RadarCandidate:
@@ -28,6 +33,8 @@ class RadarCandidate:
     source_as_of: datetime | None = None
     carried_forward: bool = False
     stale_reason: str | None = None
+    on_watchlist: bool = False
+    pinned_prior: bool = False
     evidence: dict[str, Any] = field(default_factory=dict)
     sparkline: list[dict[str, Any]] = field(default_factory=list)
 
@@ -91,6 +98,14 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
     if candidate.always_watched and change >= Decimal("2"):
         flags.append("watched_move")
 
+    scan_delta = abs(_evidence_decimal(candidate, "scan_delta_change_pct") or Decimal("0"))
+    scan_price = abs(_evidence_decimal(candidate, "scan_delta_price_pct") or Decimal("0"))
+    if scan_delta >= Decimal(str(RADAR_SCAN_DELTA_CHANGE_POINTS)) or scan_price >= Decimal(
+        str(RADAR_SCAN_DELTA_PRICE_PCT)
+    ):
+        flags.append("scan_lurch")
+        score += min(max(scan_delta, scan_price), Decimal("15"))
+
     merged: list[str] = []
     for flag in flags + inherited:
         if flag not in merged:
@@ -106,6 +121,8 @@ def is_flagged(candidate: RadarCandidate) -> bool:
     if candidate.volume_ratio is not None and candidate.volume_ratio >= Decimal("2.5"):
         return True
     if candidate.change_pct is not None and abs(candidate.change_pct) >= Decimal("5"):
+        return True
+    if "scan_lurch" in candidate.flags:
         return True
     return False
 

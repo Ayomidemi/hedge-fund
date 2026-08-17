@@ -129,3 +129,6 @@ class OperatingCoreRouteTests(TestCase):
         self.assertIn("get", paths["/api/market-radar/overview"])
         self.assertIn("/api/market-radar/scan", paths)
         self.assertIn("post", paths["/api/market-radar/scan"])
+        self.assertIn("/api/market-radar/watchlist", paths)
+        self.assertIn("get", paths["/api/market-radar/watchlist"])
+        self.assertIn("/api/market-radar/watchlist/{ticker}", paths)

@@ -9,12 +9,16 @@ import {
   buttonSecondaryClassName,
 } from "@/components/ui/form-styles";
 import {
+  addRadarWatchlistItem,
   getMarketRadarOverview,
+  removeRadarWatchlistItem,
   runMarketRadarScan,
   type MarketRadarIndustry,
   type MarketRadarName,
   type MarketRadarOverview,
+  type RadarWatchlistItem,
 } from "@/lib/api";
+import { WatchlistStrip } from "@/components/radar/WatchlistStrip";
 
 type MarketRadarProps = {
   initialOverview: MarketRadarOverview | null;
@@ -42,6 +46,7 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
   const [overview, setOverview] = useState(initialOverview);
   const [jurisdiction, setJurisdiction] = useState<"all" | "US" | "NG">("all");
   const [scanning, setScanning] = useState(false);
+  const [busyTickers, setBusyTickers] = useState<Set<string>>(new Set());
 
   const sessions = overview?.sessions ?? [];
   const openSessions = sessions.filter((session) => session.allows_discovery);
@@ -97,6 +102,39 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
     }
   }
 
+  async function handleWatchToggle(name: MarketRadarName) {
+    if (busyTickers.has(name.ticker)) return;
+    const adding = !name.on_watchlist;
+    setBusyTickers((current) => new Set(current).add(name.ticker));
+    setOverview((current) =>
+      current ? patchWatchlist(current, name, adding) : current,
+    );
+    try {
+      if (adding) {
+        await addRadarWatchlistItem({
+          ticker: name.ticker,
+          market: name.jurisdiction === "NG" ? "NG" : "US",
+        });
+        toast.success(`${name.ticker} added to watchlist.`);
+      } else {
+        await removeRadarWatchlistItem(name.ticker);
+        toast.success(`${name.ticker} removed from watchlist.`);
+      }
+      await reload();
+    } catch (error) {
+      setOverview((current) =>
+        current ? patchWatchlist(current, name, !adding) : current,
+      );
+      toast.error(error instanceof Error ? error.message : "Watchlist update failed.");
+    } finally {
+      setBusyTickers((current) => {
+        const next = new Set(current);
+        next.delete(name.ticker);
+        return next;
+      });
+    }
+  }
+
   if (!overview) {
     return (
       <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
@@ -112,6 +150,7 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
 
   return (
     <div className="mx-auto max-w-[1560px] space-y-5">
+      <WatchlistStrip items={overview.watchlist ?? []} onChanged={() => reload()} />
       <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
           <div>
@@ -208,9 +247,33 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
         </p>
       )}
 
+      {overview.scan_changes && overview.scan_changes.length > 0 ? (
+        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+          <h3 className="text-sm font-semibold">Since last scan</h3>
+          <p className="mt-1 text-xs text-zinc-500">
+            Names that lurched versus the previous radar print, not versus yesterday.
+          </p>
+          <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-900">
+            {overview.scan_changes.slice(0, 8).map((name) => (
+              <NameRow
+                key={`lurch-${name.ticker}`}
+                name={name}
+                busy={busyTickers.has(name.ticker)}
+                onWatchToggle={handleWatchToggle}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <div className="grid gap-4 xl:grid-cols-2">
         {overview.industries.map((industry) => (
-          <IndustryCard key={`${industry.jurisdiction}-${industry.name}`} industry={industry} />
+          <IndustryCard
+            key={`${industry.jurisdiction}-${industry.name}`}
+            industry={industry}
+            busyTickers={busyTickers}
+            onWatchToggle={handleWatchToggle}
+          />
         ))}
       </div>
 
@@ -224,7 +287,15 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
   );
 }
 
-function IndustryCard({ industry }: { industry: MarketRadarIndustry }) {
+function IndustryCard({
+  industry,
+  busyTickers,
+  onWatchToggle,
+}: {
+  industry: MarketRadarIndustry;
+  busyTickers: Set<string>;
+  onWatchToggle: (name: MarketRadarName) => void;
+}) {
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex items-start justify-between gap-3">
@@ -238,14 +309,27 @@ function IndustryCard({ industry }: { industry: MarketRadarIndustry }) {
       </div>
       <div className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
         {industry.names.map((name) => (
-          <NameRow key={name.ticker} name={name} />
+          <NameRow
+            key={name.ticker}
+            name={name}
+            busy={busyTickers.has(name.ticker)}
+            onWatchToggle={onWatchToggle}
+          />
         ))}
       </div>
     </section>
   );
 }
 
-function NameRow({ name }: { name: MarketRadarName }) {
+function NameRow({
+  name,
+  busy,
+  onWatchToggle,
+}: {
+  name: MarketRadarName;
+  busy: boolean;
+  onWatchToggle: (name: MarketRadarName) => void;
+}) {
   const price = name.price ? priceFormat.format(Number(name.price)) : "-";
   const sourceDate = name.source_as_of
     ? dateTime.format(new Date(name.source_as_of))
@@ -254,20 +338,31 @@ function NameRow({ name }: { name: MarketRadarName }) {
   const relative = evidenceText(name.evidence, "sector_relative_return_pct");
   const benchmark = evidenceText(name.evidence, "sector_benchmark");
   const volumeRatio = name.volume_ratio ?? evidenceText(name.evidence, "volume_ratio");
+  const scanState = evidenceText(name.evidence, "scan_state");
+  const scanDelta = evidenceText(name.evidence, "scan_delta_change_pct");
+  const href = name.on_watchlist
+    ? `/watchlist/${encodeURIComponent(name.ticker)}`
+    : `/ticker-analyst?ticker=${encodeURIComponent(name.ticker)}`;
 
   return (
-    <div className="grid gap-3 py-3 sm:grid-cols-[minmax(170px,1fr)_120px_150px] sm:items-center">
+    <div className="grid gap-3 py-3 sm:grid-cols-[minmax(190px,1fr)_120px_150px] sm:items-center">
       <div className="min-w-0">
-        <Link
-          href={`/ticker-analyst?ticker=${encodeURIComponent(name.ticker)}`}
-          className="text-sm font-medium hover:underline"
-        >
-          {name.ticker}
-        </Link>
-        <p className="truncate text-xs text-zinc-500">{name.name}</p>
-        <div className="mt-1 flex flex-wrap gap-1">
+        <div className="flex items-center gap-1.5">
+          <WatchlistButton
+            ticker={name.ticker}
+            watched={Boolean(name.on_watchlist)}
+            busy={busy}
+            onClick={() => onWatchToggle(name)}
+          />
+          <Link href={href} className="text-sm font-medium hover:underline">
+            {name.ticker}
+          </Link>
+        </div>
+        <p className="truncate pl-8 text-xs text-zinc-500">{name.name}</p>
+        <div className="mt-1 flex flex-wrap gap-1 pl-8">
           {name.carried_forward ? <Chip tone="zinc">prior session</Chip> : null}
-          {name.always_watched ? <Chip tone="zinc">watched</Chip> : null}
+          {name.on_watchlist ? <Chip tone="emerald">watchlist</Chip> : null}
+          {name.always_watched && !name.on_watchlist ? <Chip tone="zinc">watched</Chip> : null}
           {name.flags.slice(0, 3).map((flag) => (
             <Chip key={flag} tone={flagTone(flag)}>
               {flag.replaceAll("_", " ")}
@@ -296,6 +391,12 @@ function NameRow({ name }: { name: MarketRadarName }) {
           </Chip>
         ) : null}
         {volumeRatio ? <Chip tone="zinc">vol {formatNumber(volumeRatio)}x</Chip> : null}
+        {scanState ? (
+          <Chip tone="amber">
+            {scanState.replaceAll("_", " ")}
+            {scanDelta ? ` ${formatNumber(scanDelta)} pts` : ""}
+          </Chip>
+        ) : null}
         {name.stale_reason && !name.carried_forward ? (
           <Chip tone="rose">{name.stale_reason}</Chip>
         ) : null}
@@ -392,7 +493,7 @@ function Chip({
 
 function flagTone(flag: string): "amber" | "emerald" | "rose" | "zinc" {
   if (flag.includes("risk") || flag.includes("drop")) return "rose";
-  if (flag.includes("volume") || flag.includes("volatility")) return "amber";
+  if (flag.includes("lurch") || flag.includes("volume") || flag.includes("volatility")) return "amber";
   if (flag.includes("move") || flag.includes("anomaly")) return "emerald";
   return "zinc";
 }
@@ -406,4 +507,100 @@ function evidenceText(evidence: Record<string, unknown>, key: string) {
 function formatNumber(value: string) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toFixed(1) : value;
+}
+
+function WatchlistButton({
+  ticker,
+  watched,
+  busy,
+  onClick,
+}: {
+  ticker: string;
+  watched: boolean;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      title={watched ? `Remove ${ticker} from watchlist` : `Add ${ticker} to watchlist`}
+      aria-label={watched ? `Remove ${ticker} from watchlist` : `Add ${ticker} to watchlist`}
+      aria-pressed={watched}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+        watched
+          ? "text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950"
+          : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+      } disabled:opacity-50`}
+    >
+      <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden="true">
+        {watched ? (
+          <path
+            fill="currentColor"
+            d="M5 2.5A1.5 1.5 0 0 0 3.5 4v13.1a.75.75 0 0 0 1.2.6L10 14.2l5.3 3.5a.75.75 0 0 0 1.2-.6V4A1.5 1.5 0 0 0 15 2.5H5Z"
+          />
+        ) : (
+          <path
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            d="M5.2 3.2h9.6A1.3 1.3 0 0 1 16.1 4.5v11.8a.6.6 0 0 1-.96.48L10 13.4l-5.14 3.38a.6.6 0 0 1-.96-.48V4.5A1.3 1.3 0 0 1 5.2 3.2Z"
+          />
+        )}
+      </svg>
+    </button>
+  );
+}
+
+function patchWatchlist(
+  overview: MarketRadarOverview,
+  name: MarketRadarName,
+  onWatchlist: boolean,
+): MarketRadarOverview {
+  const patchName = (row: MarketRadarName) =>
+    row.ticker === name.ticker ? { ...row, on_watchlist: onWatchlist } : row;
+  const watchlist = onWatchlist
+    ? [
+        watchlistItemFromName(name),
+        ...overview.watchlist.filter((item) => item.ticker !== name.ticker),
+      ]
+    : overview.watchlist.filter((item) => item.ticker !== name.ticker);
+
+  return {
+    ...overview,
+    watchlist,
+    working_set: overview.working_set.map(patchName),
+    flagged: overview.flagged.map(patchName),
+    scan_changes: (overview.scan_changes ?? []).map(patchName),
+    industries: overview.industries.map((industry) => ({
+      ...industry,
+      names: industry.names.map(patchName),
+    })),
+  };
+}
+
+function watchlistItemFromName(name: MarketRadarName): RadarWatchlistItem {
+  return {
+    ticker: name.ticker,
+    name: name.name,
+    jurisdiction: name.jurisdiction,
+    notes: null,
+    added_at: new Date().toISOString(),
+    on_watchlist: true,
+    price: name.price,
+    change_pct: name.change_pct,
+    volume: name.volume,
+    volume_ratio: name.volume_ratio,
+    anomaly_score: name.anomaly_score,
+    flags: name.flags,
+    evidence: name.evidence,
+    sparkline: name.sparkline,
+    as_of: name.as_of,
+    source_as_of: name.source_as_of,
+    carried_forward: name.carried_forward,
+    scan_state: evidenceText(name.evidence, "scan_state"),
+    scan_delta_change_pct: evidenceText(name.evidence, "scan_delta_change_pct"),
+    scan_delta_price_pct: evidenceText(name.evidence, "scan_delta_price_pct"),
+  };
 }

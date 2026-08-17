@@ -14,7 +14,9 @@ from app.services.market_data.sessions import (
 )
 from app.services.market_radar.catalog import CatalogSyncResult
 from app.services.market_radar.scan import (
+    _apply_scan_deltas,
     _quote_targets,
+    _quote_usable_for_radar,
     _select_working_set,
     run_radar_scan,
 )
@@ -34,6 +36,11 @@ class MarketRadarRouteTests(TestCase):
         self.assertIn("get", paths["/api/market-radar/overview"])
         self.assertIn("/api/market-radar/scan", paths)
         self.assertIn("post", paths["/api/market-radar/scan"])
+        self.assertIn("/api/market-radar/watchlist", paths)
+        self.assertIn("get", paths["/api/market-radar/watchlist"])
+        self.assertIn("post", paths["/api/market-radar/watchlist"])
+        self.assertIn("/api/market-radar/watchlist/{ticker}", paths)
+        self.assertIn("/api/market-radar/watchlist/{ticker}/chart", paths)
 
 
 class JurisdictionSessionTests(TestCase):
@@ -206,6 +213,104 @@ class RadarScoringTests(TestCase):
         self.assertTrue(all(item.always_watched for item in working[:5]))
         self.assertEqual(working[5].ticker, "M119")
 
+    def test_working_set_keeps_pinned_after_always_watched(self) -> None:
+        always = RadarCandidate(
+            ticker="SPY",
+            name="SPY",
+            jurisdiction="US",
+            always_watched=True,
+        )
+        pinned = RadarCandidate(
+            ticker="ZTG",
+            name="ZTG",
+            jurisdiction="US",
+            pinned_prior=True,
+            anomaly_score=Decimal("0"),
+        )
+        movers = [
+            RadarCandidate(
+                ticker=f"M{index}",
+                name=f"M{index}",
+                jurisdiction="US",
+                anomaly_score=Decimal(index),
+            )
+            for index in range(10)
+        ]
+        working = _select_working_set([*movers, pinned, always])
+        self.assertEqual(working[0].ticker, "SPY")
+        self.assertEqual(working[1].ticker, "ZTG")
+        self.assertEqual(working[2].ticker, "M9")
+
+    def test_scan_lurch_is_flagged_from_clock_three(self) -> None:
+        candidate = RadarCandidate(
+            ticker="ZTG",
+            name="ZTG",
+            jurisdiction="US",
+            change_pct=Decimal("-44"),
+            evidence={"scan_delta_change_pct": "22"},
+        )
+        score_candidate(candidate)
+        self.assertIn("scan_lurch", candidate.flags)
+        self.assertTrue(is_flagged(candidate))
+
+    def test_scan_deltas_measure_lurch_not_the_day_move(self) -> None:
+        now = _utc(2026, 8, 17, 16, 0)
+        candidate = RadarCandidate(
+            ticker="ZTG",
+            name="ZTG",
+            jurisdiction="US",
+            price=Decimal("1.20"),
+            change_pct=Decimal("-44"),
+            source_as_of=now,
+            evidence={
+                "prior_scan_price": "0.80",
+                "prior_scan_change_pct": "-66",
+                "prior_scan_as_of": "2026-08-17T15:00:00+00:00",
+            },
+        )
+        _apply_scan_deltas([candidate])
+        self.assertEqual(candidate.evidence["scan_delta_change_pct"], "22.00")
+        self.assertEqual(candidate.evidence["scan_delta_price_pct"], "50.00")
+        self.assertEqual(candidate.evidence["scan_state"], "rebounding")
+        self.assertEqual(candidate.evidence["scan_minutes_since_prior"], 60)
+
+    def test_scan_deltas_do_not_invent_jumps_on_carry_forward(self) -> None:
+        candidate = RadarCandidate(
+            ticker="ZTG",
+            name="ZTG",
+            jurisdiction="US",
+            price=Decimal("1.20"),
+            change_pct=Decimal("-44"),
+            carried_forward=True,
+            source_as_of=_utc(2026, 8, 17, 16, 0),
+            evidence={
+                "prior_scan_price": "0.80",
+                "prior_scan_change_pct": "-66",
+                "prior_scan_as_of": "2026-08-17T15:00:00+00:00",
+            },
+        )
+        _apply_scan_deltas([candidate])
+        self.assertNotIn("scan_delta_change_pct", candidate.evidence)
+
+    def test_watchlist_quotes_ignore_same_day_stale_cache(self) -> None:
+        quote = MagicMock()
+        quote.is_stale = False
+        quote.as_of = _utc(2026, 8, 17, 14, 0)
+        now = _utc(2026, 8, 17, 16, 0)
+        watched = RadarCandidate(
+            ticker="ZTG",
+            name="ZTG",
+            jurisdiction="US",
+            on_watchlist=True,
+        )
+        ordinary = RadarCandidate(
+            ticker="AAPL",
+            name="Apple",
+            jurisdiction="US",
+        )
+        self.assertFalse(_quote_usable_for_radar(quote, now, candidate=watched))
+        self.assertTrue(_quote_usable_for_radar(quote, now, candidate=ordinary))
+
     def test_quote_targets_are_capped_and_prioritize_watched_names(self) -> None:
         watched = RadarCandidate(
             ticker="GTCO.NG",
@@ -276,6 +381,19 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
             patch(
                 "app.services.market_radar.scan._apply_historical_evidence",
                 new_callable=AsyncMock,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "app.services.market_radar.scan._pin_prior_working_set",
+                new_callable=AsyncMock,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "app.services.market_radar.scan._annotate_queue_tape_moves",
+                new_callable=AsyncMock,
+                return_value=0,
             )
         )
         for extra in extra_patches:

@@ -1850,6 +1850,8 @@ export type MarketRadarName = {
   source_as_of: string | null;
   carried_forward: boolean;
   stale_reason: string | null;
+  on_watchlist?: boolean;
+  pinned_prior?: boolean;
 };
 
 export type MarketRadarIndustry = {
@@ -1861,6 +1863,63 @@ export type MarketRadarIndustry = {
   names: MarketRadarName[];
 };
 
+export type RadarWatchlistItem = {
+  ticker: string;
+  name: string;
+  jurisdiction: string;
+  notes: string | null;
+  added_at: string;
+  on_watchlist: boolean;
+  price: string | null;
+  change_pct: string | null;
+  volume: number | null;
+  volume_ratio: string | null;
+  anomaly_score: string | null;
+  flags: string[];
+  evidence: Record<string, unknown>;
+  sparkline: Array<Record<string, unknown>>;
+  as_of: string | null;
+  source_as_of: string | null;
+  carried_forward: boolean;
+  scan_state: string | null;
+  scan_delta_change_pct: string | null;
+  scan_delta_price_pct: string | null;
+};
+
+export type RadarWatchlistClock = {
+  label: string;
+  change_pct?: string | null;
+  price_return_zscore?: unknown;
+  volume_zscore?: unknown;
+  volatility_ratio?: unknown;
+  scan_state?: unknown;
+  scan_delta_change_pct?: unknown;
+  scan_delta_price_pct?: unknown;
+  scan_minutes_since_prior?: unknown;
+};
+
+export type RadarWatchlistDetail = RadarWatchlistItem & {
+  clocks: Record<string, RadarWatchlistClock>;
+};
+
+export type RadarWatchlistChartPoint = {
+  at: string | null;
+  date: string | null;
+  price: string | null;
+  volume: number | null;
+  change_pct: string | null;
+  source: string | null;
+};
+
+export type RadarWatchlistChart = {
+  ticker: string;
+  range: string;
+  source: string;
+  filled_from_vendor: boolean;
+  note: string | null;
+  points: RadarWatchlistChartPoint[];
+};
+
 export type MarketRadarOverview = {
   generated_at: string;
   sessions: MarketRadarSession[];
@@ -1870,6 +1929,8 @@ export type MarketRadarOverview = {
   industries: MarketRadarIndustry[];
   working_set: MarketRadarName[];
   flagged: MarketRadarName[];
+  watchlist: RadarWatchlistItem[];
+  scan_changes: MarketRadarName[];
 };
 
 export function getMarketRadarOverview(
@@ -1887,6 +1948,43 @@ export function runMarketRadarScan(
   return postApi<MarketRadarRun, { jurisdictions?: Array<"US" | "NG">; force?: boolean }>(
     "/api/market-radar/scan",
     payload ?? {},
+    options,
+  );
+}
+
+export function getRadarWatchlist(options?: ApiRequestOptions) {
+  return fetchApi<{ items: RadarWatchlistItem[] }>("/api/market-radar/watchlist", options);
+}
+
+export function addRadarWatchlistItem(
+  payload: { ticker: string; notes?: string; market?: "US" | "NG" },
+  options?: ApiRequestOptions,
+) {
+  return postApi<RadarWatchlistItem, { ticker: string; notes?: string; market?: "US" | "NG" }>(
+    "/api/market-radar/watchlist",
+    payload,
+    options,
+  );
+}
+
+export function removeRadarWatchlistItem(ticker: string, options?: ApiRequestOptions) {
+  return deleteApi(`/api/market-radar/watchlist/${encodeURIComponent(ticker)}`, options);
+}
+
+export function getRadarWatchlistTicker(ticker: string, options?: ApiRequestOptions) {
+  return fetchApi<RadarWatchlistDetail>(
+    `/api/market-radar/watchlist/${encodeURIComponent(ticker)}`,
+    options,
+  );
+}
+
+export function getRadarWatchlistChart(
+  ticker: string,
+  range = "1d",
+  options?: ApiRequestOptions,
+) {
+  return fetchApi<RadarWatchlistChart>(
+    `/api/market-radar/watchlist/${encodeURIComponent(ticker)}/chart?range=${encodeURIComponent(range)}`,
     options,
   );
 }
