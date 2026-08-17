@@ -1794,3 +1794,90 @@ export function getAdministrationLogs(
     options,
   );
 }
+
+export type MarketRadarSession = {
+  jurisdiction: string;
+  is_open: boolean;
+  in_post_close_window: boolean;
+  allows_discovery: boolean;
+  label: string;
+  vendors: string[];
+};
+
+export type MarketRadarRun = {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  jurisdictions_requested: string[];
+  jurisdictions_scanned: string[];
+  jurisdictions_skipped: Array<{
+    jurisdiction?: string;
+    reason?: string;
+    vendors_not_called?: string[];
+  }>;
+  vendor_calls: number;
+  working_set_count: number;
+  flagged_count: number;
+  promoted_count: number;
+  notes: string[];
+  errors: Array<{ error?: string }>;
+};
+
+export type MarketRadarName = {
+  ticker: string;
+  name: string;
+  jurisdiction: string;
+  sector: string | null;
+  industry: string | null;
+  asset_class: string;
+  currency: string;
+  source: string;
+  always_watched: boolean;
+  price: string | null;
+  change_pct: string | null;
+  volume: number | null;
+  volume_ratio: string | null;
+  anomaly_score: string;
+  flags: string[];
+  as_of: string;
+};
+
+export type MarketRadarIndustry = {
+  name: string;
+  jurisdiction: string;
+  name_count: number;
+  flagged_count: number;
+  heat: string;
+  names: MarketRadarName[];
+};
+
+export type MarketRadarOverview = {
+  generated_at: string;
+  sessions: MarketRadarSession[];
+  latest_run: MarketRadarRun | null;
+  working_set_count: number;
+  flagged_count: number;
+  industries: MarketRadarIndustry[];
+  working_set: MarketRadarName[];
+  flagged: MarketRadarName[];
+};
+
+export function getMarketRadarOverview(
+  jurisdiction = "all",
+  options?: ApiRequestOptions,
+) {
+  const query = jurisdiction && jurisdiction !== "all" ? `?jurisdiction=${jurisdiction}` : "";
+  return fetchApi<MarketRadarOverview>(`/api/market-radar/overview${query}`, options);
+}
+
+export function runMarketRadarScan(
+  payload?: { jurisdictions?: Array<"US" | "NG">; force?: boolean },
+  options?: ApiRequestOptions,
+) {
+  return postApi<MarketRadarRun, { jurisdictions?: Array<"US" | "NG">; force?: boolean }>(
+    "/api/market-radar/scan",
+    payload ?? {},
+    options,
+  );
+}

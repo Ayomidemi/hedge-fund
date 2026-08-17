@@ -157,3 +157,10 @@ class CelerySchedulingTests(TestCase):
 
     def test_interval_has_sane_floor(self) -> None:
         self.assertGreaterEqual(settings.price_refresh_interval_seconds, 5)
+
+    def test_radar_scan_is_on_the_beat_schedule(self) -> None:
+        from app.core.market_constants import RADAR_SCAN_INTERVAL_SECONDS
+
+        schedule = celery_app.conf.beat_schedule["market-radar"]
+        self.assertEqual(schedule["task"], "radar.scan")
+        self.assertEqual(schedule["schedule"], float(RADAR_SCAN_INTERVAL_SECONDS))

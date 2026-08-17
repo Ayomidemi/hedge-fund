@@ -121,3 +121,11 @@ class OperatingCoreRouteTests(TestCase):
 
         self.assertIn("/api/administration/overview", paths)
         self.assertIn("get", paths["/api/administration/overview"])
+
+    def test_market_radar_routes_are_registered(self) -> None:
+        paths = app.openapi()["paths"]
+
+        self.assertIn("/api/market-radar/overview", paths)
+        self.assertIn("get", paths["/api/market-radar/overview"])
+        self.assertIn("/api/market-radar/scan", paths)
+        self.assertIn("post", paths["/api/market-radar/scan"])

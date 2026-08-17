@@ -5,6 +5,7 @@ from app.api.routes import (
     attribution,
     auth,
     health,
+    market_radar,
     operating_core,
     opportunity_queue,
     reports,
@@ -23,6 +24,7 @@ api_router.include_router(administration.router, tags=["administration"])
 api_router.include_router(opportunity_queue.router, tags=["opportunity-queue"])
 api_router.include_router(attribution.router, tags=["attribution"])
 api_router.include_router(ticker_intelligence.router, tags=["ticker-intelligence"])
+api_router.include_router(market_radar.router, tags=["market-radar"])
 api_router.include_router(reports.router, tags=["reports"])
 api_router.include_router(research_lab.router, tags=["research-lab"])
 api_router.include_router(risk_centre.router, tags=["risk-centre"])

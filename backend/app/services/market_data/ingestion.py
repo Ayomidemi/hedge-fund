@@ -8,7 +8,7 @@ Writes to:
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.market_constants import PRICE_STALE_AFTER_SECONDS
 from app.models import InstrumentQuote, MarketPriceBar
 from app.services.market_data.quote_provider import LiveQuote, fetch_quotes
+from app.services.market_data.sessions import is_us_market_open
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +31,12 @@ class IngestionResult:
     quotes: dict[str, LiveQuote] = field(default_factory=dict)
 
 
-def is_us_market_open(now: datetime | None = None) -> bool:
-    """Approximate US regular session check (Mon-Fri 13:30-21:00 UTC).
-
-    Intentionally simple: no holiday calendar, DST covered by the wide
-    window. Good enough to avoid burning free-tier API calls overnight.
-    """
-    now = now or datetime.now(timezone.utc)
-    if now.weekday() >= 5:
-        return False
-    return time(13, 30) <= now.time() <= time(21, 0)
+__all__ = [
+    "IngestionResult",
+    "LIVE_BAR_SOURCE",
+    "ingest_quotes",
+    "is_us_market_open",
+]
 
 
 async def ingest_quotes(

@@ -11,11 +11,12 @@ Run locally:
 from celery import Celery
 
 from app.core.config import settings
+from app.core.market_constants import RADAR_SCAN_INTERVAL_SECONDS
 
 celery_app = Celery(
     "hedge_fund",
     broker=settings.redis_url,
-    include=["app.workers.tasks.price_refresh"],
+    include=["app.workers.tasks.price_refresh", "app.workers.tasks.radar_scan"],
 )
 
 celery_app.conf.update(
@@ -25,12 +26,16 @@ celery_app.conf.update(
     task_ignore_result=True,
     worker_prefetch_multiplier=1,
     # A refresh cycle should never outlive the next tick by much.
-    task_time_limit=max(settings.price_refresh_interval_seconds * 2, 120),
+    task_time_limit=max(settings.price_refresh_interval_seconds * 2, 180),
 )
 
 celery_app.conf.beat_schedule = {
     "price-refresh": {
         "task": "price_refresh.run",
         "schedule": float(settings.price_refresh_interval_seconds),
+    },
+    "market-radar": {
+        "task": "radar.scan",
+        "schedule": float(RADAR_SCAN_INTERVAL_SECONDS),
     },
 }

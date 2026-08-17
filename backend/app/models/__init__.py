@@ -966,6 +966,84 @@ class PriceRefreshRun(Base, TimestampMixin):
     )
 
 
+class RadarRun(Base, TimestampMixin):
+    """Audit trail for jurisdiction-aware market radar scans."""
+
+    __tablename__ = "radar_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    jurisdictions_requested: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    jurisdictions_scanned: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    jurisdictions_skipped: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    vendor_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    working_set_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    flagged_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    promoted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    notes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+
+    snapshots: Mapped[list["RadarSnapshot"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (Index("ix_radar_runs_started_at", "started_at"),)
+
+
+class RadarSnapshot(Base, TimestampMixin):
+    """One radar observation for a ticker within a scan run."""
+
+    __tablename__ = "radar_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("radar_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    jurisdiction: Mapped[str] = mapped_column(String(8), nullable=False)
+    sector: Mapped[str | None] = mapped_column(String(128))
+    industry: Mapped[str | None] = mapped_column(String(128))
+    asset_class: Mapped[str] = mapped_column(String(32), nullable=False, default="equity")
+    exchange: Mapped[str | None] = mapped_column(String(64))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    always_watched: Mapped[bool] = mapped_column(nullable=False, default=False)
+    in_working_set: Mapped[bool] = mapped_column(nullable=False, default=False)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    previous_close: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    change_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    avg_volume: Mapped[int | None] = mapped_column(BigInteger)
+    volume_ratio: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    anomaly_score: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4), nullable=False, default=Decimal("0")
+    )
+    flags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    run: Mapped["RadarRun"] = relationship(back_populates="snapshots")
+
+    __table_args__ = (
+        Index("ix_radar_snapshots_run_score", "run_id", "anomaly_score"),
+        Index("ix_radar_snapshots_run_jurisdiction", "run_id", "jurisdiction"),
+    )
+
+
 class BacktestRun(Base, TimestampMixin):
     """Persisted walk-forward backtest run. Periods and parameters are stored
     so results are reproducible and comparable across research iterations."""

@@ -22,12 +22,9 @@ from app.db.session import engine_options
 from app.models import PriceRefreshRun
 from app.services.administration.system_log import record_system_log
 from app.services.market_data.fx_refresh import FxRefreshResult, refresh_fx_rates
-from app.services.market_data.ingestion import (
-    IngestionResult,
-    ingest_quotes,
-    is_us_market_open,
-)
+from app.services.market_data.ingestion import IngestionResult, ingest_quotes
 from app.services.market_data.mark_to_market import MarkResult, mark_open_positions
+from app.services.market_data.sessions import is_market_open, jurisdiction_for_ticker
 from app.services.market_data.universe import build_price_universe
 from app.services.realtime.events import (
     fx_rate_updated_event,
@@ -67,7 +64,19 @@ async def _refresh_cycle(session: AsyncSession) -> None:
     # US equity quotes are skipped outside regular hours.
     fx_result = await refresh_fx_rates(session)
 
-    if PRICE_MARKET_HOURS_ONLY and not is_us_market_open(started_at):
+    universe = await build_price_universe(session)
+    active_universe = universe
+    skipped_jurisdictions: list[str] = []
+    if PRICE_MARKET_HOURS_ONLY:
+        active_universe = {}
+        for ticker, instrument_ids in universe.items():
+            jurisdiction = jurisdiction_for_ticker(ticker)
+            if is_market_open(jurisdiction, started_at):
+                active_universe[ticker] = instrument_ids
+            elif jurisdiction not in skipped_jurisdictions:
+                skipped_jurisdictions.append(jurisdiction)
+
+    if PRICE_MARKET_HOURS_ONLY and not active_universe:
         await session.commit()
         if fx_result.rate is not None:
             await publish_event(
@@ -79,7 +88,10 @@ async def _refresh_cycle(session: AsyncSession) -> None:
                     as_of=fx_result.rate.as_of.isoformat(),
                 )
             )
-        logger.info("price_refresh_skipped_market_closed")
+        logger.info(
+            "price_refresh_skipped_markets_closed",
+            extra={"skipped_jurisdictions": skipped_jurisdictions},
+        )
         return
 
     run_row = PriceRefreshRun(
@@ -91,8 +103,7 @@ async def _refresh_cycle(session: AsyncSession) -> None:
     await session.flush()
 
     try:
-        universe = await build_price_universe(session)
-        ingestion = await ingest_quotes(session, universe)
+        ingestion = await ingest_quotes(session, active_universe)
         mark_result = await mark_open_positions(session)
     except Exception as exc:
         run_row.status = "failed"

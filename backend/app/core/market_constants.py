@@ -25,3 +25,42 @@ RECOMMENDATION_UNIVERSE_DAYS = 30
 
 # Redis pub/sub channel all platform events flow through.
 PLATFORM_EVENTS_CHANNEL = "platform:events"
+
+# --- Market radar ---
+# Human attention budget for the daily working set (holdings + movers).
+RADAR_WORKING_SET_SIZE = 100
+
+# Celery cadence. The task still no-ops closed jurisdictions, so this is an
+# upper bound on how often an *open* market is scanned — not a request to
+# poll vendors overnight.
+RADAR_SCAN_INTERVAL_SECONDS = 1800
+
+# How long after the cash session we still allow one discovery scan using
+# that day's session data, without treating the market as open for live quotes.
+RADAR_POST_CLOSE_WINDOW_HOURS = 2
+
+# Max names pulled from each US discovery list (gainers / losers / actives).
+RADAR_MOVER_LIST_LIMIT = 15
+
+# Max NGX discovery names beyond always-watched holdings.
+RADAR_NG_DISCOVERY_LIMIT = 25
+
+# Sector / market ETFs always watched as industry pulse (US only).
+RADAR_SECTOR_ETFS: tuple[tuple[str, str, str], ...] = (
+    ("SPY", "Broad Market", "ETF"),
+    ("QQQ", "Technology", "ETF"),
+    ("IWM", "Broad Market", "ETF"),
+    ("XLK", "Technology", "ETF"),
+    ("XLF", "Financial Services", "ETF"),
+    ("XLE", "Energy", "ETF"),
+    ("XLV", "Healthcare", "ETF"),
+    ("XLI", "Industrials", "ETF"),
+    ("XLY", "Consumer Cyclical", "ETF"),
+    ("XLP", "Consumer Defensive", "ETF"),
+    ("XLB", "Basic Materials", "ETF"),
+    ("XLU", "Utilities", "ETF"),
+    ("XLC", "Communication Services", "ETF"),
+    ("XLRE", "Real Estate", "ETF"),
+    ("TLT", "Bonds", "ETF"),
+    ("GLD", "Commodity", "ETF"),
+)

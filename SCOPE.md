@@ -169,6 +169,55 @@ After the fund develops sufficient infrastructure and evidence, it may research:
 
 These instruments will not automatically be approved for live trading merely because they are researched.
 
+## 4.1 Live book versus monitored universe
+
+The live portfolio and the research radar are not the same set.
+
+```text
+Live book
+  Positions the fund actually holds.
+  Marked continuously. Subject to risk limits.
+
+Monitored universe
+  Names the fund watches even if it has never traded them.
+  Grouped by sector and industry.
+  Used to discover unusual price, volume, volatility and risk behaviour.
+
+Working set (about 100 names per day)
+  The subset of the monitored universe that is actively screened that day.
+  Includes current holdings, watchlist names, sector ETF proxies,
+  and names the radar has flagged as unusual.
+```
+
+The fund must be able to surface a security the portfolio manager has never typed, provided it is in the monitored universe and an anomaly is detected.
+
+A name appearing on the radar is not an approved trade. It is a discovery event that enters the Opportunity Queue at **Discovered**.
+
+## 4.2 Phase One monitored universe
+
+The first radar will cover liquid names only:
+
+* S&P 500 and other highly liquid US large-cap equities as capacity allows;
+* major US equity, sector, Treasury, gold and commodity ETFs used as regime and industry proxies;
+* current holdings and Opportunity Queue names, always included;
+* a focused NGX set of liquid Nigerian equities and ETFs that NGN Market can serve.
+
+The daily working set should be approximately **100 tickers**. That number is a human attention budget, not a vendor limit. The stored catalog may be larger (for example the S&P 500 plus sector ETFs plus NGX liquid names). The screen ranks the catalog and presents the working set.
+
+Penny stocks, OTC names, and illiquid microcaps are excluded from Phase One monitoring.
+
+## 4.3 Industry grouping
+
+Every monitored instrument must carry a sector and, where available, an industry.
+
+The radar is organised by industry first, ticker second. The operator should be able to see:
+
+* which industries are quiet;
+* which industries are heating (breadth, volume, volatility);
+* which individual names inside an industry are unusual relative to their own history and to their peers.
+
+Sector ETFs (XLK, XLF, XLE, XLV and similar) are first-class monitored instruments. They are the industry-level pulse when individual-name coverage is incomplete.
+
 ---
 
 # 5. Initial exclusions
@@ -843,6 +892,70 @@ This component borrows heavily from D. E. Shaw’s research-driven structure.
 * news;
 * alternative data later.
 
+### Market data vendors
+
+Yahoo Finance is not an official market-data API. It may remain a research convenience for ad-hoc history, but it must not be the production source for quotes, universe membership, or the daily radar.
+
+Pease Capital will use a **multi-vendor stack**. No single vendor is required to do every job. Licensed, documented APIs are preferred over scraping.
+
+Phase One vendor map:
+
+```text
+US ticker catalog, snapshots, official US bars
+  Polygon (Massive)
+
+US batch quotes for the working set
+  Tiingo IEX (primary live marks)
+  Polygon previous close / snapshot (fallback)
+
+US identity, sector, industry, fundamentals, ratios
+  Financial Modeling Prep (FMP)
+  Polygon ticker details as fallback identity
+
+Nigerian equities and ETFs
+  NGN Market
+
+FX (USD/NGN and later pairs)
+  Dedicated FX feed already used by the live-price platform
+
+Filings
+  SEC EDGAR for US issuers
+```
+
+Vendor rules:
+
+* Quotes for the live book and the radar working set must come from Polygon, Tiingo, FMP or NGN Market — not Yahoo.
+* Historical bars used in models should prefer the same licensed sources. Yahoo backfill is a last resort and must be labelled as such.
+* Sector and industry used for grouping must come from FMP or Polygon identity, not from operator typing.
+* If a vendor fails, the next vendor in the map is used. A gap is logged. The radar does not silently go blank.
+* The fund may add a paid news or unusual-activity vendor later. That is not required to launch the radar.
+
+Approximately 100 names per day is well inside the capacity of the vendors already configured. The constraint is research quality and operator attention, not API quotas.
+
+### Market radar
+
+The platform must maintain a discovery layer that does not require the operator to already know the ticker.
+
+Nightly or intra-day cycle:
+
+```text
+Sync monitored universe (catalog + sector/industry)
+→ refresh daily bars and latest quotes for the catalog
+→ compute per-name anomalies
+     price move vs own history
+     volume vs own history
+     realized volatility
+     sector-relative return
+     liquidity / dollar volume
+→ rank and section by industry
+→ present a working set of about 100 names
+→ push new unusual names into Opportunity Queue as Discovered
+```
+
+Anomaly detection is cross-sectional as well as time-series. A name is interesting if it is unusual versus itself **or** versus its industry.
+
+The radar does not place trades. It only creates discovery events with evidence (what moved, by how much, versus what baseline, as-of timestamp, data vendor).
+
 ### Data validation
 
 * missing-value checks;
@@ -1202,6 +1315,21 @@ After each closed position, the system will determine:
 * whether the outcome was driven by luck;
 * what the fund should change.
 
+## 18.8 Market radar
+
+A cross-sectional watch over the monitored universe, grouped by industry, so the fund can catch unusual volume, price, volatility or risk on names that are not yet in the live book.
+
+The radar answers:
+
+```text
+Which industries are moving?
+Which names inside those industries are unusual today?
+Have we ever researched this name?
+Should it enter the Opportunity Queue?
+```
+
+It is the missing first step of the opportunity pipeline. Ticker Analyst remains the deep-research step. The radar only decides what is worth looking at.
+
 ---
 
 # 19. Product features
@@ -1251,6 +1379,14 @@ The eventual Pease Capital application should contain the following major sectio
 * limits;
 * warnings;
 * shutdown controls.
+
+## Market Radar
+
+* monitored universe grouped by industry;
+* daily working set of about 100 names;
+* unusual volume, price, volatility and risk flags;
+* sector ETF pulse;
+* promotion of flagged names into the Opportunity Queue.
 
 ## Opportunity Queue
 
@@ -1313,6 +1449,8 @@ The first release should not attempt to implement every future strategy.
 13. Model registry
 14. Monthly report generation
 15. Human-versus-model decision log
+16. Monitored universe and industry-grouped market radar (about 100 names per day)
+17. Licensed multi-vendor market data (Polygon, Tiingo, FMP, NGN Market); Yahoo is not the production quote source
 
 ## This version strategies
 
