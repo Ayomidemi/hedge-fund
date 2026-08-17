@@ -17,7 +17,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerSuggestionResponse,
 )
 from app.core.config import settings
-from app.models import Instrument
+from app.models import Instrument, RadarUniverseMember
 from app.services.ticker_intelligence.sec_fundamentals import (
     SecFundamentals,
     calculate_sec_fundamentals,
@@ -139,22 +139,24 @@ async def search_ticker_suggestions(
         Instrument.ticker.ilike("%.NG"),
     )
     market_filter = ng_market_filter if market == "NG" else not_(ng_market_filter)
-    rows = await session.scalars(
-        select(Instrument)
-        .where(
-            and_(
-                market_filter,
-                or_(Instrument.ticker.ilike(pattern), Instrument.name.ilike(pattern)),
+    rows = list(
+        await session.scalars(
+            select(Instrument)
+            .where(
+                and_(
+                    market_filter,
+                    or_(Instrument.ticker.ilike(pattern), Instrument.name.ilike(pattern)),
+                )
             )
+            .order_by(
+                Instrument.ticker.ilike(f"{normalized_query}%").desc(),
+                Instrument.ticker.asc(),
+            )
+            .limit(limit)
         )
-        .order_by(
-            Instrument.ticker.ilike(f"{normalized_query}%").desc(),
-            Instrument.ticker.asc(),
-        )
-        .limit(limit)
     )
 
-    return [
+    suggestions = [
         TickerSuggestionResponse(
             ticker=instrument.ticker,
             name=instrument.name,
@@ -166,6 +168,48 @@ async def search_ticker_suggestions(
         )
         for instrument in rows
     ]
+    seen = {suggestion.ticker for suggestion in suggestions}
+    remaining = limit - len(suggestions)
+    if remaining <= 0:
+        return suggestions
+
+    catalog_rows = await session.scalars(
+        select(RadarUniverseMember)
+        .where(RadarUniverseMember.is_active.is_(True))
+        .where(RadarUniverseMember.jurisdiction == market)
+        .where(
+            or_(
+                RadarUniverseMember.ticker.ilike(pattern),
+                RadarUniverseMember.name.ilike(pattern),
+            )
+        )
+        .order_by(
+            RadarUniverseMember.ticker.ilike(f"{normalized_query}%").desc(),
+            RadarUniverseMember.always_watched.desc(),
+            RadarUniverseMember.liquidity_rank.asc().nulls_last(),
+            RadarUniverseMember.ticker.asc(),
+        )
+        .limit(remaining * 2)
+    )
+    for member in catalog_rows:
+        if member.ticker in seen:
+            continue
+        suggestions.append(
+            TickerSuggestionResponse(
+                ticker=member.ticker,
+                name=member.name,
+                asset_class=member.asset_class,
+                exchange=member.exchange,
+                currency=member.currency,
+                sector=member.sector,
+                industry=member.industry,
+            )
+        )
+        seen.add(member.ticker)
+        if len(suggestions) >= limit:
+            break
+
+    return suggestions
 
 
 def resolve_market_hint(market_hint: str | None = None) -> str:

@@ -36,6 +36,7 @@ __all__ = [
     "LIVE_BAR_SOURCE",
     "ingest_quotes",
     "is_us_market_open",
+    "persist_quotes",
 ]
 
 
@@ -51,6 +52,33 @@ async def ingest_quotes(
     result.quotes = fetched
     result.success_count = len(fetched)
     result.failed_tickers = sorted(set(universe) - set(fetched))
+    await persist_quotes(session, universe, fetched, mark_missing_stale=True)
+    logger.info(
+        "quotes_ingested",
+        extra={
+            "ticker_count": result.ticker_count,
+            "success_count": result.success_count,
+            "failed": result.failed_tickers,
+        },
+    )
+    return result
+
+
+async def persist_quotes(
+    session: AsyncSession,
+    universe: dict[str, list[uuid.UUID]],
+    quotes: dict[str, LiveQuote],
+    *,
+    mark_missing_stale: bool = False,
+) -> None:
+    """Write already-fetched quotes into instrument_quotes and today's live bar.
+
+    Radar uses this so a catalog tape becomes cacheable history without a
+    second vendor round-trip. The live-price loop still fetches, then calls
+    the same writer.
+    """
+    if not universe:
+        return
 
     instrument_ids = [
         instrument_id
@@ -81,13 +109,12 @@ async def ingest_quotes(
     )
 
     for ticker, id_group in universe.items():
-        quote = fetched.get(ticker)
+        quote = quotes.get(ticker)
         for instrument_id in id_group:
             row = existing_quotes.get(instrument_id)
 
             if quote is None:
-                # Keep the last known price but flag it stale once it ages out.
-                if row is not None and row.as_of < stale_cutoff:
+                if mark_missing_stale and row is not None and row.as_of < stale_cutoff:
                     row.is_stale = True
                 continue
 
@@ -116,15 +143,6 @@ async def ingest_quotes(
             _upsert_live_bar(session, existing_bars, instrument_id, today, quote)
 
     await session.flush()
-    logger.info(
-        "quotes_ingested",
-        extra={
-            "ticker_count": result.ticker_count,
-            "success_count": result.success_count,
-            "failed": result.failed_tickers,
-        },
-    )
-    return result
 
 
 def _upsert_live_bar(

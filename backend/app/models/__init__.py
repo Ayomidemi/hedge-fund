@@ -913,6 +913,56 @@ class InstrumentQuote(Base, TimestampMixin):
     instrument: Mapped["Instrument"] = relationship(back_populates="quote")
 
 
+class RadarUniverseMember(Base, TimestampMixin):
+    """Fund-level monitored universe member used by Market Radar.
+
+    The catalog is deliberately separate from the live book: a ticker can be
+    monitored here before anyone owns it or has typed it into Ticker Analyst.
+    """
+
+    __tablename__ = "radar_universe_members"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticker: Mapped[str] = mapped_column(
+        String(32), nullable=False, unique=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    jurisdiction: Mapped[str] = mapped_column(String(8), nullable=False)
+    sector: Mapped[str | None] = mapped_column(String(128))
+    industry: Mapped[str | None] = mapped_column(String(128))
+    asset_class: Mapped[str] = mapped_column(String(32), nullable=False, default="equity")
+    exchange: Mapped[str | None] = mapped_column(String(64))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_rank: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    always_watched: Mapped[bool] = mapped_column(nullable=False, default=False)
+    liquidity_rank: Mapped[int | None] = mapped_column(Integer)
+    avg_dollar_volume: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    member_metadata: Mapped[dict] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    last_synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_radar_universe_active_jurisdiction",
+            "is_active",
+            "jurisdiction",
+        ),
+        Index(
+            "ix_radar_universe_industry",
+            "jurisdiction",
+            "sector",
+            "industry",
+        ),
+    )
+
+
 class FxRate(Base, TimestampMixin):
     """Latest FX rate for a currency pair. Refreshed on the same schedule as
     instrument quotes. Rate is quote_currency per 1 base_currency
@@ -979,6 +1029,7 @@ class RadarRun(Base, TimestampMixin):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    triggered_by_user_id: Mapped[str | None] = mapped_column(String(64), index=True)
     jurisdictions_requested: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list
     )
@@ -989,9 +1040,14 @@ class RadarRun(Base, TimestampMixin):
         JSONB, nullable=False, default=list
     )
     vendor_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    catalog_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     working_set_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     flagged_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     promoted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    promotion_owner_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     errors: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
     notes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
@@ -1034,7 +1090,12 @@ class RadarSnapshot(Base, TimestampMixin):
         Numeric(10, 4), nullable=False, default=Decimal("0")
     )
     flags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    evidence: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    sparkline: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    carried_forward: Mapped[bool] = mapped_column(nullable=False, default=False)
+    stale_reason: Mapped[str | None] = mapped_column(String(255))
 
     run: Mapped["RadarRun"] = relationship(back_populates="snapshots")
 

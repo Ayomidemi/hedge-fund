@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest import IsolatedAsyncioTestCase, TestCase
@@ -11,7 +12,12 @@ from app.services.market_data.sessions import (
     partition_tickers,
     session_for,
 )
-from app.services.market_radar.scan import _select_working_set, run_radar_scan
+from app.services.market_radar.catalog import CatalogSyncResult
+from app.services.market_radar.scan import (
+    _quote_targets,
+    _select_working_set,
+    run_radar_scan,
+)
 from app.services.market_radar.scoring import RadarCandidate, is_flagged, score_candidate
 from app.services.market_radar.watchlist import AlwaysWatchedSet
 
@@ -122,6 +128,59 @@ class RadarScoringTests(TestCase):
         )
         score_candidate(candidate)
         self.assertIn("unusual_volume", candidate.flags)
+        self.assertFalse(is_flagged(candidate))
+        self.assertEqual(candidate.anomaly_score, Decimal("0.00"))
+
+    def test_evidence_driven_anomalies_are_flagged(self) -> None:
+        candidate = RadarCandidate(
+            ticker="MSFT",
+            name="Microsoft",
+            jurisdiction="US",
+            change_pct=Decimal("1.8"),
+            evidence={
+                "price_return_zscore": "2.4",
+                "volume_zscore": "2.1",
+                "volatility_ratio": "1.7",
+                "sector_relative_return_pct": "3.4",
+                "sector_benchmark": "XLK",
+            },
+        )
+        score_candidate(candidate)
+        self.assertIn("price_anomaly", candidate.flags)
+        self.assertIn("volume_anomaly", candidate.flags)
+        self.assertIn("volatility_shift", candidate.flags)
+        self.assertIn("sector_relative_move", candidate.flags)
+        self.assertTrue(is_flagged(candidate))
+
+    def test_sector_relative_uses_sector_etf_not_peer_average(self) -> None:
+        from app.services.market_radar.scan import _apply_sector_relative
+
+        xlk = RadarCandidate(
+            ticker="XLK",
+            name="Technology Select",
+            jurisdiction="US",
+            sector="Technology",
+            asset_class="etf",
+            change_pct=Decimal("1.0"),
+        )
+        aapl = RadarCandidate(
+            ticker="AAPL",
+            name="Apple",
+            jurisdiction="US",
+            sector="Technology",
+            change_pct=Decimal("4.5"),
+        )
+        msft = RadarCandidate(
+            ticker="MSFT",
+            name="Microsoft",
+            jurisdiction="US",
+            sector="Technology",
+            change_pct=Decimal("1.2"),
+        )
+        _apply_sector_relative([xlk, aapl, msft])
+        self.assertEqual(aapl.evidence["sector_benchmark"], "XLK")
+        self.assertEqual(aapl.evidence["sector_relative_return_pct"], "3.50")
+        self.assertEqual(msft.evidence["sector_relative_return_pct"], "0.20")
 
     def test_working_set_keeps_always_watched_first(self) -> None:
         watched = [
@@ -147,6 +206,31 @@ class RadarScoringTests(TestCase):
         self.assertTrue(all(item.always_watched for item in working[:5]))
         self.assertEqual(working[5].ticker, "M119")
 
+    def test_quote_targets_are_capped_and_prioritize_watched_names(self) -> None:
+        watched = RadarCandidate(
+            ticker="GTCO.NG",
+            name="GTCO",
+            jurisdiction="NG",
+            always_watched=True,
+            is_catalog_member=True,
+            evidence={"liquidity_rank": 99},
+        )
+        catalog = [
+            RadarCandidate(
+                ticker=f"CAT{index}.NG",
+                name=f"CAT{index}",
+                jurisdiction="NG",
+                is_catalog_member=True,
+                evidence={"liquidity_rank": index},
+            )
+            for index in range(20)
+        ]
+
+        targets = _quote_targets([*catalog, watched], "NG")
+
+        self.assertEqual(targets[0], "GTCO.NG")
+        self.assertLess(len(targets), len(catalog) + 1)
+
 
 class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
     def _session(self) -> AsyncMock:
@@ -158,13 +242,54 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
         session.add = MagicMock()
         return session
 
+    def _scan_stack(self, *extra_patches):
+        stack = ExitStack()
+        stack.enter_context(
+            patch(
+                "app.services.market_radar.scan.sync_monitored_universe",
+                new_callable=AsyncMock,
+                return_value=CatalogSyncResult(0, 0, 0, 0),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "app.services.market_radar.scan.load_catalog_candidates",
+                new_callable=AsyncMock,
+                return_value=[],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "app.services.market_radar.scan._apply_cached_quotes",
+                new_callable=AsyncMock,
+                return_value=0,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "app.services.market_radar.scan._persist_vendor_tapes",
+                new_callable=AsyncMock,
+                return_value=0,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "app.services.market_radar.scan._apply_historical_evidence",
+                new_callable=AsyncMock,
+            )
+        )
+        for extra in extra_patches:
+            stack.enter_context(extra)
+        return stack
+
     async def test_closed_markets_make_zero_vendor_calls(self) -> None:
         closed = {
             "US": JurisdictionSession("US", False, False, "US closed"),
             "NG": JurisdictionSession("NG", False, False, "NGX closed"),
         }
         session = self._session()
-        with (
+        with self._scan_stack():
+            with (
             patch(
                 "app.services.market_radar.scan.session_for",
                 side_effect=lambda jurisdiction, now, **kwargs: closed[jurisdiction],
@@ -191,7 +316,7 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
                 new_callable=AsyncMock,
             ),
         ):
-            run = await run_radar_scan(session)
+                run = await run_radar_scan(session)
 
         fetch_us.assert_not_awaited()
         fetch_ng.assert_not_awaited()
@@ -223,7 +348,8 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
             jurisdiction="NG",
             source="ngnmarket",
         )
-        with (
+        with self._scan_stack():
+            with (
             patch(
                 "app.services.market_radar.scan.session_for",
                 side_effect=lambda jurisdiction, now, **kwargs: states[jurisdiction],
@@ -252,7 +378,7 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
                 new_callable=AsyncMock,
             ),
         ):
-            run = await run_radar_scan(session)
+                run = await run_radar_scan(session)
 
         fetch_us.assert_not_awaited()
         fetch_ng.assert_awaited_once()
@@ -267,7 +393,8 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
             "NG": JurisdictionSession("NG", False, False, "NGX closed"),
         }
         session = self._session()
-        with (
+        with self._scan_stack():
+            with (
             patch(
                 "app.services.market_radar.scan.session_for",
                 side_effect=lambda jurisdiction, now, **kwargs: closed[jurisdiction],
@@ -296,10 +423,70 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
                 new_callable=AsyncMock,
             ),
         ):
-            run = await run_radar_scan(session, force=True, jurisdictions=["US", "NG"])
+                run = await run_radar_scan(session, force=True, jurisdictions=["US", "NG"])
 
         fetch_us.assert_awaited_once()
         fetch_ng.assert_awaited_once()
         fetch_quotes.assert_not_awaited()
         self.assertEqual(run.jurisdictions_scanned, ["US", "NG"])
         self.assertEqual(run.vendor_calls, 5)
+
+    async def test_manual_scan_promotes_only_to_the_scanning_user(self) -> None:
+        states = {
+            "US": JurisdictionSession("US", True, False, "US open"),
+            "NG": JurisdictionSession("NG", False, False, "NGX closed"),
+        }
+        session = self._session()
+        watched = AlwaysWatchedSet(
+            candidates={
+                "MSFT": RadarCandidate(
+                    ticker="MSFT",
+                    name="Microsoft",
+                    jurisdiction="US",
+                    always_watched=True,
+                    price=Decimal("420"),
+                    change_pct=Decimal("7.5"),
+                )
+            }
+        )
+        with self._scan_stack():
+            with (
+            patch(
+                "app.services.market_radar.scan.session_for",
+                side_effect=lambda jurisdiction, now, **kwargs: states[jurisdiction],
+            ),
+            patch(
+                "app.services.market_radar.scan.load_always_watched",
+                new_callable=AsyncMock,
+                return_value=watched,
+            ),
+            patch(
+                "app.services.market_radar.scan.fetch_us_movers",
+                new_callable=AsyncMock,
+                return_value=([], 3, []),
+            ),
+            patch(
+                "app.services.market_radar.scan.fetch_ngn_discovery",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.services.market_radar.scan.fetch_quotes",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "app.services.market_radar.scan.promote_flagged_candidates",
+                new_callable=AsyncMock,
+                return_value=1,
+            ) as promote,
+            patch(
+                "app.services.market_radar.scan.record_system_log",
+                new_callable=AsyncMock,
+            ),
+        ):
+                run = await run_radar_scan(session, triggered_by_user_id="trigger-user")
+
+        promote.assert_awaited_once()
+        self.assertEqual(promote.await_args.kwargs["owner_ids"], ["trigger-user"])
+        self.assertEqual(run.promotion_owner_ids, ["trigger-user"])
+

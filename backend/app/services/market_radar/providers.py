@@ -4,6 +4,7 @@ this module never mixes US and NGX endpoints in one function."""
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -34,6 +35,7 @@ async def fetch_us_movers() -> tuple[list[RadarCandidate], int, list[str]]:
     errors: list[str] = []
     calls = 0
     base_url = settings.fmp_base_url.removesuffix("/api")
+    now = datetime.now(timezone.utc)
 
     async with httpx.AsyncClient(
         base_url=base_url,
@@ -73,6 +75,7 @@ async def fetch_us_movers() -> tuple[list[RadarCandidate], int, list[str]]:
                     exchange="US",
                     currency="USD",
                     source="fmp",
+                    source_as_of=now,
                 )
                 candidate.price = _decimal(item.get("price")) or candidate.price
                 candidate.change_pct = change_pct if change_pct is not None else candidate.change_pct
@@ -96,6 +99,7 @@ async def fetch_ngn_discovery() -> tuple[list[RadarCandidate], int, list[str]]:
     errors: list[str] = []
     calls = 0
     candidates: dict[str, RadarCandidate] = {}
+    now = datetime.now(timezone.utc)
 
     async with httpx.AsyncClient(
         base_url=settings.ngnmarket_base_url,
@@ -135,6 +139,7 @@ async def fetch_ngn_discovery() -> tuple[list[RadarCandidate], int, list[str]]:
                     exchange="NGX",
                     currency="NGN",
                     source="ngnmarket",
+                    source_as_of=now,
                     price=price,
                     previous_close=previous_close,
                     change_pct=change_pct,

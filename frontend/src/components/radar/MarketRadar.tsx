@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   buttonPrimaryClassName,
@@ -32,6 +33,11 @@ const compact = new Intl.NumberFormat("en-US", {
   notation: "compact",
 });
 
+const priceFormat = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  minimumFractionDigits: 2,
+});
+
 export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) {
   const [overview, setOverview] = useState(initialOverview);
   const [jurisdiction, setJurisdiction] = useState<"all" | "US" | "NG">("all");
@@ -46,6 +52,8 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
       { label: "Working set", value: String(overview.working_set_count) },
       { label: "Flagged", value: String(overview.flagged_count) },
       { label: "Industries", value: String(overview.industries.length) },
+      { label: "Catalog", value: String(overview.latest_run?.catalog_count ?? 0) },
+      { label: "Cache hits", value: String(overview.latest_run?.cache_hits ?? 0) },
       {
         label: "Vendor calls (last scan)",
         value: String(overview.latest_run?.vendor_calls ?? 0),
@@ -162,7 +170,7 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
           ))}
         </div>
 
-        <div className="grid divide-y divide-zinc-200 sm:grid-cols-4 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
+        <div className="grid divide-y divide-zinc-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0 lg:grid-cols-6 dark:divide-zinc-800">
           {metrics.map((metric) => (
             <div key={metric.label} className="px-5 py-4">
               <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -238,25 +246,59 @@ function IndustryCard({ industry }: { industry: MarketRadarIndustry }) {
 }
 
 function NameRow({ name }: { name: MarketRadarName }) {
+  const price = name.price ? priceFormat.format(Number(name.price)) : "-";
+  const sourceDate = name.source_as_of
+    ? dateTime.format(new Date(name.source_as_of))
+    : dateTime.format(new Date(name.as_of));
+  const zScore = evidenceText(name.evidence, "price_return_zscore");
+  const relative = evidenceText(name.evidence, "sector_relative_return_pct");
+  const benchmark = evidenceText(name.evidence, "sector_benchmark");
+  const volumeRatio = name.volume_ratio ?? evidenceText(name.evidence, "volume_ratio");
+
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-2 py-2">
-      <div>
+    <div className="grid gap-3 py-3 sm:grid-cols-[minmax(170px,1fr)_120px_150px] sm:items-center">
+      <div className="min-w-0">
         <Link
           href={`/ticker-analyst?ticker=${encodeURIComponent(name.ticker)}`}
           className="text-sm font-medium hover:underline"
         >
           {name.ticker}
         </Link>
-        <p className="text-xs text-zinc-500">{name.name}</p>
+        <p className="truncate text-xs text-zinc-500">{name.name}</p>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {name.carried_forward ? <Chip tone="zinc">prior session</Chip> : null}
+          {name.always_watched ? <Chip tone="zinc">watched</Chip> : null}
+          {name.flags.slice(0, 3).map((flag) => (
+            <Chip key={flag} tone={flagTone(flag)}>
+              {flag.replaceAll("_", " ")}
+            </Chip>
+          ))}
+        </div>
       </div>
-      <div className="text-right text-sm tabular-nums">
+      <Sparkline points={name.sparkline} changePct={name.change_pct} />
+      <div className="text-left text-sm tabular-nums sm:text-right">
+        <p className="font-medium">
+          {name.currency} {price}
+        </p>
         <p className={changeClass(name.change_pct)}>
-          {name.change_pct ? `${Number(name.change_pct).toFixed(1)}%` : "—"}
+          {name.change_pct ? `${Number(name.change_pct).toFixed(1)}%` : "-"}
         </p>
         <p className="text-xs text-zinc-500">
-          {name.volume ? compact.format(name.volume) : "—"} vol
-          {name.flags.length > 0 ? ` · ${name.flags.join(", ")}` : ""}
+          {name.volume ? compact.format(name.volume) : "-"} vol
         </p>
+        <p className="mt-1 text-xs text-zinc-500">as of {sourceDate}</p>
+      </div>
+      <div className="flex flex-wrap gap-1 sm:col-span-3">
+        {zScore ? <Chip tone="zinc">z {zScore}</Chip> : null}
+        {relative ? (
+          <Chip tone="zinc">
+            vs {benchmark || "sector"} {formatNumber(relative)}%
+          </Chip>
+        ) : null}
+        {volumeRatio ? <Chip tone="zinc">vol {formatNumber(volumeRatio)}x</Chip> : null}
+        {name.stale_reason && !name.carried_forward ? (
+          <Chip tone="rose">{name.stale_reason}</Chip>
+        ) : null}
       </div>
     </div>
   );
@@ -282,4 +324,86 @@ function changeClass(value: string | null) {
   return numeric > 0
     ? "text-emerald-700 dark:text-emerald-400"
     : "text-rose-700 dark:text-rose-400";
+}
+
+function Sparkline({
+  points,
+  changePct,
+}: {
+  points: Array<Record<string, unknown>>;
+  changePct: string | null;
+}) {
+  const values = points
+    .map((point) => Number(point.close))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (values.length < 2) {
+    return <div className="h-10 rounded-md bg-zinc-50 dark:bg-zinc-900" />;
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const path = values
+    .map((value, index) => {
+      const x = (index / Math.max(values.length - 1, 1)) * 118 + 1;
+      const y = 37 - ((value - min) / range) * 34;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const numericChange = Number(changePct);
+  const stroke =
+    Number.isFinite(numericChange) && numericChange < 0
+      ? "stroke-rose-500"
+      : "stroke-emerald-500";
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 120 40"
+      className="h-10 w-full rounded-md bg-zinc-50 dark:bg-zinc-900"
+      preserveAspectRatio="none"
+    >
+      <path d={path} fill="none" className={stroke} strokeWidth="2.5" />
+    </svg>
+  );
+}
+
+function Chip({
+  children,
+  tone,
+}: {
+  children: ReactNode;
+  tone: "amber" | "emerald" | "rose" | "zinc";
+}) {
+  const className =
+    tone === "rose"
+      ? "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300"
+      : tone === "amber"
+        ? "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+        : tone === "emerald"
+          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+          : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400";
+  return (
+    <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${className}`}>
+      {children}
+    </span>
+  );
+}
+
+function flagTone(flag: string): "amber" | "emerald" | "rose" | "zinc" {
+  if (flag.includes("risk") || flag.includes("drop")) return "rose";
+  if (flag.includes("volume") || flag.includes("volatility")) return "amber";
+  if (flag.includes("move") || flag.includes("anomaly")) return "emerald";
+  return "zinc";
+}
+
+function evidenceText(evidence: Record<string, unknown>, key: string) {
+  const value = evidence[key];
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+}
+
+function formatNumber(value: string) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(1) : value;
 }

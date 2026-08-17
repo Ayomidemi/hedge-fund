@@ -45,6 +45,19 @@ RADAR_MOVER_LIST_LIMIT = 15
 # Max NGX discovery names beyond always-watched holdings.
 RADAR_NG_DISCOVERY_LIMIT = 25
 
+# Quotes already refreshed by the live-price platform can be reused by Radar if
+# they are from the current UTC day or no older than this live-cache window.
+RADAR_QUOTE_CACHE_TTL_SECONDS = 900
+
+# Radar may fill missing catalog/always-watched prices during open sessions, but
+# these caps keep NGX per-symbol calls and US fallback calls bounded.
+RADAR_US_QUOTE_REFRESH_LIMIT = 60
+RADAR_NG_QUOTE_REFRESH_LIMIT = 12
+
+# Historical context window used for anomaly scoring and sparklines.
+RADAR_HISTORY_LOOKBACK_DAYS = 90
+RADAR_SPARKLINE_POINTS = 24
+
 # Sector / market ETFs always watched as industry pulse (US only).
 RADAR_SECTOR_ETFS: tuple[tuple[str, str, str], ...] = (
     ("SPY", "Broad Market", "ETF"),
@@ -64,3 +77,20 @@ RADAR_SECTOR_ETFS: tuple[tuple[str, str, str], ...] = (
     ("TLT", "Bonds", "ETF"),
     ("GLD", "Commodity", "ETF"),
 )
+
+
+def _sector_benchmarks() -> dict[str, str]:
+    """Map a GICS-style sector to the ETF used as its pulse.
+
+    Dedicated XL* funds win over QQQ. Broad market stays on SPY, not IWM.
+    """
+    mapping: dict[str, str] = {}
+    for ticker, sector, _asset_class in RADAR_SECTOR_ETFS:
+        if sector not in mapping or ticker.startswith("XL"):
+            mapping[sector] = ticker
+    return mapping
+
+
+RADAR_SECTOR_BENCHMARKS = _sector_benchmarks()
+
+RADAR_VENDOR_QUOTE_SOURCES = frozenset({"fmp", "tiingo", "polygon", "ngnmarket"})

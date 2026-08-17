@@ -83,13 +83,17 @@ def _run_response(run: RadarRun) -> MarketRadarRunResponse:
         started_at=run.started_at,
         finished_at=run.finished_at,
         status=run.status,
+        triggered_by_user_id=run.triggered_by_user_id,
         jurisdictions_requested=list(run.jurisdictions_requested or []),
         jurisdictions_scanned=list(run.jurisdictions_scanned or []),
         jurisdictions_skipped=list(run.jurisdictions_skipped or []),
         vendor_calls=run.vendor_calls,
+        cache_hits=run.cache_hits,
+        catalog_count=run.catalog_count,
         working_set_count=run.working_set_count,
         flagged_count=run.flagged_count,
         promoted_count=run.promoted_count,
+        promotion_owner_ids=list(run.promotion_owner_ids or []),
         notes=list(run.notes or []),
         errors=list(run.errors or []),
     )
@@ -112,7 +116,12 @@ def _name_response(row: RadarSnapshot) -> MarketRadarNameResponse:
         volume_ratio=row.volume_ratio,
         anomaly_score=row.anomaly_score,
         flags=list(row.flags or []),
+        evidence=dict(row.evidence or {}),
+        sparkline=list(row.sparkline or []),
         as_of=row.as_of,
+        source_as_of=row.source_as_of,
+        carried_forward=row.carried_forward,
+        stale_reason=row.stale_reason,
     )
 
 

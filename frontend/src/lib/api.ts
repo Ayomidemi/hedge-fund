@@ -1809,6 +1809,7 @@ export type MarketRadarRun = {
   started_at: string;
   finished_at: string | null;
   status: string;
+  triggered_by_user_id: string | null;
   jurisdictions_requested: string[];
   jurisdictions_scanned: string[];
   jurisdictions_skipped: Array<{
@@ -1817,9 +1818,12 @@ export type MarketRadarRun = {
     vendors_not_called?: string[];
   }>;
   vendor_calls: number;
+  cache_hits: number;
+  catalog_count: number;
   working_set_count: number;
   flagged_count: number;
   promoted_count: number;
+  promotion_owner_ids: string[];
   notes: string[];
   errors: Array<{ error?: string }>;
 };
@@ -1840,7 +1844,12 @@ export type MarketRadarName = {
   volume_ratio: string | null;
   anomaly_score: string;
   flags: string[];
+  evidence: Record<string, unknown>;
+  sparkline: Array<Record<string, unknown>>;
   as_of: string;
+  source_as_of: string | null;
+  carried_forward: boolean;
+  stale_reason: string | null;
 };
 
 export type MarketRadarIndustry = {
