@@ -25,6 +25,9 @@ router = APIRouter(prefix="/opportunity-queue")
 @router.get("", response_model=OpportunityQueueResponse)
 async def read_opportunity_queue(
     candidate_limit: int = Query(default=12, ge=0, le=50),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
     user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> OpportunityQueueResponse:
@@ -32,6 +35,9 @@ async def read_opportunity_queue(
         session,
         user,
         candidate_limit=candidate_limit,
+        page=page,
+        page_size=page_size,
+        status=status,
     )
 
 

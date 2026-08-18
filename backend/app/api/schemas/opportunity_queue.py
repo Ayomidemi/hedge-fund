@@ -58,14 +58,68 @@ class OpportunityUpdate(BaseModel):
     target_weight: Decimal | None = Field(default=None, ge=0, le=100)
     review_by: date | None = None
     notes: str | None = None
+    override_reason: str | None = None
 
-    @field_validator("thesis", "research_question", "next_action", "notes")
+    @field_validator(
+        "thesis", "research_question", "next_action", "notes", "override_reason"
+    )
     @classmethod
     def empty_text_to_none(cls, value: str | None) -> str | None:
         if value is None:
             return None
         cleaned = value.strip()
         return cleaned or None
+
+
+class OpportunityMemoLink(BaseModel):
+    id: UUID
+    memo_date: date
+    classification: str
+    executive_view: str
+
+
+class OpportunityRadarLink(BaseModel):
+    ticker: str
+    price: Decimal | None = None
+    change_pct: Decimal | None = None
+    flags: list[str] = Field(default_factory=list)
+    scan_state: str | None = None
+    scan_delta_change_pct: str | None = None
+    as_of: datetime
+    carried_forward: bool = False
+
+
+class OpportunityRiskLink(BaseModel):
+    id: UUID
+    decision: str
+    risk_level: str
+    checked_at: datetime
+
+
+class OpportunityPositionLink(BaseModel):
+    quantity: Decimal
+    average_cost: Decimal
+    market_value: Decimal
+    unrealized_pnl: Decimal
+
+
+class OpportunityTradeLink(BaseModel):
+    id: UUID
+    side: str
+    quantity: Decimal
+    executed_price: Decimal | None = None
+    trade_date: datetime
+    status: str
+
+
+class OpportunityLinks(BaseModel):
+    memo: OpportunityMemoLink | None = None
+    radar: OpportunityRadarLink | None = None
+    pre_trade: OpportunityRiskLink | None = None
+    position: OpportunityPositionLink | None = None
+    last_trade: OpportunityTradeLink | None = None
+    tape: list[dict] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
 
 
 class OpportunityResponse(BaseModel):
@@ -90,6 +144,7 @@ class OpportunityResponse(BaseModel):
     latest_action: str | None = None
     latest_composite_score: Decimal | None = None
     latest_confidence_score: Decimal | None = None
+    links: OpportunityLinks = Field(default_factory=OpportunityLinks)
     created_at: datetime
     updated_at: datetime
 
@@ -124,3 +179,7 @@ class OpportunityQueueResponse(BaseModel):
     opportunities: list[OpportunityResponse]
     candidates: list[OpportunityCandidateResponse]
     status_order: list[str]
+    page: int = 1
+    page_size: int = 20
+    total: int = 0
+    total_pages: int = 1

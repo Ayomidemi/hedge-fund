@@ -235,6 +235,47 @@ export type OpportunityStatus =
 
 export type OpportunityPriority = "low" | "medium" | "high" | "urgent";
 
+export type OpportunityLinks = {
+  memo: {
+    id: string;
+    memo_date: string;
+    classification: string;
+    executive_view: string;
+  } | null;
+  radar: {
+    ticker: string;
+    price: string | null;
+    change_pct: string | null;
+    flags: string[];
+    scan_state: string | null;
+    scan_delta_change_pct: string | null;
+    as_of: string;
+    carried_forward: boolean;
+  } | null;
+  pre_trade: {
+    id: string;
+    decision: string;
+    risk_level: string;
+    checked_at: string;
+  } | null;
+  position: {
+    quantity: string;
+    average_cost: string;
+    market_value: string;
+    unrealized_pnl: string;
+  } | null;
+  last_trade: {
+    id: string;
+    side: string;
+    quantity: string;
+    executed_price: string | null;
+    trade_date: string;
+    status: string;
+  } | null;
+  tape: Array<Record<string, unknown>>;
+  blockers: string[];
+};
+
 export type Opportunity = {
   id: string;
   instrument: Instrument;
@@ -257,6 +298,7 @@ export type Opportunity = {
   latest_action: string | null;
   latest_composite_score: string | null;
   latest_confidence_score: string | null;
+  links: OpportunityLinks;
   created_at: string;
   updated_at: string;
 };
@@ -291,6 +333,10 @@ export type OpportunityQueue = {
   opportunities: Opportunity[];
   candidates: OpportunityCandidate[];
   status_order: OpportunityStatus[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
 };
 
 export type OpportunityCreateInput = {
@@ -309,7 +355,11 @@ export type OpportunityCreateInput = {
   notes?: string;
 };
 
-export type OpportunityUpdateInput = Partial<Omit<OpportunityCreateInput, "source_memo_id" | "instrument">>;
+export type OpportunityUpdateInput = Partial<
+  Omit<OpportunityCreateInput, "source_memo_id" | "instrument">
+> & {
+  override_reason?: string;
+};
 
 export type RiskLimit = {
   id: string;
@@ -1292,8 +1342,22 @@ export function getTradeJournal(options?: ApiRequestOptions) {
   return fetchApi<TradeJournal>("/api/operating-core/trades", options);
 }
 
-export function getOpportunityQueue(options?: ApiRequestOptions) {
-  return fetchApi<OpportunityQueue>("/api/opportunity-queue", options);
+export function getOpportunityQueue(
+  params?: {
+    page?: number;
+    page_size?: number;
+    status?: string;
+  } & ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.page) search.set("page", String(params.page));
+  if (params?.page_size) search.set("page_size", String(params.page_size));
+  if (params?.status && params.status !== "all") search.set("status", params.status);
+  const query = search.toString();
+  return fetchApi<OpportunityQueue>(
+    `/api/opportunity-queue${query ? `?${query}` : ""}`,
+    { accessToken: params?.accessToken },
+  );
 }
 
 export function createOpportunity(

@@ -555,6 +555,13 @@ async def create_manual_trade(
     session.add(CashLedgerEntry(portfolio_id=portfolio.id, **cash_values))
 
     await _rebuild_positions_from_filled_trades(session, portfolio)
+    from app.services.opportunity_queue.queue import sync_opportunities_for_instrument
+
+    await sync_opportunities_for_instrument(
+        session,
+        owner_user_id=user.id,
+        instrument=instrument,
+    )
     await record_system_log(
         session,
         owner_user_id=user.id,
@@ -636,6 +643,13 @@ async def update_manual_trade(
 
     await _sync_trade_cash_entry(session, portfolio, trade, instrument, old_cash_values, fx_rates)
     await _rebuild_positions_from_filled_trades(session, portfolio)
+    from app.services.opportunity_queue.queue import sync_opportunities_for_instrument
+
+    await sync_opportunities_for_instrument(
+        session,
+        owner_user_id=user.id,
+        instrument=instrument,
+    )
     await record_system_log(
         session,
         owner_user_id=user.id,
