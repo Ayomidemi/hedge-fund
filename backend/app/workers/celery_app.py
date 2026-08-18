@@ -1,8 +1,8 @@
 """Celery application and beat schedule.
 
-The price refresh cadence is the only env-driven timing knob:
-HF_PRICE_REFRESH_INTERVAL_SECONDS (300 on free API tiers, 10 for
-penny-stock testing).
+Price refresh and news polling use env-driven timing/scope knobs:
+HF_PRICE_REFRESH_INTERVAL_SECONDS, HF_NEWS_POLL_INTERVAL_SECONDS, and
+HF_NEWS_POLL_JURISDICTIONS.
 
 Run locally:
     celery -A app.workers.celery_app worker --beat -l info
@@ -16,7 +16,11 @@ from app.core.market_constants import RADAR_SCAN_INTERVAL_SECONDS
 celery_app = Celery(
     "hedge_fund",
     broker=settings.redis_url,
-    include=["app.workers.tasks.price_refresh", "app.workers.tasks.radar_scan"],
+    include=[
+        "app.workers.tasks.price_refresh",
+        "app.workers.tasks.radar_scan",
+        "app.workers.tasks.news_poll",
+    ],
 )
 
 celery_app.conf.update(
@@ -37,5 +41,9 @@ celery_app.conf.beat_schedule = {
     "market-radar": {
         "task": "radar.scan",
         "schedule": float(RADAR_SCAN_INTERVAL_SECONDS),
+    },
+    "news-poll": {
+        "task": "news.poll",
+        "schedule": float(settings.news_poll_interval_seconds),
     },
 }

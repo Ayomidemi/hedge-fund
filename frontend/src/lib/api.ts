@@ -2005,6 +2005,89 @@ export function getMarketRadarOverview(
   return fetchApi<MarketRadarOverview>(`/api/market-radar/overview${query}`, options);
 }
 
+export type NewsItem = {
+  id: string;
+  provider: string;
+  provider_id: string;
+  source_name: string | null;
+  title: string;
+  summary: string | null;
+  url: string | null;
+  published_at: string | null;
+  crawled_at: string | null;
+  jurisdiction: string | null;
+  event_type: string | null;
+  sentiment_label: string | null;
+  sentiment_score: string | null;
+  tickers: string[];
+};
+
+export type NewsPollRun = {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  trigger: string;
+  target_scope: string | null;
+  target_key: string | null;
+  provider_calls: number;
+  items_seen: number;
+  items_created: number;
+  items_updated: number;
+  interval_seconds: number;
+  cache_hit: boolean;
+  provider_plan: string[];
+  errors: Array<{ error?: string }>;
+  notes: string[];
+};
+
+export type NewsOverview = {
+  generated_at: string;
+  latest_run: NewsPollRun | null;
+  current: NewsItem[];
+  ticker: string | null;
+  ticker_items: NewsItem[];
+  watchlist_items: NewsItem[];
+  provider_notes: string[];
+};
+
+export function getNewsOverview(
+  params?: { ticker?: string; market?: "US" | "NG"; jurisdiction?: "US" | "NG" | "all" },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.ticker) search.set("ticker", params.ticker);
+  if (params?.market) search.set("market", params.market);
+  if (params?.jurisdiction && params.jurisdiction !== "all") {
+    search.set("jurisdiction", params.jurisdiction);
+  }
+  const query = search.toString();
+  return fetchApi<NewsOverview>(`/api/news/overview${query ? `?${query}` : ""}`, options);
+}
+
+export function pollNews(
+  payload?: { jurisdiction?: "US" | "NG" | "all"; force?: boolean },
+  options?: ApiRequestOptions,
+) {
+  return postApi<NewsPollRun, { jurisdiction?: "US" | "NG" | "all"; force?: boolean }>(
+    "/api/news/poll",
+    payload ?? {},
+    options,
+  );
+}
+
+export function refreshTickerNews(
+  ticker: string,
+  payload?: { market?: "US" | "NG"; force?: boolean },
+  options?: ApiRequestOptions,
+) {
+  return postApi<NewsPollRun, { market?: "US" | "NG"; force?: boolean }>(
+    `/api/news/ticker/${encodeURIComponent(ticker)}/refresh`,
+    payload ?? {},
+    options,
+  );
+}
+
 export function runMarketRadarScan(
   payload?: { jurisdictions?: Array<"US" | "NG">; force?: boolean },
   options?: ApiRequestOptions,

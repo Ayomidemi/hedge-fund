@@ -13,6 +13,7 @@ import {
 import type {
   FxRateUpdatedPayload,
   LiveQuote,
+  NewsPollCompletedPayload,
   PlatformEvent,
   PriceRefreshCompletedPayload,
 } from "@/lib/live-events";
@@ -28,6 +29,7 @@ type LiveDataContextValue = {
   lastPortfolioMarkedAt: string | null;
   lastRefresh: PriceRefreshCompletedPayload | null;
   fxRate: FxRateUpdatedPayload | null;
+  lastNewsPoll: NewsPollCompletedPayload | null;
 };
 
 const LiveDataContext = createContext<LiveDataContextValue>({
@@ -37,6 +39,7 @@ const LiveDataContext = createContext<LiveDataContextValue>({
   lastPortfolioMarkedAt: null,
   lastRefresh: null,
   fxRate: null,
+  lastNewsPoll: null,
 });
 
 export function useLiveData(): LiveDataContextValue {
@@ -60,6 +63,8 @@ export function LiveDataProvider({ children }: { children: React.ReactNode }) {
   const [lastRefresh, setLastRefresh] =
     useState<PriceRefreshCompletedPayload | null>(null);
   const [fxRate, setFxRate] = useState<FxRateUpdatedPayload | null>(null);
+  const [lastNewsPoll, setLastNewsPoll] =
+    useState<NewsPollCompletedPayload | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scheduleRouterRefresh = useCallback(() => {
@@ -103,6 +108,12 @@ export function LiveDataProvider({ children }: { children: React.ReactNode }) {
 
       if (event.type === "system_log.entry") {
         scheduleRouterRefresh();
+        return;
+      }
+
+      if (event.type === "news.poll_completed") {
+        setLastNewsPoll(event.payload);
+        scheduleRouterRefresh();
       }
     },
     [scheduleRouterRefresh],
@@ -137,8 +148,17 @@ export function LiveDataProvider({ children }: { children: React.ReactNode }) {
       lastPortfolioMarkedAt,
       lastRefresh,
       fxRate,
+      lastNewsPoll,
     }),
-    [connected, quotes, pricesAsOf, lastPortfolioMarkedAt, lastRefresh, fxRate],
+    [
+      connected,
+      quotes,
+      pricesAsOf,
+      lastPortfolioMarkedAt,
+      lastRefresh,
+      fxRate,
+      lastNewsPoll,
+    ],
   );
 
   return (

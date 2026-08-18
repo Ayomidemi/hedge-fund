@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
+import { LoaderCover } from "@/components/ui/Loader";
 import {
   buttonPrimaryClassName,
   buttonSecondaryClassName,
@@ -66,6 +67,7 @@ export function OpportunityQueue({
   const [selectedId, setSelectedId] = useState(initialQueue?.opportunities[0]?.id ?? "");
   const [statusFilter, setStatusFilter] = useState<OpportunityStatus | "all">("all");
   const [page, setPage] = useState(initialQueue?.page ?? 1);
+  const [listLoading, setListLoading] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
 
   const opportunities = useMemo(() => queue?.opportunities ?? [], [queue?.opportunities]);
@@ -93,18 +95,24 @@ export function OpportunityQueue({
 
   async function handleStatusFilter(next: OpportunityStatus | "all") {
     setStatusFilter(next);
+    setListLoading(true);
     try {
       await reloadQueue(1, next);
     } catch {
       toast.error("Queue could not reload.");
+    } finally {
+      setListLoading(false);
     }
   }
 
   async function handlePageChange(nextPage: number) {
+    setListLoading(true);
     try {
       await reloadQueue(nextPage, statusFilter);
     } catch {
       toast.error("Queue could not reload.");
+    } finally {
+      setListLoading(false);
     }
   }
 
@@ -221,6 +229,7 @@ export function OpportunityQueue({
             pageSize={queue.page_size}
             total={queue.total}
             totalPages={queue.total_pages}
+            loading={listLoading}
             onSelect={setSelectedId}
             onStatusFilter={(status) => void handleStatusFilter(status)}
             onPageChange={(next) => void handlePageChange(next)}
@@ -252,6 +261,7 @@ function QueueTable({
   pageSize,
   total,
   totalPages,
+  loading,
   onSelect,
   onStatusFilter,
   onPageChange,
@@ -264,6 +274,7 @@ function QueueTable({
   pageSize: number;
   total: number;
   totalPages: number;
+  loading: boolean;
   onSelect: (id: string) => void;
   onStatusFilter: (status: OpportunityStatus | "all") => void;
   onPageChange: (page: number) => void;
@@ -282,6 +293,7 @@ function QueueTable({
         </div>
         <select
           value={statusFilter}
+          disabled={loading}
           onChange={(event) =>
             onStatusFilter(event.target.value as OpportunityStatus | "all")
           }
@@ -296,7 +308,8 @@ function QueueTable({
         </select>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="relative min-h-40 overflow-x-auto">
+        {loading ? <LoaderCover label="Loading queue" /> : null}
         <table className="w-full min-w-[860px] text-left text-sm">
           <thead>
             <tr className="border-b border-zinc-200 dark:border-zinc-800">
@@ -349,7 +362,7 @@ function QueueTable({
             <button
               type="button"
               onClick={() => onPageChange(page - 1)}
-              disabled={page <= 1}
+              disabled={loading || page <= 1}
               className={buttonSecondaryClassName}
             >
               Previous
@@ -360,7 +373,7 @@ function QueueTable({
             <button
               type="button"
               onClick={() => onPageChange(page + 1)}
-              disabled={page >= totalPages}
+              disabled={loading || page >= totalPages}
               className={buttonSecondaryClassName}
             >
               Next

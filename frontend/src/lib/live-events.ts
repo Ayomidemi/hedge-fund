@@ -45,12 +45,26 @@ export type SystemLogEntryPayload = {
   message: string;
 };
 
+export type NewsPollCompletedPayload = {
+  run_id: string;
+  status: string;
+  trigger: string;
+  target_scope: string | null;
+  target_key: string | null;
+  provider_calls: number;
+  items_seen: number;
+  items_created: number;
+  items_updated: number;
+  cache_hit: boolean;
+};
+
 export type PlatformEvent =
   | { type: "quote.batch_updated"; emitted_at: string; owner_user_id: string | null; payload: QuoteBatchUpdatedPayload }
   | { type: "portfolio.marked"; emitted_at: string; owner_user_id: string | null; payload: PortfolioMarkedPayload }
   | { type: "price_refresh.completed"; emitted_at: string; owner_user_id: string | null; payload: PriceRefreshCompletedPayload }
   | { type: "fx.rate_updated"; emitted_at: string; owner_user_id: string | null; payload: FxRateUpdatedPayload }
-  | { type: "system_log.entry"; emitted_at: string; owner_user_id: string | null; payload: SystemLogEntryPayload };
+  | { type: "system_log.entry"; emitted_at: string; owner_user_id: string | null; payload: SystemLogEntryPayload }
+  | { type: "news.poll_completed"; emitted_at: string; owner_user_id: string | null; payload: NewsPollCompletedPayload };
 
 export function parsePlatformEvent(data: string): PlatformEvent | null {
   try {

@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -659,6 +660,107 @@ class EvidenceSnapshot(Base, TimestampMixin):
 
     recommendation: Mapped["ModelRecommendation | None"] = relationship(
         back_populates="evidence_snapshots"
+    )
+
+
+class NewsPollRun(Base, TimestampMixin):
+    """Audit trail for scheduled and manual news ingestion."""
+
+    __tablename__ = "news_poll_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False, default="scheduled")
+    target_scope: Mapped[str | None] = mapped_column(String(32), index=True)
+    target_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    provider_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    items_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    items_created: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    items_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provider_plan: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    errors: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    notes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+
+    __table_args__ = (
+        Index("ix_news_poll_runs_started_at", "started_at"),
+        Index(
+            "ix_news_poll_runs_target_started",
+            "target_scope",
+            "target_key",
+            "status",
+            "started_at",
+        ),
+    )
+
+
+class NewsItem(Base, TimestampMixin):
+    """Normalized market news article, press release, or official filing notice."""
+
+    __tablename__ = "news_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_name: Mapped[str | None] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(String(2048))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    crawled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    jurisdiction: Mapped[str | None] = mapped_column(String(8))
+    event_type: Mapped[str | None] = mapped_column(String(64))
+    sentiment_label: Mapped[str | None] = mapped_column(String(32))
+    sentiment_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    ticker_links: Mapped[list["NewsTickerLink"]] = relationship(
+        back_populates="news_item", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_id", name="uq_news_items_provider_id"),
+        Index("ix_news_items_published_at", "published_at"),
+        Index("ix_news_items_provider_published", "provider", "published_at"),
+    )
+
+
+class NewsTickerLink(Base, TimestampMixin):
+    """Ticker-level index for news lookup without querying JSON arrays."""
+
+    __tablename__ = "news_ticker_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    news_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("news_items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    instrument_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("instruments.id"), index=True
+    )
+    relevance_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    sentiment_label: Mapped[str | None] = mapped_column(String(32))
+    sentiment_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+
+    news_item: Mapped["NewsItem"] = relationship(back_populates="ticker_links")
+    instrument: Mapped["Instrument | None"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint(
+            "news_item_id", "ticker", name="uq_news_ticker_links_item_ticker"
+        ),
+        Index("ix_news_ticker_links_ticker", "ticker"),
     )
 
 

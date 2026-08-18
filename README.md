@@ -64,14 +64,17 @@ Stop API and Celery:
 ./scripts/stop-backend.sh
 ```
 
-The only timing knob is in the root `.env`:
+The key timing and News Centre knobs are in the root `.env`:
 
 ```env
 HF_PRICE_REFRESH_INTERVAL_SECONDS=300   # 5 min on free API tiers; 10 for penny-stock testing
+HF_NEWS_POLL_INTERVAL_SECONDS=600       # 10 min default cadence for News Centre polling
+HF_NEWS_POLL_JURISDICTIONS=US           # Scheduled News Centre scope; use US,NG only when desired
+HF_NEWS_TICKER_REFRESH_TTL_SECONDS=1800 # 30 min cache guard for selected-ticker news refreshes
 ```
 
 All other tuning (batch size, market-hours gating, staleness threshold,
-benchmark tickers) lives in `backend/app/core/market_constants.py`.
+benchmark tickers, news provider caps) lives in backend constants/services.
 Each refresh cycle is audited in `price_refresh_runs` and surfaced on the
 Administration page.
 

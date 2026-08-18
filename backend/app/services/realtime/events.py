@@ -17,6 +17,7 @@ EVENT_PORTFOLIO_MARKED = "portfolio.marked"
 EVENT_PRICE_REFRESH_COMPLETED = "price_refresh.completed"
 EVENT_FX_RATE_UPDATED = "fx.rate_updated"
 EVENT_SYSTEM_LOG_ENTRY = "system_log.entry"
+EVENT_NEWS_POLL_COMPLETED = "news.poll_completed"
 
 
 def make_event(
@@ -124,4 +125,34 @@ def system_log_entry_event(
             "message": message,
         },
         owner_user_id=owner_user_id,
+    )
+
+
+def news_poll_completed_event(
+    *,
+    run_id: str,
+    status: str,
+    trigger: str,
+    provider_calls: int,
+    items_seen: int,
+    items_created: int,
+    items_updated: int,
+    target_scope: str | None = None,
+    target_key: str | None = None,
+    cache_hit: bool = False,
+) -> dict[str, Any]:
+    return make_event(
+        EVENT_NEWS_POLL_COMPLETED,
+        {
+            "run_id": run_id,
+            "status": status,
+            "trigger": trigger,
+            "target_scope": target_scope,
+            "target_key": target_key,
+            "provider_calls": provider_calls,
+            "items_seen": items_seen,
+            "items_created": items_created,
+            "items_updated": items_updated,
+            "cache_hit": cache_hit,
+        },
     )

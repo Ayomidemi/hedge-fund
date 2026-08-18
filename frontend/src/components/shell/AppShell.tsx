@@ -9,6 +9,7 @@ const navigationItems = [
   { label: "Cash Ledger", href: "/cash-ledger" },
   { label: "Ticker Analyst", href: "/ticker-analyst" },
   { label: "Market Radar", href: "/market-radar" },
+  { label: "News Centre", href: "/news" },
   { label: "Watchlist", href: "/watchlist" },
   { label: "Research Lab", href: "/research-lab" },
   { label: "Strategy Pods", href: "/strategy-pods" },
@@ -28,9 +29,10 @@ type AppShellProps = {
 
 const pageTitles: Record<string, string> = {
   "Cash Ledger": "Cash Ledger History",
-  "Ticker Analyst": "Ticker Research Desk",
-  "Market Radar": "Market Radar",
-  Watchlist: "Watchlist Radar",
+    "Ticker Analyst": "Ticker Research Desk",
+    "Market Radar": "Market Radar",
+    "News Centre": "Market News Desk",
+    Watchlist: "Watchlist Radar",
   "Research Lab": "Research Lab",
   "Strategy Pods": "Investment Pod Control",
   "Risk Centre": "Central Risk Office",

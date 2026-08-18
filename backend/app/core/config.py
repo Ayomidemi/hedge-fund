@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     hf_tiingo_base_url: str = "https://api.tiingo.com"
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
+    hf_news_poll_interval_seconds: int = 600
+    hf_news_poll_jurisdictions: str = "US"
+    hf_news_ticker_refresh_ttl_seconds: int = 1800
 
     # Only timing knob for the live price platform. 300s on free API tiers,
     # drop to 10s when testing penny stocks. All other tuning lives in
@@ -171,6 +174,26 @@ class Settings(BaseSettings):
     @property
     def price_refresh_interval_seconds(self) -> int:
         return max(int(self.hf_price_refresh_interval_seconds), 5)
+
+    @property
+    def news_poll_interval_seconds(self) -> int:
+        return max(int(self.hf_news_poll_interval_seconds), 60)
+
+    @property
+    def news_poll_jurisdictions(self) -> tuple[str, ...]:
+        values: list[str] = []
+        for item in self.hf_news_poll_jurisdictions.split(","):
+            normalized = item.strip().upper()
+            if normalized == "ALL":
+                values.extend(["US", "NG"])
+            elif normalized in {"US", "NG"}:
+                values.append(normalized)
+        deduped = tuple(dict.fromkeys(values))
+        return deduped or ("US",)
+
+    @property
+    def news_ticker_refresh_ttl_seconds(self) -> int:
+        return max(int(self.hf_news_ticker_refresh_ttl_seconds), 60)
 
     @property
     def redis_url(self) -> str:
