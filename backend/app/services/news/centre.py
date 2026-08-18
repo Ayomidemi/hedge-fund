@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.schemas.news import (
     NewsItemResponse,
     NewsOverviewResponse,
+    NewsPaginationResponse,
     NewsPollRunResponse,
 )
 from app.core.config import settings
@@ -32,7 +33,8 @@ from app.services.news.providers import (
 
 logger = logging.getLogger(__name__)
 
-CURRENT_NEWS_LIMIT = 80
+CURRENT_NEWS_DEFAULT_PAGE_SIZE = 20
+CURRENT_NEWS_MAX_PAGE_SIZE = 50
 TICKER_NEWS_LIMIT = 60
 WATCHLIST_NEWS_LIMIT = 50
 
@@ -92,6 +94,7 @@ async def poll_news(
             include_ticker_batches=False,
         )
         created, updated = await _upsert_provider_items(session, result.items)
+        pruned_items, pruned_runs = await _prune_news_history(session)
         run.status = "completed"
         run.finished_at = datetime.now(timezone.utc)
         run.provider_calls = result.calls
@@ -104,6 +107,7 @@ async def poll_news(
             *(run.notes or []),
             *result.notes,
             f"Polled current news for {target_key}.",
+            _prune_note(pruned_items=pruned_items, pruned_runs=pruned_runs),
         ]
         await session.commit()
     except Exception as exc:  # noqa: BLE001
@@ -166,6 +170,7 @@ async def refresh_ticker_news(
 
         result = await fetch_news_for_ticker(normalized, market=market)
         created, updated = await _upsert_provider_items(session, result.items)
+        pruned_items, pruned_runs = await _prune_news_history(session)
         run.status = "completed"
         run.finished_at = datetime.now(timezone.utc)
         run.provider_calls = result.calls
@@ -174,7 +179,11 @@ async def refresh_ticker_news(
         run.items_created = created
         run.items_updated = updated
         run.errors = [{"error": message} for message in result.errors]
-        run.notes = [*(run.notes or []), *result.notes]
+        run.notes = [
+            *(run.notes or []),
+            *result.notes,
+            _prune_note(pruned_items=pruned_items, pruned_runs=pruned_runs),
+        ]
         await session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.exception("ticker_news_refresh_failed", extra={"ticker": normalized})
@@ -194,14 +203,23 @@ async def build_news_overview(
     ticker: str | None = None,
     market: str | None = None,
     jurisdiction: str | None = None,
+    page: int = 1,
+    page_size: int = CURRENT_NEWS_DEFAULT_PAGE_SIZE,
     owner_user_id: str | None = None,
 ) -> NewsOverviewResponse:
     generated_at = datetime.now(timezone.utc)
     latest_run = await _latest_run(session)
     normalized_ticker = normalize_ticker(ticker or "", market) if ticker else None
     normalized_jurisdiction = _normalize_jurisdiction(jurisdiction)
+    current_page = max(page, 1)
+    current_page_size = min(max(page_size, 5), CURRENT_NEWS_MAX_PAGE_SIZE)
 
-    current = await _current_items(session, jurisdiction=normalized_jurisdiction)
+    current, current_total = await _current_items(
+        session,
+        jurisdiction=normalized_jurisdiction,
+        page=current_page,
+        page_size=current_page_size,
+    )
     ticker_items = (
         await _items_for_tickers(session, [normalized_ticker], limit=TICKER_NEWS_LIMIT)
         if normalized_ticker
@@ -218,6 +236,13 @@ async def build_news_overview(
         generated_at=generated_at,
         latest_run=news_run_response(latest_run) if latest_run else None,
         current=[_item_response(item) for item in current],
+        current_page=NewsPaginationResponse(
+            page=current_page,
+            page_size=current_page_size,
+            total=current_total,
+            has_next=current_page * current_page_size < current_total,
+            has_previous=current_page > 1,
+        ),
         ticker=normalized_ticker,
         ticker_items=[_item_response(item) for item in ticker_items],
         watchlist_items=[_item_response(item) for item in watchlist_items],
@@ -377,11 +402,41 @@ async def _recent_completed_run(
     )
 
 
+async def _prune_news_history(session: AsyncSession) -> tuple[int, int]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.news_retention_days)
+    item_result = await session.execute(
+        delete(NewsItem).where(
+            func.coalesce(
+                NewsItem.published_at,
+                NewsItem.crawled_at,
+                NewsItem.created_at,
+            )
+            < cutoff
+        )
+    )
+    run_result = await session.execute(
+        delete(NewsPollRun).where(
+            func.coalesce(NewsPollRun.finished_at, NewsPollRun.started_at) < cutoff
+        )
+    )
+    return int(item_result.rowcount or 0), int(run_result.rowcount or 0)
+
+
+def _prune_note(*, pruned_items: int, pruned_runs: int) -> str:
+    return (
+        f"Retained news for {settings.news_retention_days} day(s); "
+        f"pruned {pruned_items} item(s) and {pruned_runs} poll run(s)."
+    )
+
+
 async def _current_items(
     session: AsyncSession,
     *,
     jurisdiction: str | None,
-) -> list[NewsItem]:
+    page: int,
+    page_size: int,
+) -> tuple[list[NewsItem], int]:
+    count_query = select(func.count()).select_from(NewsItem)
     query = (
         select(NewsItem)
         .options(selectinload(NewsItem.ticker_links))
@@ -389,11 +444,14 @@ async def _current_items(
             NewsItem.published_at.desc().nullslast(),
             NewsItem.created_at.desc(),
         )
-        .limit(CURRENT_NEWS_LIMIT)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     if jurisdiction in {"US", "NG"}:
+        count_query = count_query.where(NewsItem.jurisdiction == jurisdiction)
         query = query.where(NewsItem.jurisdiction == jurisdiction)
-    return list(await session.scalars(query))
+    total = int(await session.scalar(count_query) or 0)
+    return list(await session.scalars(query)), total
 
 
 async def _items_for_tickers(

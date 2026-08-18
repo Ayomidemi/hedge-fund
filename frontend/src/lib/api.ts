@@ -584,6 +584,44 @@ export type TickerMemoSummary = {
   confidence_score: string | null;
 };
 
+export type TickerDesk = {
+  ticker: string;
+  name: string;
+  asset_class: string;
+  exchange: string | null;
+  on_watchlist: boolean;
+  radar: {
+    change_pct: string | null;
+    scan_state: string | null;
+    scan_delta_change_pct: string | null;
+    as_of: string | null;
+  } | null;
+  opportunity: {
+    id: string;
+    status: OpportunityStatus;
+    priority: OpportunityPriority;
+    source_memo_id: string | null;
+  } | null;
+  news: {
+    id: string;
+    title: string;
+    source_name: string | null;
+    published_at: string | null;
+    event_type: string | null;
+  } | null;
+  pre_trade: {
+    id: string;
+    decision: string;
+    risk_level: string;
+    checked_at: string;
+  } | null;
+  position: {
+    quantity: string;
+    average_cost: string;
+  } | null;
+  memos: TickerMemoSummary[];
+};
+
 export type TickerPrefill = {
   instrument: {
     ticker: string;
@@ -1394,6 +1432,13 @@ export function getTickerMemo(memoId: string, options?: ApiRequestOptions) {
   );
 }
 
+export function getTickerDesk(ticker: string, options?: ApiRequestOptions) {
+  return fetchApi<TickerDesk>(
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/desk`,
+    options,
+  );
+}
+
 export function getTickerPrefill(
   ticker: string,
   market?: string,
@@ -2041,10 +2086,19 @@ export type NewsPollRun = {
   notes: string[];
 };
 
+export type NewsPagination = {
+  page: number;
+  page_size: number;
+  total: number;
+  has_next: boolean;
+  has_previous: boolean;
+};
+
 export type NewsOverview = {
   generated_at: string;
   latest_run: NewsPollRun | null;
   current: NewsItem[];
+  current_page: NewsPagination;
   ticker: string | null;
   ticker_items: NewsItem[];
   watchlist_items: NewsItem[];
@@ -2052,7 +2106,13 @@ export type NewsOverview = {
 };
 
 export function getNewsOverview(
-  params?: { ticker?: string; market?: "US" | "NG"; jurisdiction?: "US" | "NG" | "all" },
+  params?: {
+    ticker?: string;
+    market?: "US" | "NG";
+    jurisdiction?: "US" | "NG" | "all";
+    page?: number;
+    page_size?: number;
+  },
   options?: ApiRequestOptions,
 ) {
   const search = new URLSearchParams();
@@ -2061,6 +2121,8 @@ export function getNewsOverview(
   if (params?.jurisdiction && params.jurisdiction !== "all") {
     search.set("jurisdiction", params.jurisdiction);
   }
+  if (params?.page) search.set("page", String(params.page));
+  if (params?.page_size) search.set("page_size", String(params.page_size));
   const query = search.toString();
   return fetchApi<NewsOverview>(`/api/news/overview${query ? `?${query}` : ""}`, options);
 }

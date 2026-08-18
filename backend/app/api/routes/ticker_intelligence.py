@@ -24,6 +24,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerAnalysisCreate,
     TickerAnalysisResponse,
     TickerDatasetRowResponse,
+    TickerDeskResponse,
     TickerMLReportResponse,
     TickerMemoResponse,
     TickerMemoSummaryResponse,
@@ -41,6 +42,7 @@ from app.services.ticker_intelligence.ai_draft import (
 )
 from app.services.ticker_intelligence.analysis import (
     analyze_ticker,
+    get_ticker_desk,
     get_ticker_memo,
     list_recent_ticker_memos,
     list_ticker_memos,
@@ -389,6 +391,15 @@ async def read_ticker_suggestions(
         market_hint=market,
         limit=limit,
     )
+
+
+@router.get("/{ticker}/desk", response_model=TickerDeskResponse)
+async def read_ticker_desk(
+    ticker: str,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> TickerDeskResponse:
+    return await get_ticker_desk(session, ticker, user)
 
 
 @router.get("/{ticker}/prefill", response_model=TickerPrefillResponse)

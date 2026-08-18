@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     hf_news_poll_interval_seconds: int = 600
     hf_news_poll_jurisdictions: str = "US"
     hf_news_ticker_refresh_ttl_seconds: int = 1800
+    hf_news_retention_days: int = 50
 
     # Only timing knob for the live price platform. 300s on free API tiers,
     # drop to 10s when testing penny stocks. All other tuning lives in
@@ -194,6 +195,10 @@ class Settings(BaseSettings):
     @property
     def news_ticker_refresh_ttl_seconds(self) -> int:
         return max(int(self.hf_news_ticker_refresh_ttl_seconds), 60)
+
+    @property
+    def news_retention_days(self) -> int:
+        return max(int(self.hf_news_retention_days), 1)
 
     @property
     def redis_url(self) -> str:

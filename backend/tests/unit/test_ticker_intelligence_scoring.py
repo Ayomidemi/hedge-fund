@@ -60,3 +60,11 @@ class TickerIntelligenceScoringTests(TestCase):
 
     def test_low_score_is_avoid_action(self) -> None:
         self.assertEqual(action_from_score(Decimal("30"), Decimal("90")), "avoid")
+
+
+class TickerDeskTests(TestCase):
+    def test_ticker_variants_cover_ngx_suffix(self) -> None:
+        from app.services.ticker_intelligence.analysis import ticker_variants
+
+        self.assertEqual(ticker_variants("dangcem.ng"), {"DANGCEM", "DANGCEM.NG"})
+        self.assertEqual(ticker_variants("aapl"), {"AAPL", "AAPL.NG"})

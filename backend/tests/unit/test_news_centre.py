@@ -3,6 +3,7 @@ from unittest import TestCase
 from unittest.mock import AsyncMock, patch
 
 from app.main import app
+from app.core.config import settings
 from app.services.news import providers
 from app.services.news.providers import NewsFetchResult, normalize_ticker
 from app.services.realtime.events import news_poll_completed_event
@@ -18,6 +19,18 @@ class NewsCentreRouteTests(TestCase):
         self.assertIn("post", paths["/api/news/poll"])
         self.assertIn("/api/news/ticker/{ticker}/refresh", paths)
         self.assertIn("post", paths["/api/news/ticker/{ticker}/refresh"])
+
+    def test_news_overview_exposes_pagination_params(self) -> None:
+        operation = app.openapi()["paths"]["/api/news/overview"]["get"]
+        parameters = {item["name"] for item in operation["parameters"]}
+
+        self.assertIn("page", parameters)
+        self.assertIn("page_size", parameters)
+
+
+class NewsRetentionTests(TestCase):
+    def test_news_retention_defaults_to_fifty_days(self) -> None:
+        self.assertEqual(settings.news_retention_days, 50)
 
 
 class NewsProviderTests(TestCase):

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useLiveData } from "@/components/providers/LiveDataProvider";
 import { TickerSelector } from "@/components/ticker/TickerSelector";
 import { toast } from "@/components/ui/ToastProvider";
@@ -15,6 +15,7 @@ import {
   refreshTickerNews,
   type NewsItem,
   type NewsOverview,
+  type NewsPagination,
 } from "@/lib/api";
 import type { TickerMarket } from "@/lib/ticker-prefill-form";
 
@@ -30,6 +31,8 @@ const dateTimeFormat = new Intl.DateTimeFormat("en-US", {
   hour: "2-digit",
   minute: "2-digit",
 });
+
+const CURRENT_PAGE_SIZE = 20;
 
 export function NewsCentre({
   initialOverview,
@@ -51,14 +54,18 @@ export function NewsCentre({
     ticker?: string;
     market?: TickerMarket;
     jurisdiction?: "all" | "US" | "NG";
+    page?: number;
   }) {
     const nextTicker = next?.ticker ?? overview?.ticker ?? "";
     const nextMarket = next?.market ?? market;
     const nextJurisdiction = next?.jurisdiction ?? jurisdiction;
+    const nextPage = next?.page ?? overview?.current_page.page ?? 1;
     const data = await getNewsOverview({
       ticker: nextTicker || undefined,
       market: nextTicker ? nextMarket : undefined,
       jurisdiction: nextJurisdiction,
+      page: nextPage,
+      page_size: CURRENT_PAGE_SIZE,
     });
     setOverview(data);
   }
@@ -67,7 +74,7 @@ export function NewsCentre({
     setJurisdiction(next);
     setLoading(true);
     try {
-      await reload({ jurisdiction: next });
+      await reload({ jurisdiction: next, page: 1 });
     } catch {
       toast.error("News could not reload.");
     } finally {
@@ -80,7 +87,7 @@ export function NewsCentre({
     if (!selected) return;
     setLoading(true);
     try {
-      await reload({ ticker: selected, market });
+      await reload({ ticker: selected, market, page: 1 });
     } catch {
       toast.error("Ticker news could not load.");
     } finally {
@@ -97,7 +104,7 @@ export function NewsCentre({
           ? "News is fresh. No provider calls used."
           : `News poll stored ${run.items_created} new item(s).`,
       );
-      await reload({ jurisdiction });
+      await reload({ jurisdiction, page: 1 });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "News poll failed.");
     } finally {
@@ -116,11 +123,22 @@ export function NewsCentre({
           ? `${selected} news is fresh. No provider calls used.`
           : `${selected} refresh stored ${run.items_created} new item(s).`,
       );
-      await reload({ ticker: selected, market });
+      await reload({ ticker: selected, market, page: 1 });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Ticker refresh failed.");
     } finally {
       setPolling(false);
+    }
+  }
+
+  async function handleCurrentPage(nextPage: number) {
+    setLoading(true);
+    try {
+      await reload({ page: nextPage });
+    } catch {
+      toast.error("News page could not load.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -137,6 +155,7 @@ export function NewsCentre({
 
   const latestRun = overview.latest_run;
   const latestPoll = lastNewsPoll ?? null;
+  const currentPage = overview.current_page;
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-5">
@@ -217,8 +236,15 @@ export function NewsCentre({
       <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <NewsPanel
           title="Current Feed"
-          subtitle={`${overview.current.length} item${overview.current.length === 1 ? "" : "s"}`}
+          subtitle={paginationLabel(currentPage)}
           items={overview.current}
+          footer={
+            <NewsPaginationControls
+              page={currentPage}
+              loading={loading}
+              onPageChange={handleCurrentPage}
+            />
+          }
         />
         <div className="space-y-5">
           <NewsPanel
@@ -244,11 +270,13 @@ function NewsPanel({
   subtitle,
   items,
   compact,
+  footer,
 }: {
   title: string;
   subtitle: string;
   items: NewsItem[];
   compact?: boolean;
+  footer?: ReactNode;
 }) {
   return (
     <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
@@ -265,7 +293,43 @@ function NewsPanel({
           ))}
         </div>
       )}
+      {footer}
     </section>
+  );
+}
+
+function NewsPaginationControls({
+  page,
+  loading,
+  onPageChange,
+}: {
+  page: NewsPagination;
+  loading: boolean;
+  onPageChange: (page: number) => void | Promise<void>;
+}) {
+  if (page.total <= page.page_size) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 px-5 py-3 text-xs dark:border-zinc-800">
+      <span className="text-zinc-500">{paginationLabel(page)}</span>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => void onPageChange(page.page - 1)}
+          disabled={loading || !page.has_previous}
+          className={buttonSecondaryClassName}
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={() => void onPageChange(page.page + 1)}
+          disabled={loading || !page.has_next}
+          className={buttonSecondaryClassName}
+        >
+          Next
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -340,6 +404,13 @@ function marketLabel(value: "all" | "US" | "NG") {
   if (value === "US") return "US";
   if (value === "NG") return "NG";
   return "all-market";
+}
+
+function paginationLabel(page: NewsPagination) {
+  if (page.total === 0) return "0 items";
+  const start = (page.page - 1) * page.page_size + 1;
+  const end = Math.min(page.page * page.page_size, page.total);
+  return `${start}-${end} of ${page.total}`;
 }
 
 function providerLabel(provider: string) {

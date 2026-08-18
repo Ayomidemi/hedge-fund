@@ -27,6 +27,8 @@ async def read_news_overview(
     ticker: str | None = Query(default=None),
     market: str | None = Query(default=None),
     jurisdiction: str | None = Query(default="all"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=5, le=50),
     session: AsyncSession = Depends(get_session),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> NewsOverviewResponse:
@@ -35,6 +37,8 @@ async def read_news_overview(
         ticker=ticker,
         market=_market(market),
         jurisdiction=jurisdiction,
+        page=page,
+        page_size=page_size,
         owner_user_id=user.id,
     )
 

@@ -403,3 +403,51 @@ class BacktestRunResponse(BaseModel):
     skipped_by_regime: int = 0
     periods: list[BacktestPeriodResponse]
     warnings: list[str] = Field(default_factory=list)
+
+
+class TickerDeskRadar(BaseModel):
+    change_pct: Decimal | None = None
+    scan_state: str | None = None
+    scan_delta_change_pct: str | None = None
+    as_of: datetime | None = None
+
+
+class TickerDeskOpportunity(BaseModel):
+    id: UUID
+    status: str
+    priority: str
+    source_memo_id: UUID | None = None
+
+
+class TickerDeskNews(BaseModel):
+    id: UUID
+    title: str
+    source_name: str | None = None
+    published_at: datetime | None = None
+    event_type: str | None = None
+
+
+class TickerDeskPreTrade(BaseModel):
+    id: UUID
+    decision: str
+    risk_level: str
+    checked_at: datetime
+
+
+class TickerDeskPosition(BaseModel):
+    quantity: Decimal
+    average_cost: Decimal
+
+
+class TickerDeskResponse(BaseModel):
+    ticker: str
+    name: str
+    asset_class: str
+    exchange: str | None = None
+    on_watchlist: bool = False
+    radar: TickerDeskRadar | None = None
+    opportunity: TickerDeskOpportunity | None = None
+    news: TickerDeskNews | None = None
+    pre_trade: TickerDeskPreTrade | None = None
+    position: TickerDeskPosition | None = None
+    memos: list[TickerMemoSummaryResponse] = Field(default_factory=list)

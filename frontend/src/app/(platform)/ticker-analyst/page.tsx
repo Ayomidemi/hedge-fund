@@ -1,11 +1,22 @@
 import { TickerAnalyst } from "@/components/ticker/TickerAnalyst";
-import { getRecentTickerMemos, type TickerMemoSummary } from "@/lib/api";
+import {
+  getRecentTickerMemos,
+  getTickerDesk,
+  type TickerDesk,
+  type TickerMemoSummary,
+} from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
 
-export default async function TickerAnalystPage() {
+type TickerAnalystPageProps = {
+  searchParams?: Promise<{ ticker?: string }>;
+};
+
+export default async function TickerAnalystPage({ searchParams }: TickerAnalystPageProps) {
   let recentMemos: TickerMemoSummary[] = [];
+  let desk: TickerDesk | null = null;
   let isUnavailable = false;
   const accessToken = await getServerAccessToken();
+  const ticker = ((await searchParams)?.ticker ?? "").trim().toUpperCase();
 
   try {
     recentMemos = await getRecentTickerMemos({ accessToken });
@@ -13,5 +24,21 @@ export default async function TickerAnalystPage() {
     isUnavailable = true;
   }
 
-  return <TickerAnalyst recentMemos={recentMemos} isUnavailable={isUnavailable} />;
+  if (ticker) {
+    try {
+      desk = await getTickerDesk(ticker, { accessToken });
+    } catch {
+      desk = null;
+    }
+  }
+
+  return (
+    <TickerAnalyst
+      key={ticker || "index"}
+      recentMemos={recentMemos}
+      initialTicker={ticker || null}
+      initialDesk={desk}
+      isUnavailable={isUnavailable}
+    />
+  );
 }

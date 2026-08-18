@@ -1,21 +1,25 @@
 "use client";
 
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TickerSelector } from "@/components/ticker/TickerSelector";
+import { LoaderCover } from "@/components/ui/Loader";
 import { Modal } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   createTickerAIDraft,
   createTickerAnalysis,
+  getTickerDesk,
   getTickerMemo,
   getTickerMLReport,
+  getTickerPrefill,
   runResearchDataPipeline,
   type TickerAIDraft,
   type TickerAIDraftInput,
   type TickerAnalysis,
   type TickerAnalysisInput,
+  type TickerDesk,
   type TickerMLReport,
   type TickerMemo,
   type TickerMemoSummary,
@@ -28,8 +32,28 @@ import {
 
 type TickerAnalystProps = {
   recentMemos: TickerMemoSummary[];
+  initialTicker: string | null;
+  initialDesk: TickerDesk | null;
   isUnavailable: boolean;
 };
+
+const queueStatusLabels: Record<string, string> = {
+  discovered: "Discovered",
+  screening: "Screening",
+  research: "Research",
+  watchlist: "Hold in queue",
+  candidate: "Candidate",
+  approved: "Approved",
+  active_position: "Active Position",
+  exited: "Exited",
+  post_mortem: "Post-Mortem",
+  rejected: "Rejected",
+};
+
+const money = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  minimumFractionDigits: 2,
+});
 
 type WorkflowStep = "ticker" | "prefill" | "questions" | "output";
 
@@ -59,7 +83,12 @@ function ratioPercent(value: string | null | undefined) {
   return `${(Number(value) * 100).toFixed(1)}%`;
 }
 
-export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps) {
+export function TickerAnalyst({
+  recentMemos,
+  initialTicker,
+  initialDesk,
+  isUnavailable,
+}: TickerAnalystProps) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [mode, setMode] = useState<"history" | "workflow">("history");
@@ -71,7 +100,12 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     useState<TickerAnalysisInput | null>(null);
   const [prefillData, setPrefillData] = useState<TickerPrefill | null>(null);
   const [prefillWarnings, setPrefillWarnings] = useState<string[]>([]);
-  const [intakeMarket, setIntakeMarket] = useState<TickerMarket>("US");
+  const [intakeMarket, setIntakeMarket] = useState<TickerMarket>(
+    initialTicker?.endsWith(".NG") ? "NG" : "US",
+  );
+  const [intakeTicker, setIntakeTicker] = useState(initialTicker ?? "");
+  const [desk, setDesk] = useState(initialDesk);
+  const [deskLoading, setDeskLoading] = useState(false);
   const [tickerLookupLoading, setTickerLookupLoading] = useState(false);
   const [selectedMemo, setSelectedMemo] = useState<TickerMemo | null>(null);
   const [memoLoadingId, setMemoLoadingId] = useState<string | null>(null);
@@ -82,8 +116,26 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     isUnavailable ? "Ticker workspace could not be loaded yet." : null,
   );
 
-  function startNewAnalysis() {
-    setMode("workflow");
+  useEffect(() => {
+    if (!initialTicker || initialDesk) return;
+    let cancelled = false;
+    setDeskLoading(true);
+    void getTickerDesk(initialTicker)
+      .then((next) => {
+        if (!cancelled) setDesk(next);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Ticker desk could not be loaded.");
+      })
+      .finally(() => {
+        if (!cancelled) setDeskLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialDesk, initialTicker]);
+
+  function resetWorkflow() {
     setStep("ticker");
     setAnalysis(null);
     setMlReport(null);
@@ -91,23 +143,48 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     setBaseAnalysisInput(null);
     setPrefillData(null);
     setPrefillWarnings([]);
-    setIntakeMarket("US");
     setError(null);
-    window.setTimeout(() => formRef.current?.reset(), 0);
+  }
+
+  async function startNewAnalysis(fromTicker?: string) {
+    const symbol = (fromTicker ?? "").trim().toUpperCase();
+    setMode("workflow");
+    resetWorkflow();
+    setIntakeTicker(symbol);
+    setIntakeMarket(symbol.endsWith(".NG") ? "NG" : "US");
+    if (!symbol) {
+      window.setTimeout(() => formRef.current?.reset(), 0);
+      return;
+    }
+
+    setPendingAction("prefill");
+    try {
+      const prefill = await getTickerPrefill(
+        symbol,
+        symbol.endsWith(".NG") ? "NG" : "US",
+        "analysis",
+      );
+      setPrefillData(prefill);
+      setIntakeTicker(prefill.instrument.ticker);
+      setPrefillWarnings(prefill.source_warnings.filter(isAnalystVisibleWarning));
+      setStep("prefill");
+    } catch {
+      setError("Ticker details could not be loaded. Select the name from the dropdown.");
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   function returnToHistory() {
     setMode("history");
-    setStep("ticker");
-    setAnalysis(null);
-    setMlReport(null);
-    setAiDraft(null);
-    setBaseAnalysisInput(null);
-    setPrefillData(null);
-    setPrefillWarnings([]);
-    setIntakeMarket("US");
-    setError(null);
-    router.refresh();
+    resetWorkflow();
+    setIntakeTicker(initialTicker ?? "");
+    setIntakeMarket(initialTicker?.endsWith(".NG") ? "NG" : "US");
+    if (initialTicker) {
+      router.refresh();
+      return;
+    }
+    router.push("/ticker-analyst");
   }
 
   async function handleOpenMemo(memoId: string) {
@@ -206,6 +283,11 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
       } catch {
         setMlReport(null);
       }
+      try {
+        setDesk(await getTickerDesk(payload.instrument.ticker));
+      } catch {
+        // Queue status is optional on the output step.
+      }
       setStep("output");
       router.refresh();
     } catch {
@@ -254,27 +336,13 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
     }
   }
 
-  if (mode === "history") {
+  if (mode === "workflow") {
     return (
-      <div className="mx-auto max-w-[1560px] space-y-5">
-        <HistoryHeader onNewAnalysis={startNewAnalysis} />
-        {error && <ErrorNotice message={error} />}
-        <MemoIndex
-          loadingId={memoLoadingId}
-          memos={recentMemos}
-          onOpenMemo={handleOpenMemo}
-        />
-        <TickerMemoModal memo={selectedMemo} onClose={() => setSelectedMemo(null)} />
-      </div>
-    );
-  }
-
-  return (
     <div className="mx-auto max-w-[1560px] space-y-5">
       <WorkflowHeader
         activeStep={step}
         onCancel={returnToHistory}
-        onNewAnalysis={startNewAnalysis}
+        onNewAnalysis={() => void startNewAnalysis(intakeTicker)}
       />
       {error && <ErrorNotice message={error} />}
 
@@ -289,11 +357,16 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
                 autoFocus
                 detailsScope="analysis"
                 market={intakeMarket}
+                value={intakeTicker}
                 onMarketChange={(nextMarket) => {
                   setIntakeMarket(nextMarket);
+                  setIntakeTicker("");
                   setPrefillData(null);
                 }}
-                onTickerChange={() => setPrefillData(null)}
+                onTickerChange={(value) => {
+                  setIntakeTicker(value);
+                  setPrefillData(null);
+                }}
                 onDetails={setPrefillData}
                 onLoadingChange={setTickerLookupLoading}
                 className={inputClassName}
@@ -308,7 +381,9 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
             </div>
             <WorkflowActions
               backLabel="Cancel"
-              nextLabel={tickerLookupLoading ? "Fetching..." : "Continue"}
+              nextLabel={
+                tickerLookupLoading || pendingAction === "prefill" ? "Fetching..." : "Continue"
+              }
               nextDisabled={pendingAction !== null || tickerLookupLoading}
               onBack={returnToHistory}
               onNext={handlePrefill}
@@ -367,18 +442,67 @@ export function TickerAnalyst({ recentMemos, isUnavailable }: TickerAnalystProps
               analysis={analysis}
               mlReport={mlReport}
               mlPipelinePending={pendingAction === "ml-pipeline"}
+              opportunity={desk?.opportunity ?? null}
               onPrepareMLLayer={handlePrepareMLLayer}
             />
             <WorkflowActions
-              backLabel="Previous Analyses"
+              backLabel={initialTicker ? "Back to desk" : "Previous Analyses"}
               nextLabel="New Analysis"
               onBack={returnToHistory}
-              onNext={startNewAnalysis}
+              onNext={() => void startNewAnalysis(analysis?.memo.instrument.ticker)}
             />
           </WorkflowPanel>
         )}
       </form>
 
+      <TickerMemoModal memo={selectedMemo} onClose={() => setSelectedMemo(null)} />
+    </div>
+    );
+  }
+
+  if (initialTicker) {
+    return (
+      <div className="mx-auto max-w-[1560px] space-y-5">
+        <DeskHeader
+          ticker={desk?.ticker ?? initialTicker}
+          name={desk?.name ?? initialTicker}
+          assetClass={desk?.asset_class}
+          onHistory={() => router.push("/ticker-analyst")}
+          onNewAnalysis={() => void startNewAnalysis(desk?.ticker ?? initialTicker)}
+        />
+        {error && <ErrorNotice message={error} />}
+        {deskLoading && !desk ? (
+          <div className="relative min-h-48 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <LoaderCover label="Loading ticker" />
+          </div>
+        ) : desk ? (
+          <TickerDeskView
+            desk={desk}
+            loadingId={memoLoadingId}
+            onOpenMemo={handleOpenMemo}
+          />
+        ) : (
+          <div className="rounded-xl border border-zinc-200 bg-white p-5 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+            No desk data yet for {initialTicker}.
+          </div>
+        )}
+        <TickerMemoModal memo={selectedMemo} onClose={() => setSelectedMemo(null)} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-[1560px] space-y-5">
+      <HistoryHeader onNewAnalysis={() => void startNewAnalysis()} />
+      {error && <ErrorNotice message={error} />}
+      <MemoIndex
+        loadingId={memoLoadingId}
+        memos={recentMemos}
+        onOpenMemo={handleOpenMemo}
+        onOpenTicker={(ticker) =>
+          router.push(`/ticker-analyst?ticker=${encodeURIComponent(ticker)}`)
+        }
+      />
       <TickerMemoModal memo={selectedMemo} onClose={() => setSelectedMemo(null)} />
     </div>
   );
@@ -399,6 +523,206 @@ function HistoryHeader({ onNewAnalysis }: { onNewAnalysis: () => void }) {
         New Analysis
       </button>
     </section>
+  );
+}
+
+function DeskHeader({
+  ticker,
+  name,
+  assetClass,
+  onHistory,
+  onNewAnalysis,
+}: {
+  ticker: string;
+  name: string;
+  assetClass?: string;
+  onHistory: () => void;
+  onNewAnalysis: () => void;
+}) {
+  return (
+    <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          {assetClass || "Ticker Analyst"}
+        </p>
+        <h2 className="mt-1 text-xl font-semibold tracking-normal">{ticker}</h2>
+        <p className="mt-1 text-sm text-zinc-500">{name}</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={onHistory} className={secondaryButtonClassName}>
+          Previous Analyses
+        </button>
+        <button type="button" onClick={onNewAnalysis} className={buttonClassName}>
+          New Analysis
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function QueueStatusNotice({
+  opportunity,
+}: {
+  opportunity: TickerDesk["opportunity"] | null;
+}) {
+  if (opportunity) {
+    return (
+      <p className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+        In the Opportunity Queue as{" "}
+        {queueStatusLabels[opportunity.status] ?? opportunity.status}.{" "}
+        <Link href="/opportunity-queue" className="underline-offset-4 hover:underline">
+          Open queue
+        </Link>
+      </p>
+    );
+  }
+
+  return (
+    <p className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+      Saved memo. It is not in the Opportunity Queue yet — add it from the queue
+      candidate list.{" "}
+      <Link href="/opportunity-queue" className="underline-offset-4 hover:underline">
+        Open queue
+      </Link>
+    </p>
+  );
+}
+
+function TickerDeskView({
+  desk,
+  loadingId,
+  onOpenMemo,
+}: {
+  desk: TickerDesk;
+  loadingId: string | null;
+  onOpenMemo: (memoId: string) => void;
+}) {
+  const ticker = desk.ticker;
+  const radar = desk.radar;
+
+  return (
+    <>
+      <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="flex flex-wrap gap-3 text-sm">
+          <Link
+            href={
+              desk.on_watchlist
+                ? `/watchlist/${encodeURIComponent(ticker)}`
+                : "/watchlist"
+            }
+            className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
+          >
+            Radar watchlist
+          </Link>
+          <Link
+            href="/opportunity-queue"
+            className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
+          >
+            Opportunity Queue
+          </Link>
+          <Link
+            href={`/news?ticker=${encodeURIComponent(ticker)}${
+              ticker.endsWith(".NG") ? "&market=NG" : "&market=US"
+            }`}
+            className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
+          >
+            News
+          </Link>
+          <Link
+            href="/risk-centre"
+            className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
+          >
+            Risk Centre
+          </Link>
+          <Link
+            href="/trade-journal"
+            className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
+          >
+            Trade Journal
+          </Link>
+        </div>
+
+        <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm">
+          <Brief
+            label="vs yesterday"
+            value={
+              radar?.change_pct
+                ? `${Number(radar.change_pct) > 0 ? "+" : ""}${Number(radar.change_pct).toFixed(1)}%`
+                : "No radar print"
+            }
+          />
+          <Brief
+            label="vs last radar"
+            value={
+              radar?.scan_state
+                ? `${radar.scan_state.replaceAll("_", " ")}${
+                    radar.scan_delta_change_pct
+                      ? ` · ${radar.scan_delta_change_pct} pts`
+                      : ""
+                  }`
+                : "—"
+            }
+          />
+          <Brief
+            label="Queue"
+            value={
+              desk.opportunity
+                ? queueStatusLabels[desk.opportunity.status] ?? desk.opportunity.status
+                : "Not queued"
+            }
+          />
+          <Brief
+            label="Watchlist"
+            value={desk.on_watchlist ? "On radar watchlist" : "Not on radar watchlist"}
+          />
+          <Brief
+            label="Pre-trade"
+            value={
+              desk.pre_trade
+                ? `${desk.pre_trade.decision} · ${desk.pre_trade.risk_level}`
+                : "Not run"
+            }
+          />
+          <Brief
+            label="Position"
+            value={
+              desk.position
+                ? `${desk.position.quantity} @ ${money.format(Number(desk.position.average_cost))}`
+                : "No live position"
+            }
+          />
+          <Brief
+            label="News"
+            value={
+              desk.news
+                ? `${desk.news.source_name ? `${desk.news.source_name} · ` : ""}${desk.news.title}`
+                : "No stored headline"
+            }
+          />
+        </dl>
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold">Memos for {ticker}</h3>
+        </div>
+        <MemoIndex
+          framed={false}
+          loadingId={loadingId}
+          memos={desk.memos}
+          onOpenMemo={onOpenMemo}
+        />
+      </section>
+    </>
+  );
+}
+
+function Brief({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</dt>
+      <dd className="mt-0.5 text-zinc-800 dark:text-zinc-200">{value}</dd>
+    </div>
   );
 }
 
@@ -516,16 +840,26 @@ function WorkflowActions({
 }
 
 function MemoIndex({
+  framed = true,
   loadingId,
   memos,
   onOpenMemo,
+  onOpenTicker,
 }: {
+  framed?: boolean;
   loadingId: string | null;
   memos: TickerMemoSummary[];
   onOpenMemo: (memoId: string) => void;
+  onOpenTicker?: (ticker: string) => void;
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <div
+      className={
+        framed
+          ? "overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+          : ""
+      }
+    >
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-left text-sm">
           <thead>
@@ -544,14 +878,24 @@ function MemoIndex({
                 <Td emphasis>
                   <button
                     type="button"
-                    onClick={() => onOpenMemo(memo.id)}
+                    onClick={() =>
+                      onOpenTicker ? onOpenTicker(memo.ticker) : onOpenMemo(memo.id)
+                    }
                     className="font-semibold text-zinc-950 underline-offset-4 hover:underline dark:text-zinc-50"
                   >
                     {memo.ticker}
                   </button>
                 </Td>
                 <Td>{memo.name}</Td>
-                <Td>{formatLabel(memo.classification)}</Td>
+                <Td>
+                  <button
+                    type="button"
+                    onClick={() => onOpenMemo(memo.id)}
+                    className="text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+                  >
+                    {formatLabel(memo.classification)}
+                  </button>
+                </Td>
                 <Td>{memo.action ? formatLabel(memo.action) : "-"}</Td>
                 <Td align="right">
                   {loadingId === memo.id ? "..." : score(memo.composite_score)}
@@ -562,7 +906,7 @@ function MemoIndex({
             {memos.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-5 py-10 text-center text-sm text-zinc-500">
-                  No previous analysis
+                  No memos yet.
                 </td>
               </tr>
             )}
@@ -761,11 +1105,13 @@ function AnalysisPanel({
   analysis,
   mlPipelinePending,
   mlReport,
+  opportunity,
   onPrepareMLLayer,
 }: {
   analysis: TickerAnalysis | null;
   mlPipelinePending: boolean;
   mlReport: TickerMLReport | null;
+  opportunity?: TickerDesk["opportunity"] | null;
   onPrepareMLLayer: () => void;
 }) {
   if (!analysis) {
@@ -798,6 +1144,8 @@ function AnalysisPanel({
           {formatLabel(analysis.classification)}
         </span>
       </div>
+
+      <QueueStatusNotice opportunity={opportunity ?? null} />
 
       <div className="grid gap-3 sm:grid-cols-4">
         {metrics.map(([label, value]) => (

@@ -71,6 +71,7 @@ HF_PRICE_REFRESH_INTERVAL_SECONDS=300   # 5 min on free API tiers; 10 for penny-
 HF_NEWS_POLL_INTERVAL_SECONDS=600       # 10 min default cadence for News Centre polling
 HF_NEWS_POLL_JURISDICTIONS=US           # Scheduled News Centre scope; use US,NG only when desired
 HF_NEWS_TICKER_REFRESH_TTL_SECONDS=1800 # 30 min cache guard for selected-ticker news refreshes
+HF_NEWS_RETENTION_DAYS=50               # Stored news/poll audit retention window
 ```
 
 All other tuning (batch size, market-hours gating, staleness threshold,

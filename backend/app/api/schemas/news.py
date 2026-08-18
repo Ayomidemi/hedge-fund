@@ -44,10 +44,19 @@ class NewsPollRunResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class NewsPaginationResponse(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    has_next: bool
+    has_previous: bool
+
+
 class NewsOverviewResponse(BaseModel):
     generated_at: datetime
     latest_run: NewsPollRunResponse | None = None
     current: list[NewsItemResponse]
+    current_page: NewsPaginationResponse
     ticker: str | None = None
     ticker_items: list[NewsItemResponse] = Field(default_factory=list)
     watchlist_items: list[NewsItemResponse] = Field(default_factory=list)

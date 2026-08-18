@@ -12,6 +12,12 @@ from app.api.schemas.operating_core import InstrumentResponse
 from app.api.schemas.ticker_intelligence import (
     TickerAnalysisCreate,
     TickerAnalysisResponse,
+    TickerDeskNews,
+    TickerDeskOpportunity,
+    TickerDeskPosition,
+    TickerDeskPreTrade,
+    TickerDeskRadar,
+    TickerDeskResponse,
     TickerMemoResponse,
     TickerMemoSummaryResponse,
     TickerScoreResponse,
@@ -22,9 +28,18 @@ from app.models import (
     Instrument,
     ModelRecommendation,
     ModelVersion,
+    NewsItem,
+    NewsTickerLink,
+    Opportunity,
+    Portfolio,
+    Position,
+    PreTradeRiskCheck,
+    RadarSnapshot,
+    RadarWatchlistItem,
     TickerMemo,
 )
 from app.services.administration.system_log import record_system_log
+from app.services.market_data.universe import quote_symbol_for
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.ml_training import (
     build_ticker_ml_report,
@@ -36,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 TICKER_MODEL_NAME = "Phase One Ticker Analyst"
 TICKER_MODEL_VERSION = "0.1.0"
+CLOSED_OPPORTUNITY_STATUSES = {"exited", "post_mortem", "rejected"}
 
 
 async def analyze_ticker(
@@ -233,6 +249,248 @@ async def list_ticker_memos(
     )
 
     return [_memo_response(memo) for memo in memos]
+
+
+async def get_ticker_desk(
+    session: AsyncSession,
+    ticker: str,
+    user: AuthenticatedUser,
+) -> TickerDeskResponse:
+    variants = ticker_variants(ticker)
+    requested = ticker.strip().upper()
+    instrument = await _load_desk_instrument(session, variants, requested)
+    display_ticker = quote_symbol_for(instrument) if instrument is not None else requested
+    snapshot = await _load_desk_radar(session, variants, display_ticker)
+    watchlist = await session.scalar(
+        select(RadarWatchlistItem.id)
+        .where(RadarWatchlistItem.owner_user_id == user.id)
+        .where(RadarWatchlistItem.ticker.in_(variants))
+        .limit(1)
+    )
+    opportunity = None
+    position = None
+    memos: list[TickerMemo] = []
+    if instrument is not None:
+        opportunity = await _load_desk_opportunity(session, user.id, instrument.id)
+        position = await _load_desk_position(session, user.id, instrument.id)
+        memos = await _load_desk_memos(session, user.id, instrument.id)
+
+    news = await _load_desk_news(session, variants)
+    pre_trade = await _load_desk_pre_trade(session, user.id, variants)
+
+    logger.info(
+        "ticker_desk_loaded",
+        extra={
+            "ticker": display_ticker,
+            "owner_user_id": user.id,
+            "memo_count": len(memos),
+            "on_watchlist": watchlist is not None,
+        },
+    )
+
+    evidence = dict(snapshot.evidence or {}) if snapshot is not None else {}
+    return TickerDeskResponse(
+        ticker=display_ticker,
+        name=(
+            instrument.name
+            if instrument is not None
+            else (snapshot.name if snapshot is not None else display_ticker)
+        ),
+        asset_class=(
+            instrument.asset_class
+            if instrument is not None
+            else (snapshot.asset_class if snapshot is not None else "equity")
+        ),
+        exchange=(
+            instrument.exchange
+            if instrument is not None
+            else (snapshot.exchange if snapshot is not None else None)
+        ),
+        on_watchlist=watchlist is not None,
+        radar=(
+            TickerDeskRadar(
+                change_pct=snapshot.change_pct,
+                scan_state=(
+                    str(evidence["scan_state"]) if evidence.get("scan_state") else None
+                ),
+                scan_delta_change_pct=(
+                    str(evidence["scan_delta_change_pct"])
+                    if evidence.get("scan_delta_change_pct") is not None
+                    else None
+                ),
+                as_of=snapshot.source_as_of or snapshot.as_of,
+            )
+            if snapshot is not None
+            else None
+        ),
+        opportunity=(
+            TickerDeskOpportunity(
+                id=opportunity.id,
+                status=opportunity.status,
+                priority=opportunity.priority,
+                source_memo_id=opportunity.source_memo_id,
+            )
+            if opportunity is not None
+            else None
+        ),
+        news=(
+            TickerDeskNews(
+                id=news.id,
+                title=news.title,
+                source_name=news.source_name,
+                published_at=news.published_at,
+                event_type=news.event_type,
+            )
+            if news is not None
+            else None
+        ),
+        pre_trade=(
+            TickerDeskPreTrade(
+                id=pre_trade.id,
+                decision=pre_trade.decision,
+                risk_level=pre_trade.risk_level,
+                checked_at=pre_trade.checked_at,
+            )
+            if pre_trade is not None
+            else None
+        ),
+        position=(
+            TickerDeskPosition(
+                quantity=position.quantity,
+                average_cost=position.average_cost,
+            )
+            if position is not None
+            else None
+        ),
+        memos=[_memo_summary(memo) for memo in memos],
+    )
+
+
+def ticker_variants(ticker: str) -> set[str]:
+    normalized = ticker.strip().upper()
+    if not normalized:
+        return set()
+    base = normalized.removesuffix(".NG")
+    return {normalized, base, f"{base}.NG"}
+
+
+async def _load_desk_instrument(
+    session: AsyncSession, variants: set[str], requested: str
+) -> Instrument | None:
+    if not variants:
+        return None
+    instruments = list(
+        await session.scalars(select(Instrument).where(Instrument.ticker.in_(variants)))
+    )
+    if not instruments:
+        return None
+    exact = next(
+        (row for row in instruments if row.ticker.upper() == requested), None
+    )
+    return exact or instruments[0]
+
+
+async def _load_desk_radar(
+    session: AsyncSession, variants: set[str], preferred: str
+) -> RadarSnapshot | None:
+    if not variants:
+        return None
+    snapshots = list(
+        await session.scalars(
+            select(RadarSnapshot)
+            .where(RadarSnapshot.ticker.in_(variants))
+            .distinct(RadarSnapshot.ticker)
+            .order_by(RadarSnapshot.ticker, RadarSnapshot.as_of.desc())
+        )
+    )
+    if not snapshots:
+        return None
+    by_ticker = {row.ticker.upper(): row for row in snapshots}
+    return (
+        by_ticker.get(preferred.upper())
+        or by_ticker.get(preferred.upper().removesuffix(".NG"))
+        or snapshots[0]
+    )
+
+
+async def _load_desk_opportunity(
+    session: AsyncSession, owner_user_id: str, instrument_id
+) -> Opportunity | None:
+    opportunities = list(
+        await session.scalars(
+            select(Opportunity)
+            .where(Opportunity.owner_user_id == owner_user_id)
+            .where(Opportunity.instrument_id == instrument_id)
+            .order_by(Opportunity.updated_at.desc())
+        )
+    )
+    if not opportunities:
+        return None
+    open_rows = [
+        row for row in opportunities if row.status not in CLOSED_OPPORTUNITY_STATUSES
+    ]
+    return open_rows[0] if open_rows else opportunities[0]
+
+
+async def _load_desk_position(
+    session: AsyncSession, owner_user_id: str, instrument_id
+) -> Position | None:
+    return await session.scalar(
+        select(Position)
+        .join(Portfolio, Portfolio.id == Position.portfolio_id)
+        .where(Portfolio.owner_user_id == owner_user_id)
+        .where(Position.instrument_id == instrument_id)
+        .where(Position.quantity > 0)
+        .where(Position.closed_at.is_(None))
+    )
+
+
+async def _load_desk_memos(
+    session: AsyncSession, owner_user_id: str, instrument_id
+) -> list[TickerMemo]:
+    return list(
+        await session.scalars(
+            select(TickerMemo)
+            .options(selectinload(TickerMemo.instrument))
+            .where(TickerMemo.owner_user_id == owner_user_id)
+            .where(TickerMemo.instrument_id == instrument_id)
+            .order_by(TickerMemo.memo_date.desc(), TickerMemo.created_at.desc())
+        )
+    )
+
+
+async def _load_desk_news(session: AsyncSession, variants: set[str]) -> NewsItem | None:
+    if not variants:
+        return None
+    return await session.scalar(
+        select(NewsItem)
+        .join(NewsTickerLink)
+        .where(NewsTickerLink.ticker.in_(variants))
+        .order_by(NewsItem.published_at.desc().nullslast(), NewsItem.created_at.desc())
+        .limit(1)
+    )
+
+
+async def _load_desk_pre_trade(
+    session: AsyncSession, owner_user_id: str, variants: set[str]
+) -> PreTradeRiskCheck | None:
+    if not variants:
+        return None
+    checks = list(
+        await session.scalars(
+            select(PreTradeRiskCheck)
+            .where(PreTradeRiskCheck.owner_user_id == owner_user_id)
+            .order_by(PreTradeRiskCheck.checked_at.desc())
+            .limit(80)
+        )
+    )
+    for check in checks:
+        payload = check.request_payload or {}
+        instrument = payload.get("instrument") or {}
+        ticker = str(instrument.get("ticker") or "").upper()
+        if ticker in variants:
+            return check
+    return None
 
 
 async def get_ticker_memo(
