@@ -2,13 +2,21 @@
 
 import { useMemo, useState } from "react";
 import { ManualTradeModal } from "@/components/portfolio/ManualTradeModal";
+import { TickerSelector } from "@/components/ticker/TickerSelector";
 import {
   buttonPrimaryClassName,
   buttonSecondaryClassName,
   inputClassName,
 } from "@/components/ui/form-styles";
-import type { TradeJournal as TradeJournalData, TradeJournalEntry } from "@/lib/api";
-import { formatTradeMoney } from "@/lib/ticker-prefill-form";
+import type {
+  TickerSuggestion,
+  TradeJournal as TradeJournalData,
+  TradeJournalEntry,
+} from "@/lib/api";
+import {
+  formatTradeMoney,
+  type TickerMarket,
+} from "@/lib/ticker-prefill-form";
 
 type TradeJournalProps = {
   journal: TradeJournalData | null;
@@ -32,6 +40,7 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState<TradeJournalEntry | null>(null);
   const [tickerFilter, setTickerFilter] = useState("");
+  const [tickerMarket, setTickerMarket] = useState<TickerMarket>("US");
   const [sideFilter, setSideFilter] = useState<"all" | "buy" | "sell">("all");
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(
     journal?.trades[0]?.id ?? null,
@@ -40,11 +49,19 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
   const filteredTrades = useMemo(() => {
     const ticker = tickerFilter.trim().toUpperCase();
     return (journal?.trades ?? []).filter((trade) => {
-      const tickerMatches = ticker ? trade.instrument.ticker.includes(ticker) : true;
+      const tickerMatches = ticker
+        ? trade.instrument.ticker.includes(ticker) &&
+          marketForTrade(trade) === tickerMarket
+        : true;
       const sideMatches = sideFilter === "all" ? true : trade.side === sideFilter;
       return tickerMatches && sideMatches;
     });
-  }, [journal?.trades, sideFilter, tickerFilter]);
+  }, [journal?.trades, sideFilter, tickerFilter, tickerMarket]);
+
+  const tickerSuggestions = useMemo(
+    () => tradeTickerSuggestions(journal?.trades ?? []),
+    [journal?.trades],
+  );
 
   const selectedTrade =
     filteredTrades.find((trade) => trade.id === selectedTradeId) ??
@@ -119,13 +136,21 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
                 </p>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <input
-                  value={tickerFilter}
-                  onChange={(event) => setTickerFilter(event.target.value)}
-                  placeholder="Ticker"
-                  className={`${inputClassName} mt-0 h-10 w-32 uppercase`}
-                />
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="w-[360px] max-w-full">
+                  <TickerSelector
+                    allowTypedOption={false}
+                    fetchDetailsOnSelect={false}
+                    localSuggestions={tickerSuggestions}
+                    market={tickerMarket}
+                    marketName={null}
+                    onMarketChange={setTickerMarket}
+                    onTickerChange={setTickerFilter}
+                    placeholder="Filter ticker"
+                    tickerName={null}
+                    value={tickerFilter}
+                  />
+                </div>
                 <select
                   value={sideFilter}
                   onChange={(event) =>
@@ -227,6 +252,54 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
       />
     </>
   );
+}
+
+function tradeTickerSuggestions(trades: TradeJournalEntry[]): TickerSuggestion[] {
+  const byTicker = new Map<string, TickerSuggestion>();
+  for (const trade of trades) {
+    const instrument = trade.instrument;
+    if (byTicker.has(instrument.ticker)) continue;
+    byTicker.set(instrument.ticker, {
+      ticker: instrument.ticker,
+      name: instrument.name,
+      asset_class: suggestionAssetClass(instrument.asset_class),
+      exchange: instrument.exchange,
+      currency: instrument.currency,
+      sector: instrument.sector,
+      industry: instrument.industry,
+    });
+  }
+  return Array.from(byTicker.values()).sort((left, right) =>
+    left.ticker.localeCompare(right.ticker),
+  );
+}
+
+function suggestionAssetClass(value: string): TickerSuggestion["asset_class"] {
+  if (
+    value === "equity" ||
+    value === "etf" ||
+    value === "bond" ||
+    value === "commodity" ||
+    value === "cash_equivalent" ||
+    value === "other"
+  ) {
+    return value;
+  }
+  return "other";
+}
+
+function marketForTrade(trade: TradeJournalEntry): TickerMarket {
+  const instrument = trade.instrument;
+  const exchange = (instrument.exchange ?? "").toUpperCase();
+  if (
+    instrument.currency === "NGN" ||
+    exchange === "NGX" ||
+    exchange === "NG" ||
+    instrument.ticker.endsWith(".NG")
+  ) {
+    return "NG";
+  }
+  return "US";
 }
 
 function TradeDetail({

@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { toast } from "@/components/ui/ToastProvider";
+import { TickerListSelector } from "@/components/ticker/TickerListSelector";
+import { TickerSelector } from "@/components/ticker/TickerSelector";
 import {
   buttonPrimaryClassName,
   buttonSecondaryClassName,
@@ -25,6 +27,7 @@ import {
   todayDateValue,
   uniqueTickers,
 } from "@/components/research/research-lab-ui";
+import type { TickerMarket } from "@/lib/ticker-prefill-form";
 import type {
   ResearchActionItem,
   ResearchDataset,
@@ -331,6 +334,8 @@ function TrainingRunPanel({
   pending: boolean;
   result: ResearchPipelineRun | null;
 }) {
+  const [benchmarkMarket, setBenchmarkMarket] = useState<TickerMarket>("US");
+  const [benchmarkTicker, setBenchmarkTicker] = useState("SPY");
   const completedSteps =
     result?.steps.filter((step) => step.status === "completed").length ?? 0;
   const failedSteps = result?.steps.filter((step) => step.status === "failed").length ?? 0;
@@ -354,18 +359,24 @@ function TrainingRunPanel({
 
       <form className="mt-5 grid gap-4 xl:grid-cols-[1fr_320px]" onSubmit={onSubmit}>
         <Field label="Training universe">
-          <textarea
+          <TickerListSelector
             name="tickers"
-            rows={4}
-            defaultValue={defaultTickers.join(", ")}
+            defaultTickers={defaultTickers}
             placeholder="Add tickers from your research universe"
-            className={inputClassName}
           />
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
           <Field label="Benchmark">
-            <input name="benchmark_ticker" defaultValue="SPY" className={inputClassName} />
+            <TickerSelector
+              fetchDetailsOnSelect={false}
+              market={benchmarkMarket}
+              marketName="benchmark_market"
+              onMarketChange={setBenchmarkMarket}
+              onTickerChange={setBenchmarkTicker}
+              tickerName="benchmark_ticker"
+              value={benchmarkTicker}
+            />
           </Field>
           <Field label="Horizon">
             <select name="horizon_days" defaultValue={defaultHorizon} className={inputClassName}>
@@ -893,10 +904,10 @@ function Field({
   label: string;
 }) {
   return (
-    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-      {label}
+    <div className="space-y-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+      <span className="block">{label}</span>
       {children}
-    </label>
+    </div>
   );
 }
 

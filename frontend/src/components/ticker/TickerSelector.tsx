@@ -18,6 +18,7 @@ import {
   type TickerSuggestion,
 } from "@/lib/api";
 import {
+  marketFromTickerSuggestion,
   normalizeTickerInput,
   shouldPrefillTicker,
   type TickerMarket,
@@ -31,8 +32,10 @@ type TickerSelectorProps = {
   detailsScope?: TickerPrefillScope;
   fetchDetailsOnSelect?: boolean;
   id?: string;
+  localSuggestions?: TickerSuggestion[];
+  allowTypedOption?: boolean;
   market?: TickerMarket;
-  marketName?: string;
+  marketName?: string | null;
   onDetails?: (prefill: TickerPrefill | null) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMarketChange?: (market: TickerMarket) => void;
@@ -41,7 +44,7 @@ type TickerSelectorProps = {
   placeholder?: string;
   required?: boolean;
   tickerLabel?: string;
-  tickerName?: string;
+  tickerName?: string | null;
   value?: string;
 };
 
@@ -52,6 +55,7 @@ type SelectorOption = TickerSuggestion & {
 const SUGGESTION_DEBOUNCE_MS = 220;
 
 export function TickerSelector({
+  allowTypedOption = true,
   autoFocus,
   className,
   countryLabel = "Country",
@@ -59,6 +63,7 @@ export function TickerSelector({
   disabled,
   fetchDetailsOnSelect = true,
   id,
+  localSuggestions,
   market,
   marketName = "market",
   onDetails,
@@ -92,7 +97,12 @@ export function TickerSelector({
     const exactMatch = suggestions.some(
       (suggestion) => suggestion.ticker === normalizedValue,
     );
-    if (normalizedValue && shouldPrefillTicker(normalizedValue) && !exactMatch) {
+    if (
+      allowTypedOption &&
+      normalizedValue &&
+      shouldPrefillTicker(normalizedValue) &&
+      !exactMatch
+    ) {
       return [
         ...suggestions,
         {
@@ -108,7 +118,7 @@ export function TickerSelector({
       ];
     }
     return suggestions;
-  }, [activeMarket, normalizedValue, suggestions]);
+  }, [activeMarket, allowTypedOption, normalizedValue, suggestions]);
 
   useEffect(() => {
     const query = normalizeTickerInput(inputValue);
@@ -124,6 +134,20 @@ export function TickerSelector({
     }
 
     const currentRequest = ++suggestionRequestId.current;
+    if (localSuggestions) {
+      queueMicrotask(() => {
+        if (suggestionRequestId.current !== currentRequest) return;
+        const filtered = localSuggestions
+          .filter((suggestion) => marketFromTickerSuggestion(suggestion) === activeMarket)
+          .filter((suggestion) => suggestionMatchesQuery(suggestion, query))
+          .slice(0, 8);
+        setSuggestions(filtered);
+        setSuggestionsLoading(false);
+        setActiveIndex(filtered.length > 0 ? 0 : -1);
+      });
+      return;
+    }
+
     const timer = window.setTimeout(() => {
       void (async () => {
         setSuggestionsLoading(true);
@@ -145,7 +169,7 @@ export function TickerSelector({
     }, SUGGESTION_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [activeMarket, disabled, inputValue]);
+  }, [activeMarket, disabled, inputValue, localSuggestions]);
 
   useEffect(() => {
     onLoadingChange?.(suggestionsLoading || detailsLoading);
@@ -259,7 +283,7 @@ export function TickerSelector({
         <select
           className={controlClassName}
           disabled={disabled}
-          name={marketName}
+          name={marketName ?? undefined}
           onChange={(event) => updateMarket(event.target.value as TickerMarket)}
           value={activeMarket}
         >
@@ -282,7 +306,7 @@ export function TickerSelector({
             className={`${controlClassName} uppercase pr-10`}
             disabled={disabled}
             id={inputId}
-            name={tickerName}
+            name={tickerName ?? undefined}
             onBlur={() => window.setTimeout(() => setOpen(false), 120)}
             onChange={handleChange}
             onFocus={() => setOpen(true)}
@@ -340,4 +364,9 @@ export function TickerSelector({
       </label>
     </div>
   );
+}
+
+function suggestionMatchesQuery(suggestion: TickerSuggestion, query: string) {
+  const haystack = `${suggestion.ticker} ${suggestion.name}`.toUpperCase();
+  return haystack.includes(query);
 }

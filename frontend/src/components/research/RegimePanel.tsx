@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import type { FormEvent } from "react";
+import { TickerSelector } from "@/components/ticker/TickerSelector";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   buttonPrimaryClassName,
@@ -9,6 +10,7 @@ import {
   inputClassName,
 } from "@/components/ui/form-styles";
 import { fitRegimeModel, getLatestRegimeModel, type RegimeModel } from "@/lib/api";
+import type { TickerMarket } from "@/lib/ticker-prefill-form";
 import { LabPanel, StatusBadge, formatDate, formatLabel, pct } from "./research-lab-ui";
 
 type RegimePanelProps = {
@@ -21,6 +23,8 @@ export function RegimePanel({ active, onUpdated }: RegimePanelProps) {
   const [loading, setLoading] = useState(false);
   const [fitting, setFitting] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
+  const [fitMarket, setFitMarket] = useState<TickerMarket>("US");
+  const [fitTicker, setFitTicker] = useState("SPY");
 
   useEffect(() => {
     if (!active) return;
@@ -154,14 +158,17 @@ export function RegimePanel({ active, onUpdated }: RegimePanelProps) {
 
       <LabPanel title="Fit regime model" subtitle="Cluster return and volatility observations">
         <form className="space-y-4" onSubmit={handleFit}>
-          <Field label="Benchmark ticker">
-            <input
-              name="ticker"
-              defaultValue="SPY"
-              className={inputClassName}
-              placeholder="SPY"
-            />
-          </Field>
+          <TickerSelector
+            fetchDetailsOnSelect={false}
+            market={fitMarket}
+            marketName="ticker_market"
+            onMarketChange={setFitMarket}
+            onTickerChange={setFitTicker}
+            placeholder="SPY"
+            tickerLabel="Benchmark ticker"
+            tickerName="ticker"
+            value={fitTicker}
+          />
           <Field label="State count">
             <select name="state_count" defaultValue="4" className={inputClassName}>
               <option value="3">3 states</option>

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { TickerListSelector } from "@/components/ticker/TickerListSelector";
+import { TickerSelector } from "@/components/ticker/TickerSelector";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   buttonPrimaryClassName,
@@ -16,6 +18,7 @@ import {
   type ResearchBacktest,
   type SavedBacktestRun,
 } from "@/lib/api";
+import type { TickerMarket } from "@/lib/ticker-prefill-form";
 import {
   LabPanel,
   StatusBadge,
@@ -70,6 +73,8 @@ export function BacktestsPanel({
   const [history, setHistory] = useState<SavedBacktestRun[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
+  const [benchmarkMarket, setBenchmarkMarket] = useState<TickerMarket>("US");
+  const [benchmarkTicker, setBenchmarkTicker] = useState("SPY");
 
   useEffect(() => {
     void loadHistory();
@@ -179,11 +184,9 @@ export function BacktestsPanel({
         <form className="grid gap-4 xl:grid-cols-[1fr_300px]" onSubmit={handleRun}>
           <div className="space-y-4">
             <Field label="Universe">
-              <textarea
+              <TickerListSelector
                 name="tickers"
-                rows={4}
-                defaultValue={defaultTickers.join(", ")}
-                className={inputClassName}
+                defaultTickers={defaultTickers}
                 placeholder="Tickers with feature snapshots and labels"
               />
             </Field>
@@ -209,7 +212,15 @@ export function BacktestsPanel({
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-2">
             <Field label="Benchmark">
-              <input name="benchmark_ticker" defaultValue="SPY" className={inputClassName} />
+              <TickerSelector
+                fetchDetailsOnSelect={false}
+                market={benchmarkMarket}
+                marketName="benchmark_market"
+                onMarketChange={setBenchmarkMarket}
+                onTickerChange={setBenchmarkTicker}
+                tickerName="benchmark_ticker"
+                value={benchmarkTicker}
+              />
             </Field>
             <Field label="Horizon">
               <select name="horizon_days" defaultValue={defaultHorizon} className={inputClassName}>
@@ -515,10 +526,10 @@ function ReturnValue({ value }: { value: string }) {
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block space-y-1.5">
+    <div className="block space-y-1.5">
       <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</span>
       {children}
-    </label>
+    </div>
   );
 }
 
