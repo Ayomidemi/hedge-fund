@@ -55,6 +55,15 @@ from app.services.market_radar.catalog import (
     sync_monitored_universe,
 )
 from app.services.market_radar.providers import fetch_ngn_discovery, fetch_us_movers
+from app.services.market_radar.priority import (
+    assign_priorities,
+    build_evidence_package,
+    next_action_for,
+    queue_priority_for,
+    research_question_for,
+    select_promotions,
+    thesis_for,
+)
 from app.services.market_radar.scoring import (
     RadarCandidate,
     is_flagged,
@@ -214,6 +223,7 @@ async def run_radar_scan(
                 if candidate.carried_forward:
                     continue
                 score_candidate(candidate)
+            assign_priorities(list(candidates.values()))
             working = _select_working_set(list(candidates.values()))
             working_tickers = {item.ticker for item in working}
             for candidate in candidates.values():
@@ -223,17 +233,30 @@ async def run_radar_scan(
                     )
                 )
             flagged = [item for item in working if is_flagged(item)]
-            promotable = [item for item in flagged if not item.carried_forward]
-            if promotable:
+            promotions = select_promotions(
+                [item for item in flagged if not item.carried_forward]
+            )
+            held_back = len(flagged) - len(promotions)
+            if promotions:
                 if triggered_by_user_id:
                     promotion_owner_ids = [triggered_by_user_id]
                 else:
                     promotion_owner_ids = await _portfolio_owner_ids(session)
                 promoted = await promote_flagged_candidates(
                     session,
-                    promotable,
+                    promotions,
                     owner_ids=promotion_owner_ids,
                 )
+            notes.append(
+                "Flagged "
+                f"{len(flagged)} working-set names "
+                f"(P0={_count_priority(flagged, 'P0')}, "
+                f"P1={_count_priority(flagged, 'P1')}, "
+                f"P2={_count_priority(flagged, 'P2')}, "
+                f"P3={_count_priority(flagged, 'P3')}); "
+                f"auto-promoted {promoted} P0/P1; "
+                f"held {held_back} off the Opportunity Queue."
+            )
             await _annotate_queue_tape_moves(session, list(candidates.values()))
         else:
             notes.append("No open sessions; last working set left unchanged.")
@@ -331,6 +354,10 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
             existing.source_as_of = item.source_as_of
         existing.always_watched = existing.always_watched or item.always_watched
         existing.on_watchlist = existing.on_watchlist or item.on_watchlist
+        existing.in_portfolio = existing.in_portfolio or item.in_portfolio
+        existing.in_opportunity_queue = (
+            existing.in_opportunity_queue or item.in_opportunity_queue
+        )
         existing.pinned_prior = existing.pinned_prior or item.pinned_prior
         existing.is_catalog_member = existing.is_catalog_member or item.is_catalog_member
         existing.evidence.update(item.evidence)
@@ -773,12 +800,22 @@ def _snapshot_from_candidate(
             **candidate.evidence,
             "on_watchlist": candidate.on_watchlist,
             "pinned_prior": candidate.pinned_prior,
+            "in_portfolio": candidate.in_portfolio,
+            "in_opportunity_queue": candidate.in_opportunity_queue,
+            "radar_priority": candidate.radar_priority,
+            "priority_score": str(candidate.priority_score),
+            "auto_promote": candidate.should_auto_promote,
+            "priority_reasons": list(candidate.priority_reasons),
+            "related_tickers": list(candidate.related_tickers),
         },
         sparkline=candidate.sparkline,
         as_of=as_of,
         source_as_of=candidate.source_as_of,
         carried_forward=candidate.carried_forward,
         stale_reason=candidate.stale_reason,
+        radar_priority=candidate.radar_priority,
+        priority_score=candidate.priority_score,
+        auto_promote=candidate.should_auto_promote,
     )
 
 
@@ -1014,14 +1051,21 @@ async def promote_flagged_candidates(
     *,
     owner_user_id: str | None = None,
     owner_ids: list[str] | None = None,
-    limit: int = 10,
+    limit: int | None = None,
 ) -> int:
     if owner_ids is None:
         owner_ids = [owner_user_id] if owner_user_id else await _portfolio_owner_ids(session)
     if not owner_ids:
         return 0
 
-    ranked = sorted(flagged, key=lambda item: item.anomaly_score, reverse=True)[:limit]
+    selected = (
+        select_promotions(flagged)
+        if limit is None
+        else select_promotions(flagged, p1_limit=limit)
+    )
+    if not selected:
+        return 0
+
     promoted = 0
     now = datetime.now(timezone.utc)
 
@@ -1035,7 +1079,7 @@ async def promote_flagged_candidates(
                 .where(Opportunity.closed_at.is_(None))
             )
         }
-        for candidate in ranked:
+        for candidate in selected:
             variants = {
                 candidate.ticker,
                 candidate.ticker.removesuffix(".NG"),
@@ -1059,30 +1103,28 @@ async def promote_flagged_candidates(
                         industry=candidate.industry,
                     ),
                 )
-            flags = ", ".join(candidate.flags) or "unusual activity"
-            move = (
-                f" {candidate.change_pct}%."
-                if candidate.change_pct is not None
-                else "."
-            )
+            evidence = build_evidence_package(candidate, as_of=now)
             session.add(
                 Opportunity(
                     owner_user_id=owner,
                     instrument_id=instrument.id,
                     discovered_at=now,
                     status="discovered",
-                    priority="high"
-                    if candidate.anomaly_score >= Decimal("12")
-                    else "medium",
-                    thesis=f"Radar flagged {candidate.ticker} ({flags}).{move}",
-                    research_question=f"Does {candidate.ticker} deserve a Ticker Analyst review?",
-                    next_action="Review on Ticker Analyst before any capital.",
-                    notes=f"radar_score={candidate.anomaly_score} source={candidate.source}",
+                    priority=queue_priority_for(candidate.radar_priority),
+                    thesis=thesis_for(candidate),
+                    research_question=research_question_for(candidate),
+                    next_action=next_action_for(candidate),
+                    notes=_promotion_notes(candidate),
+                    discovery_evidence=evidence,
                     status_history=[
                         {
                             "status": "discovered",
                             "at": now.isoformat(),
                             "note": "Created by market radar.",
+                            "event": "radar_promotion",
+                            "radar_priority": candidate.radar_priority,
+                            "anomaly_score": str(candidate.anomaly_score),
+                            "priority_score": str(candidate.priority_score),
                         }
                     ],
                 )
@@ -1090,6 +1132,20 @@ async def promote_flagged_candidates(
             open_tickers.add(candidate.ticker)
             promoted += 1
     return promoted
+
+
+def _promotion_notes(candidate: RadarCandidate) -> str:
+    reasons = "; ".join(candidate.priority_reasons) or "n/a"
+    related = ", ".join(candidate.related_tickers[:5]) or "none"
+    return (
+        f"source=market_radar; radar_priority={candidate.radar_priority}; "
+        f"anomaly_score={candidate.anomaly_score}; priority_score={candidate.priority_score}; "
+        f"reasons={reasons}; related={related}"
+    )
+
+
+def _count_priority(candidates: list[RadarCandidate], priority: str) -> int:
+    return sum(1 for item in candidates if item.radar_priority == priority)
 
 
 def _asset_class(value: str | None) -> str:

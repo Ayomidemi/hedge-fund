@@ -20,6 +20,14 @@ from app.services.market_radar.scan import (
     _select_working_set,
     run_radar_scan,
 )
+from app.services.market_radar.priority import (
+    assign_priority,
+    build_evidence_package,
+    is_auto_promotable,
+    queue_priority_for,
+    select_promotions,
+    thesis_for,
+)
 from app.services.market_radar.scoring import RadarCandidate, is_flagged, score_candidate
 from app.services.market_radar.watchlist import AlwaysWatchedSet
 
@@ -562,8 +570,15 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
                     name="Microsoft",
                     jurisdiction="US",
                     always_watched=True,
+                    in_portfolio=True,
                     price=Decimal("420"),
-                    change_pct=Decimal("7.5"),
+                    change_pct=Decimal("-6.2"),
+                    volume=8_000_000,
+                    avg_volume=2_000_000,
+                    evidence={
+                        "price_return_zscore": "-2.8",
+                        "volume_zscore": "2.4",
+                    },
                 )
             }
         )
@@ -607,4 +622,134 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
         promote.assert_awaited_once()
         self.assertEqual(promote.await_args.kwargs["owner_ids"], ["trigger-user"])
         self.assertEqual(run.promotion_owner_ids, ["trigger-user"])
+        promoted = promote.await_args.args[1]
+        self.assertTrue(all(item.radar_priority in {"P0", "P1"} for item in promoted))
+
+
+class RadarPriorityTests(TestCase):
+    def test_portfolio_drawdown_is_p0_and_promotable(self) -> None:
+        candidate = RadarCandidate(
+            ticker="GTCO.NG",
+            name="GTCO",
+            jurisdiction="NG",
+            industry="Banks",
+            in_portfolio=True,
+            change_pct=Decimal("-6.4"),
+            volume=4_000_000,
+            avg_volume=1_200_000,
+            evidence={"price_return_zscore": "-2.6", "volume_zscore": "2.1"},
+        )
+        score_candidate(candidate)
+        assign_priority(candidate)
+        self.assertEqual(candidate.radar_priority, "P0")
+        self.assertTrue(is_auto_promotable(candidate))
+        self.assertEqual(queue_priority_for(candidate.radar_priority), "urgent")
+        package = build_evidence_package(candidate)
+        self.assertEqual(package["source"], "market_radar")
+        self.assertEqual(package["radar_priority"], "P0")
+        self.assertIn("GTCO.NG", thesis_for(candidate))
+        self.assertTrue(package["facts"]["price_return_zscore"])
+
+    def test_confirmed_anomaly_is_p1(self) -> None:
+        candidate = RadarCandidate(
+            ticker="AAPL",
+            name="Apple",
+            jurisdiction="US",
+            sector="Technology",
+            change_pct=Decimal("4.2"),
+            volume=90_000_000,
+            avg_volume=30_000_000,
+            evidence={
+                "price_return_zscore": "3.1",
+                "volume_zscore": "2.6",
+                "sector_relative_return_pct": "3.8",
+                "sector_benchmark": "XLK",
+                "avg_dollar_volume": "4000000000",
+            },
+        )
+        score_candidate(candidate)
+        assign_priority(candidate)
+        self.assertEqual(candidate.radar_priority, "P1")
+        self.assertTrue(is_auto_promotable(candidate))
+
+    def test_raw_five_percent_move_is_not_auto_promoted(self) -> None:
+        candidate = RadarCandidate(
+            ticker="XYZ",
+            name="XYZ",
+            jurisdiction="US",
+            change_pct=Decimal("5.2"),
+            volume=1000,
+            avg_volume=900,
+        )
+        score_candidate(candidate)
+        assign_priority(candidate)
+        self.assertTrue(is_flagged(candidate))
+        self.assertIn(candidate.radar_priority, {"P2", "P3"})
+        self.assertFalse(is_auto_promotable(candidate))
+
+    def test_pulse_etf_is_never_auto_promoted(self) -> None:
+        candidate = RadarCandidate(
+            ticker="XLF",
+            name="Financials Select",
+            jurisdiction="US",
+            asset_class="etf",
+            always_watched=True,
+            change_pct=Decimal("-6.0"),
+            volume=20_000_000,
+            avg_volume=8_000_000,
+            evidence={"price_return_zscore": "-3.4", "volume_zscore": "2.8"},
+        )
+        score_candidate(candidate)
+        assign_priority(candidate)
+        self.assertTrue(is_flagged(candidate))
+        self.assertFalse(is_auto_promotable(candidate))
+
+    def test_select_promotions_keeps_all_p0_and_caps_p1(self) -> None:
+        names = []
+        for index in range(3):
+            item = RadarCandidate(
+                ticker=f"HOLD{index}",
+                name=f"Hold {index}",
+                jurisdiction="US",
+                in_portfolio=True,
+                change_pct=Decimal("-7.0"),
+                evidence={"price_return_zscore": "-3.0", "volume_zscore": "2.2"},
+            )
+            score_candidate(item)
+            assign_priority(item)
+            names.append(item)
+        for index in range(8):
+            item = RadarCandidate(
+                ticker=f"NEW{index}",
+                name=f"New {index}",
+                jurisdiction="US",
+                change_pct=Decimal("4.5"),
+                volume=9_000_000,
+                avg_volume=2_000_000,
+                evidence={
+                    "price_return_zscore": "3.0",
+                    "volume_zscore": "2.5",
+                    "sector_relative_return_pct": "4.0",
+                    "avg_dollar_volume": "250000000",
+                },
+            )
+            score_candidate(item)
+            assign_priority(item)
+            names.append(item)
+        noise = RadarCandidate(
+            ticker="NOISE",
+            name="Noise",
+            jurisdiction="US",
+            change_pct=Decimal("5.1"),
+        )
+        score_candidate(noise)
+        assign_priority(noise)
+        names.append(noise)
+
+        selected = select_promotions(names, p1_limit=5)
+        self.assertTrue(all(item.radar_priority in {"P0", "P1"} for item in selected))
+        self.assertEqual(sum(1 for item in selected if item.radar_priority == "P0"), 3)
+        self.assertLessEqual(sum(1 for item in selected if item.radar_priority == "P1"), 5)
+        self.assertNotIn("NOISE", {item.ticker for item in selected})
+
 

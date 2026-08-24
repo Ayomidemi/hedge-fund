@@ -57,6 +57,10 @@ class MarketRadarNameResponse(BaseModel):
     volume: int | None = None
     volume_ratio: Decimal | None = None
     anomaly_score: Decimal
+    radar_priority: str | None = None
+    priority_score: Decimal | None = None
+    auto_promote: bool = False
+    priority_reasons: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
     sparkline: list[dict[str, Any]] = Field(default_factory=list)
@@ -66,6 +70,7 @@ class MarketRadarNameResponse(BaseModel):
     stale_reason: str | None = None
     on_watchlist: bool = False
     pinned_prior: bool = False
+    in_portfolio: bool = False
 
 
 class MarketRadarIndustryResponse(BaseModel):
@@ -150,8 +155,13 @@ class MarketRadarOverviewResponse(BaseModel):
     latest_run: MarketRadarRunResponse | None = None
     working_set_count: int
     flagged_count: int
+    p0_count: int = 0
+    p1_count: int = 0
+    p2_count: int = 0
+    p3_count: int = 0
     industries: list[MarketRadarIndustryResponse]
     working_set: list[MarketRadarNameResponse]
     flagged: list[MarketRadarNameResponse]
+    queue_candidates: list[MarketRadarNameResponse] = Field(default_factory=list)
     watchlist: list[RadarWatchlistItemResponse] = Field(default_factory=list)
     scan_changes: list[MarketRadarNameResponse] = Field(default_factory=list)

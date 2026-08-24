@@ -58,6 +58,12 @@ async def build_radar_overview(
         watchlist_items = watchlist.items
         watchlist_tickers = {item.ticker.upper() for item in watchlist_items}
     industries = _group_industries(working, watchlist_tickers)
+    named_flagged = [_name_response(row, watchlist_tickers) for row in _sorted(flagged)]
+    queue_candidates = [
+        item
+        for item in named_flagged
+        if item.auto_promote or item.radar_priority in {"P0", "P1"}
+    ]
 
     return MarketRadarOverviewResponse(
         generated_at=now,
@@ -65,11 +71,16 @@ async def build_radar_overview(
         latest_run=_run_response(latest_run) if latest_run else None,
         working_set_count=len(working),
         flagged_count=len(flagged),
+        p0_count=_priority_count(flagged, "P0"),
+        p1_count=_priority_count(flagged, "P1"),
+        p2_count=_priority_count(flagged, "P2"),
+        p3_count=_priority_count(flagged, "P3"),
         industries=industries,
         working_set=[
             _name_response(row, watchlist_tickers) for row in _sorted(working)
         ],
-        flagged=[_name_response(row, watchlist_tickers) for row in _sorted(flagged)],
+        flagged=named_flagged,
+        queue_candidates=queue_candidates,
         watchlist=watchlist_items,
         scan_changes=[
             _name_response(row, watchlist_tickers)
@@ -137,6 +148,14 @@ def _name_response(
         volume=row.volume,
         volume_ratio=row.volume_ratio,
         anomaly_score=row.anomaly_score,
+        radar_priority=_priority_value(row, evidence),
+        priority_score=row.priority_score
+        if getattr(row, "priority_score", None) is not None
+        else _decimal_or_none(evidence.get("priority_score")),
+        auto_promote=bool(
+            getattr(row, "auto_promote", False) or evidence.get("auto_promote")
+        ),
+        priority_reasons=list(evidence.get("priority_reasons") or []),
         flags=list(row.flags or []),
         evidence=evidence,
         sparkline=list(row.sparkline or []),
@@ -146,6 +165,7 @@ def _name_response(
         stale_reason=row.stale_reason,
         on_watchlist=watchlist,
         pinned_prior=bool(evidence.get("pinned_prior")),
+        in_portfolio=bool(evidence.get("in_portfolio")),
     )
 
 
@@ -190,8 +210,40 @@ def _heat(flagged: list[RadarSnapshot], members: list[RadarSnapshot]) -> str:
     return "quiet"
 
 
+_PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+
+
 def _sorted(rows: list[RadarSnapshot]) -> list[RadarSnapshot]:
-    return sorted(rows, key=lambda row: row.anomaly_score, reverse=True)
+    return sorted(
+        rows,
+        key=lambda row: (
+            _PRIORITY_RANK.get(_priority_value(row, row.evidence or {}), 9),
+            -(row.anomaly_score or 0),
+        ),
+    )
+
+
+def _priority_value(row: RadarSnapshot, evidence: dict) -> str | None:
+    return getattr(row, "radar_priority", None) or evidence.get("radar_priority")
+
+
+def _priority_count(rows: list[RadarSnapshot], priority: str) -> int:
+    return sum(
+        1
+        for row in rows
+        if _priority_value(row, row.evidence or {}) == priority
+    )
+
+
+def _decimal_or_none(value: object):
+    from decimal import Decimal, InvalidOperation
+
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
 
 
 def _scan_changes(rows: list[RadarSnapshot]) -> list[RadarSnapshot]:

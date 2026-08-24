@@ -294,6 +294,7 @@ export type Opportunity = {
   review_by: string | null;
   closed_at: string | null;
   notes: string | null;
+  discovery_evidence?: Record<string, unknown>;
   status_history: Record<string, unknown>[];
   latest_action: string | null;
   latest_composite_score: string | null;
@@ -620,6 +621,42 @@ export type TickerDesk = {
     average_cost: string;
   } | null;
   memos: TickerMemoSummary[];
+};
+
+export type TickerVerdict = {
+  ticker: string;
+  name: string;
+  market: "US" | "NG" | string;
+  generated_at: string;
+  research_priority: "high" | "medium" | "low" | string;
+  initial_view: string;
+  triage_decision: "research" | "watch" | "reject" | string;
+  action_label: string;
+  confidence_score: string;
+  conviction_score: string;
+  composite_score: string;
+  recommended_weight: string;
+  top_drivers: string[];
+  top_blockers: string[];
+  why_now: string;
+  next_action: string;
+  warnings: string[];
+  source_reference: string;
+  provider: string;
+  data_timestamp: string;
+  context: {
+    on_watchlist: boolean;
+    has_position: boolean;
+    opportunity_status: OpportunityStatus | string | null;
+    opportunity_priority: OpportunityPriority | string | null;
+    radar_change_pct: string | null;
+    radar_state: string | null;
+    latest_news_title: string | null;
+    pre_trade_decision: string | null;
+    pre_trade_risk_level: string | null;
+    memo_count: number;
+  };
+  scorecard: TickerScore[];
 };
 
 export type TickerPrefill = {
@@ -1439,6 +1476,22 @@ export function getTickerDesk(ticker: string, options?: ApiRequestOptions) {
   );
 }
 
+export function getTickerVerdict(
+  ticker: string,
+  params?: { market?: string },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.market) search.set("market", params.market);
+  const query = search.toString();
+  return fetchApi<TickerVerdict>(
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/verdict${
+      query ? `?${query}` : ""
+    }`,
+    options,
+  );
+}
+
 export function getTickerPrefill(
   ticker: string,
   market?: string,
@@ -1952,6 +2005,10 @@ export type MarketRadarName = {
   volume: number | null;
   volume_ratio: string | null;
   anomaly_score: string;
+  radar_priority?: string | null;
+  priority_score?: string | null;
+  auto_promote?: boolean;
+  priority_reasons?: string[];
   flags: string[];
   evidence: Record<string, unknown>;
   sparkline: Array<Record<string, unknown>>;
@@ -2035,9 +2092,14 @@ export type MarketRadarOverview = {
   latest_run: MarketRadarRun | null;
   working_set_count: number;
   flagged_count: number;
+  p0_count?: number;
+  p1_count?: number;
+  p2_count?: number;
+  p3_count?: number;
   industries: MarketRadarIndustry[];
   working_set: MarketRadarName[];
   flagged: MarketRadarName[];
+  queue_candidates?: MarketRadarName[];
   watchlist: RadarWatchlistItem[];
   scan_changes: MarketRadarName[];
 };

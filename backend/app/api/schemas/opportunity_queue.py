@@ -140,6 +140,7 @@ class OpportunityResponse(BaseModel):
     review_by: date | None
     closed_at: datetime | None
     notes: str | None
+    discovery_evidence: dict = Field(default_factory=dict)
     status_history: list[dict]
     latest_action: str | None = None
     latest_composite_score: Decimal | None = None

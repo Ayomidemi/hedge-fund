@@ -416,6 +416,7 @@ def _opportunity_response(
         review_by=opportunity.review_by,
         closed_at=opportunity.closed_at,
         notes=opportunity.notes,
+        discovery_evidence=dict(opportunity.discovery_evidence or {}),
         status_history=opportunity.status_history or [],
         latest_action=_optional_string(source_scores.get("action")),
         latest_composite_score=_decimal(source_scores.get("composite_score")),

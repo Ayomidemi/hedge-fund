@@ -56,9 +56,9 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
     return [
       { label: "Working set", value: String(overview.working_set_count) },
       { label: "Flagged", value: String(overview.flagged_count) },
-      { label: "Industries", value: String(overview.industries.length) },
+      { label: "P0 / P1", value: `${overview.p0_count ?? 0} / ${overview.p1_count ?? 0}` },
+      { label: "Held P2 / P3", value: `${overview.p2_count ?? 0} / ${overview.p3_count ?? 0}` },
       { label: "Catalog", value: String(overview.latest_run?.catalog_count ?? 0) },
-      { label: "Cache hits", value: String(overview.latest_run?.cache_hits ?? 0) },
       {
         label: "Vendor calls (last scan)",
         value: String(overview.latest_run?.vendor_calls ?? 0),
@@ -229,8 +229,8 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
           <p className="mt-1 text-zinc-500">
             Scanned {overview.latest_run.jurisdictions_scanned.join(", ") || "none"}.
             {overview.latest_run.promoted_count > 0
-              ? ` Promoted ${overview.latest_run.promoted_count} name(s) to the Opportunity Queue.`
-              : null}
+              ? ` Auto-promoted ${overview.latest_run.promoted_count} P0/P1 name(s) to the Opportunity Queue.`
+              : " No P0/P1 names were auto-promoted."}
           </p>
           {overview.latest_run.notes.map((note) => (
             <p key={note} className="mt-1 text-zinc-500">
@@ -246,6 +246,26 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
           will not call US or NGX vendors.
         </p>
       )}
+
+      {(overview.queue_candidates?.length ?? 0) > 0 ? (
+        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+          <h3 className="text-sm font-semibold">Queue candidates</h3>
+          <p className="mt-1 text-xs text-zinc-500">
+            P0 and P1 only. P2 and P3 stay on Radar and do not auto-enter the Opportunity
+            Queue.
+          </p>
+          <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-900">
+            {overview.queue_candidates?.map((name) => (
+              <NameRow
+                key={`queue-${name.ticker}`}
+                name={name}
+                busy={busyTickers.has(name.ticker)}
+                onWatchToggle={handleWatchToggle}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {overview.scan_changes && overview.scan_changes.length > 0 ? (
         <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
@@ -360,6 +380,9 @@ function NameRow({
         </div>
         <p className="truncate pl-8 text-xs text-zinc-500">{name.name}</p>
         <div className="mt-1 flex flex-wrap gap-1 pl-8">
+          {name.radar_priority ? (
+            <Chip tone={priorityTone(name.radar_priority)}>{name.radar_priority}</Chip>
+          ) : null}
           {name.carried_forward ? <Chip tone="zinc">prior session</Chip> : null}
           {name.on_watchlist ? <Chip tone="emerald">watchlist</Chip> : null}
           {name.always_watched && !name.on_watchlist ? <Chip tone="zinc">watched</Chip> : null}
@@ -467,6 +490,13 @@ function Sparkline({
       <path d={path} fill="none" className={stroke} strokeWidth="2.5" />
     </svg>
   );
+}
+
+function priorityTone(priority: string): "amber" | "emerald" | "rose" | "zinc" {
+  if (priority === "P0") return "rose";
+  if (priority === "P1") return "amber";
+  if (priority === "P2") return "emerald";
+  return "zinc";
 }
 
 function Chip({

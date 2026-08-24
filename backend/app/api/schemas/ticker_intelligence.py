@@ -112,6 +112,44 @@ class TickerAnalysisResponse(BaseModel):
     evidence_summary: str
 
 
+class TickerVerdictContextResponse(BaseModel):
+    on_watchlist: bool = False
+    has_position: bool = False
+    opportunity_status: str | None = None
+    opportunity_priority: str | None = None
+    radar_change_pct: Decimal | None = None
+    radar_state: str | None = None
+    latest_news_title: str | None = None
+    pre_trade_decision: str | None = None
+    pre_trade_risk_level: str | None = None
+    memo_count: int = 0
+
+
+class TickerVerdictResponse(BaseModel):
+    ticker: str
+    name: str
+    market: str
+    generated_at: datetime
+    research_priority: str
+    initial_view: str
+    triage_decision: str
+    action_label: str
+    confidence_score: Decimal
+    conviction_score: Decimal
+    composite_score: Decimal
+    recommended_weight: Decimal
+    top_drivers: list[str] = Field(default_factory=list)
+    top_blockers: list[str] = Field(default_factory=list)
+    why_now: str
+    next_action: str
+    warnings: list[str] = Field(default_factory=list)
+    source_reference: str
+    provider: str
+    data_timestamp: datetime
+    context: TickerVerdictContextResponse
+    scorecard: list[TickerScoreResponse] = Field(default_factory=list)
+
+
 class TickerMemoSummaryResponse(BaseModel):
     id: UUID
     ticker: str

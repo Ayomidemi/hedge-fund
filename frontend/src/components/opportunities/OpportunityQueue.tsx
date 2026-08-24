@@ -539,6 +539,11 @@ function OpportunityDetail({
         />
       </dl>
 
+      {opportunity.discovery_evidence &&
+      Object.keys(opportunity.discovery_evidence).length > 0 ? (
+        <DiscoveryEvidence evidence={opportunity.discovery_evidence} />
+      ) : null}
+
       {links?.tape && links.tape.length > 0 ? (
         <div className="mt-4 space-y-1 text-xs text-zinc-500">
           {links.tape.map((event, index) => (
@@ -715,6 +720,45 @@ function Td({
     <td className={`px-5 py-3 ${emphasis ? "font-medium text-zinc-950 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-300"}`}>
       {children}
     </td>
+  );
+}
+
+function DiscoveryEvidence({ evidence }: { evidence: Record<string, unknown> }) {
+  const reasons = Array.isArray(evidence.reasons)
+    ? evidence.reasons.map(String)
+    : [];
+  const related = Array.isArray((evidence.context as { related_tickers?: unknown } | undefined)?.related_tickers)
+    ? ((evidence.context as { related_tickers: unknown[] }).related_tickers).map(String)
+    : [];
+  const facts = (evidence.facts as Record<string, unknown> | undefined) ?? {};
+  return (
+    <div className="mt-4 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        Radar evidence
+      </p>
+      <p className="mt-1 font-medium">
+        {String(evidence.radar_priority ?? "Unranked")} · score{" "}
+        {String(evidence.priority_score ?? "—")}
+      </p>
+      {reasons.length > 0 ? (
+        <ul className="mt-2 list-disc space-y-1 pl-4 text-zinc-600 dark:text-zinc-300">
+          {reasons.map((reason) => (
+            <li key={reason}>{reason}</li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="mt-2 text-xs text-zinc-500">
+        {facts.change_pct != null ? `${facts.change_pct}% ` : ""}
+        {facts.volume_ratio != null ? `${facts.volume_ratio}x volume ` : ""}
+        {facts.price_return_zscore != null ? `z ${facts.price_return_zscore}` : ""}
+      </p>
+      {related.length > 0 ? (
+        <p className="mt-1 text-xs text-zinc-500">Related: {related.join(", ")}</p>
+      ) : null}
+      {typeof evidence.caveat === "string" ? (
+        <p className="mt-2 text-xs text-zinc-500">{evidence.caveat}</p>
+      ) : null}
+    </div>
   );
 }
 

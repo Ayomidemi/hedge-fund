@@ -14,6 +14,7 @@ import {
   getTickerMemo,
   getTickerMLReport,
   getTickerPrefill,
+  getTickerVerdict,
   runResearchDataPipeline,
   type TickerAIDraft,
   type TickerAIDraftInput,
@@ -24,6 +25,7 @@ import {
   type TickerMemo,
   type TickerMemoSummary,
   type TickerPrefill,
+  type TickerVerdict,
 } from "@/lib/api";
 import {
   normalizeTickerInput,
@@ -119,17 +121,19 @@ export function TickerAnalyst({
   useEffect(() => {
     if (!initialTicker || initialDesk) return;
     let cancelled = false;
-    setDeskLoading(true);
-    void getTickerDesk(initialTicker)
-      .then((next) => {
+    void (async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      setDeskLoading(true);
+      try {
+        const next = await getTickerDesk(initialTicker);
         if (!cancelled) setDesk(next);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setError("Ticker desk could not be loaded.");
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setDeskLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -602,6 +606,8 @@ function TickerDeskView({
 
   return (
     <>
+      <QuickTriageSection desk={desk} />
+
       <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap gap-3 text-sm">
           <Link
@@ -714,6 +720,128 @@ function TickerDeskView({
         />
       </section>
     </>
+  );
+}
+
+function QuickTriageSection({ desk }: { desk: TickerDesk }) {
+  const [verdict, setVerdict] = useState<TickerVerdict | null>(null);
+  const [loading, setLoading] = useState(false);
+  const market = desk.ticker.endsWith(".NG") ? "NG" : "US";
+
+  async function handleRun() {
+    setLoading(true);
+    try {
+      const next = await getTickerVerdict(desk.ticker, { market });
+      setVerdict(next);
+      toast.success(`${next.ticker} quick triage completed.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Quick triage failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const latestMemo = desk.memos[0] ?? null;
+  const shownAction = verdict?.action_label ?? latestMemo?.action ?? "Not run";
+  const shownDecision = verdict?.triage_decision ?? "pending";
+  const shownPriority = verdict?.research_priority ?? "not set";
+  const shownConfidence = verdict?.confidence_score ?? latestMemo?.confidence_score;
+  const shownWeight = verdict?.recommended_weight;
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+            Quick Triage
+          </p>
+          <h3 className="mt-1 text-2xl font-semibold tracking-tight">
+            {formatLabel(shownAction)}
+          </h3>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-500">
+            {verdict
+              ? verdict.next_action
+              : latestMemo
+                ? "Showing the latest saved memo action. Run quick triage for a fresh screen."
+                : "Run a lightweight screen to decide whether this ticker should be researched, watched, or rejected."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleRun()}
+          disabled={loading}
+          className={buttonClassName}
+        >
+          {loading ? "Running..." : verdict ? "Refresh triage" : "Run quick triage"}
+        </button>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="Decision" value={formatLabel(shownDecision)} />
+        <MetricCard label="Priority" value={formatLabel(shownPriority)} />
+        <MetricCard label="Initial view" value={verdict ? formatLabel(verdict.initial_view) : "-"} />
+        <MetricCard
+          label="Confidence"
+          value={shownConfidence ? `${score(shownConfidence)}%` : "-"}
+        />
+        <MetricCard
+          label="Max weight"
+          value={shownWeight ? weight(shownWeight) : "-"}
+        />
+      </div>
+
+      {verdict ? (
+        <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_0.8fr]">
+          <TriageList title="Top drivers" items={verdict.top_drivers} />
+          <TriageList title="Top blockers" items={verdict.top_blockers} />
+          <section className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Why Now
+            </p>
+            <p className="mt-3 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+              {verdict.why_now}
+            </p>
+            <div className="mt-4 grid gap-2 text-xs text-zinc-500">
+              <span>Provider: {verdict.provider}</span>
+              <span>Data: {formatDateTime(verdict.data_timestamp)}</span>
+            </div>
+          </section>
+        </div>
+      ) : (
+        <div className="mt-5 grid gap-3 text-sm text-zinc-500 sm:grid-cols-3">
+          <p>Radar: {desk.radar?.scan_state ? formatLabel(desk.radar.scan_state) : "No recent flag"}</p>
+          <p>Queue: {desk.opportunity ? formatLabel(desk.opportunity.status) : "Not queued"}</p>
+          <p>Position: {desk.position ? "Owned" : "No live position"}</p>
+        </div>
+      )}
+
+      {verdict?.warnings.length ? (
+        <div className="mt-5">
+          <WarningNotice warnings={verdict.warnings} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function TriageList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <section className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        {title}
+      </p>
+      <div className="mt-3 space-y-2">
+        {items.length > 0 ? (
+          items.map((item, index) => (
+            <p key={`${title}-${index}`} className="text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+              {item}
+            </p>
+          ))
+        ) : (
+          <p className="text-sm text-zinc-500">No signal yet.</p>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1956,6 +2084,18 @@ function formatLabel(value: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
 }
 
 function formatFeature(value: string) {

@@ -35,6 +35,14 @@ class RadarCandidate:
     stale_reason: str | None = None
     on_watchlist: bool = False
     pinned_prior: bool = False
+    in_portfolio: bool = False
+    in_opportunity_queue: bool = False
+    radar_priority: str | None = None
+    priority_score: Decimal = Decimal("0")
+    dimension_scores: dict[str, int] = field(default_factory=dict)
+    priority_reasons: list[str] = field(default_factory=list)
+    should_auto_promote: bool = False
+    related_tickers: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
     sparkline: list[dict[str, Any]] = field(default_factory=list)
 
@@ -61,7 +69,11 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
     elif candidate.volume_ratio is None:
         candidate.volume_ratio = None
 
-    price_z = abs(_evidence_decimal(candidate, "price_return_zscore") or Decimal("0"))
+    price_z = abs(
+        _evidence_decimal(candidate, "price_return_zscore")
+        or _evidence_decimal(candidate, "price_return_zscore")
+        or Decimal("0")
+    )
     if price_z >= Decimal("2"):
         flags.append("price_anomaly")
         score += min(price_z * Decimal("3"), Decimal("12"))
@@ -74,7 +86,9 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
         if "price_anomaly" not in flags and "price_move" not in flags:
             score += Decimal("5")
 
-    volume_z = _evidence_decimal(candidate, "volume_zscore")
+    volume_z = _evidence_decimal(candidate, "volume_zscore") or _evidence_decimal(
+        candidate, "volume_zscore"
+    )
     if volume_z is not None and volume_z >= Decimal("2"):
         flags.append("volume_anomaly")
         score += min(volume_z * Decimal("2.5"), Decimal("12"))

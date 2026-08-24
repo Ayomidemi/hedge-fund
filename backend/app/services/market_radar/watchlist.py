@@ -39,42 +39,61 @@ async def load_always_watched(session: AsyncSession) -> AlwaysWatchedSet:
             always_watched=True,
         )
 
-    instrument_ids: set = set()
-    position_ids = await session.scalars(
-        select(Position.instrument_id)
-        .where(Position.quantity > 0)
-        .where(Position.closed_at.is_(None))
-        .distinct()
+    position_ids = set(
+        await session.scalars(
+            select(Position.instrument_id)
+            .where(Position.quantity > 0)
+            .where(Position.closed_at.is_(None))
+            .distinct()
+        )
     )
-    instrument_ids.update(position_ids)
-
-    opportunity_ids = await session.scalars(
-        select(Opportunity.instrument_id)
-        .where(Opportunity.status.notin_(_CLOSED_OPPORTUNITY_STATUSES))
-        .where(Opportunity.closed_at.is_(None))
-        .distinct()
+    opportunity_ids = set(
+        await session.scalars(
+            select(Opportunity.instrument_id)
+            .where(Opportunity.status.notin_(_CLOSED_OPPORTUNITY_STATUSES))
+            .where(Opportunity.closed_at.is_(None))
+            .distinct()
+        )
     )
-    instrument_ids.update(opportunity_ids)
+    instrument_ids = position_ids | opportunity_ids
 
     if instrument_ids:
-        instruments = await session.scalars(
-            select(Instrument).where(Instrument.id.in_(instrument_ids))
-        )
-        for instrument in instruments:
+        instruments = {
+            instrument.id: instrument
+            for instrument in await session.scalars(
+                select(Instrument).where(Instrument.id.in_(instrument_ids))
+            )
+        }
+        for instrument_id, instrument in instruments.items():
             ticker = quote_symbol_for(instrument)
             jurisdiction = jurisdiction_for_ticker(ticker)
-            candidates[ticker] = RadarCandidate(
-                ticker=ticker,
-                name=instrument.name,
-                jurisdiction=jurisdiction,
-                sector=instrument.sector,
-                industry=instrument.industry,
-                asset_class=instrument.asset_class,
-                exchange=instrument.exchange,
-                currency=instrument.currency,
-                source="book",
-                always_watched=True,
-            )
+            existing = candidates.get(ticker)
+            in_portfolio = instrument_id in position_ids
+            in_queue = instrument_id in opportunity_ids
+            if existing is None:
+                candidates[ticker] = RadarCandidate(
+                    ticker=ticker,
+                    name=instrument.name,
+                    jurisdiction=jurisdiction,
+                    sector=instrument.sector,
+                    industry=instrument.industry,
+                    asset_class=instrument.asset_class,
+                    exchange=instrument.exchange,
+                    currency=instrument.currency,
+                    source="book" if in_portfolio else "queue",
+                    always_watched=True,
+                    in_portfolio=in_portfolio,
+                    in_opportunity_queue=in_queue,
+                )
+                continue
+            existing.always_watched = True
+            existing.in_portfolio = existing.in_portfolio or in_portfolio
+            existing.in_opportunity_queue = existing.in_opportunity_queue or in_queue
+            if in_portfolio:
+                existing.source = "book"
+            existing.sector = existing.sector or instrument.sector
+            existing.industry = existing.industry or instrument.industry
+            existing.name = instrument.name or existing.name
 
     watch_rows = await session.scalars(select(RadarWatchlistItem))
     for item in watch_rows:

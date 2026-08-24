@@ -30,6 +30,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerMemoSummaryResponse,
     TickerPrefillResponse,
     TickerSuggestionResponse,
+    TickerVerdictResponse,
     TrainingLabelGenerateCreate,
     TrainingLabelResponse,
     YahooPriceBackfillCreate,
@@ -54,6 +55,7 @@ from app.services.ticker_intelligence.market_data import (
     prefill_ticker,
     search_ticker_suggestions,
 )
+from app.services.ticker_intelligence.verdict import build_ticker_verdict
 from app.services.ticker_intelligence.ml_training import (
     MLTrainingDataUnavailableError,
     backfill_yahoo_prices,
@@ -400,6 +402,22 @@ async def read_ticker_desk(
     session: AsyncSession = Depends(get_session),
 ) -> TickerDeskResponse:
     return await get_ticker_desk(session, ticker, user)
+
+
+@router.get("/{ticker}/verdict", response_model=TickerVerdictResponse)
+async def read_ticker_verdict(
+    ticker: str,
+    market: str | None = Query(default=None, max_length=16),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> TickerVerdictResponse:
+    try:
+        return await build_ticker_verdict(session, ticker, market=market, user=user)
+    except MarketDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/{ticker}/prefill", response_model=TickerPrefillResponse)

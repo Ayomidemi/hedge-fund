@@ -829,6 +829,9 @@ class Opportunity(Base, TimestampMixin):
     review_by: Mapped[date | None] = mapped_column(Date)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
+    discovery_evidence: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     status_history: Mapped[list[dict]] = mapped_column(
         JSONB, nullable=False, default=list
     )
@@ -1198,6 +1201,11 @@ class RadarSnapshot(Base, TimestampMixin):
     source_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     carried_forward: Mapped[bool] = mapped_column(nullable=False, default=False)
     stale_reason: Mapped[str | None] = mapped_column(String(255))
+    radar_priority: Mapped[str | None] = mapped_column(String(4))
+    priority_score: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4), nullable=False, default=Decimal("0")
+    )
+    auto_promote: Mapped[bool] = mapped_column(nullable=False, default=False)
 
     run: Mapped["RadarRun"] = relationship(back_populates="snapshots")
 

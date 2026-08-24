@@ -116,3 +116,10 @@ def _sector_benchmarks() -> dict[str, str]:
 RADAR_SECTOR_BENCHMARKS = _sector_benchmarks()
 
 RADAR_VENDOR_QUOTE_SOURCES = frozenset({"fmp", "tiingo", "polygon", "ngnmarket"})
+
+# Opportunity Queue promotion. Flagged names stay on Radar; only P0/P1
+# auto-enter the queue, and pulse ETFs never do.
+RADAR_AUTO_PROMOTE_PRIORITIES = ("P0", "P1")
+RADAR_MAX_P1_PROMOTIONS_PER_OWNER = 5
+RADAR_ILLIQUID_USD_DOLLAR_VOLUME = 500_000
+RADAR_PULSE_TICKERS = frozenset(ticker for ticker, _sector, _asset in RADAR_SECTOR_ETFS)
