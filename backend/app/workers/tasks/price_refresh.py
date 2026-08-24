@@ -12,14 +12,15 @@ Steps:
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.core.market_constants import PRICE_MARKET_HOURS_ONLY
+from app.core.market_constants import PRICE_MARKET_HOURS_ONLY, PRICE_STALE_AFTER_SECONDS
 from app.db.session import engine_options
-from app.models import PriceRefreshRun
+from app.models import Instrument, InstrumentQuote, PriceRefreshRun
 from app.services.administration.system_log import record_system_log
 from app.services.market_data.fx_refresh import FxRefreshResult, refresh_fx_rates
 from app.services.market_data.ingestion import IngestionResult, ingest_quotes
@@ -93,6 +94,13 @@ async def _refresh_cycle(session: AsyncSession) -> None:
             extra={"skipped_jurisdictions": skipped_jurisdictions},
         )
         return
+
+    if settings.tiingo_stream_enabled:
+        active_universe = await _filter_stream_fallback_universe(
+            session,
+            active_universe,
+            started_at,
+        )
 
     run_row = PriceRefreshRun(
         started_at=started_at,
@@ -208,3 +216,44 @@ async def _publish_events(
             status=run_row.status,
         )
     )
+
+
+async def _filter_stream_fallback_universe(
+    session: AsyncSession,
+    universe: dict[str, list],
+    now: datetime,
+) -> dict[str, list]:
+    """Keep REST refresh as a fallback when the Tiingo stream is primary.
+
+    US tickers with a fresh internal quote are skipped so the stream carries
+    live traffic. Non-US tickers remain in the poller path.
+    """
+    us_tickers = [
+        ticker
+        for ticker in universe
+        if jurisdiction_for_ticker(ticker) == "US"
+        and is_market_open("US", now)
+    ]
+    if not us_tickers:
+        return universe
+
+    stale_cutoff = now - timedelta(seconds=PRICE_STALE_AFTER_SECONDS)
+    fresh_tickers = {
+        ticker
+        for ticker in await session.scalars(
+            select(Instrument.ticker)
+            .join(InstrumentQuote, InstrumentQuote.instrument_id == Instrument.id)
+            .where(Instrument.ticker.in_(us_tickers))
+            .where(InstrumentQuote.is_stale.is_(False))
+            .where(InstrumentQuote.as_of >= stale_cutoff)
+        )
+    }
+    filtered = {
+        ticker: ids
+        for ticker, ids in universe.items()
+        if jurisdiction_for_ticker(ticker) != "US" or ticker not in fresh_tickers
+    }
+    skipped = len(universe) - len(filtered)
+    if skipped:
+        logger.info("price_refresh_skipped_stream_fresh", extra={"ticker_count": skipped})
+    return filtered

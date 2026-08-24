@@ -44,6 +44,13 @@ class ConnectionManager:
                     for websocket in connections
                 ]
 
+        if event.get("type") == "news.poll_completed":
+            logger.info(
+                "news_event_dispatching target_count=%s run_id=%s",
+                len(targets),
+                event.get("payload", {}).get("run_id"),
+            )
+
         for websocket in targets:
             try:
                 await websocket.send_json(event)

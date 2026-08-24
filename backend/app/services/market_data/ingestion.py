@@ -9,6 +9,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,12 +129,20 @@ async def persist_quotes(
                 session.add(row)
                 existing_quotes[instrument_id] = row
             row.price = quote.price
-            row.previous_close = quote.previous_close
-            row.change_pct = quote.change_pct
-            row.day_open = quote.day_open
-            row.day_high = quote.day_high
-            row.day_low = quote.day_low
-            row.volume = quote.volume
+            row.previous_close = (
+                quote.previous_close
+                if quote.previous_close is not None
+                else row.previous_close
+            )
+            row.change_pct = (
+                quote.change_pct
+                if quote.change_pct is not None
+                else _change_pct(quote.price, row.previous_close)
+            )
+            row.day_open = quote.day_open if quote.day_open is not None else row.day_open
+            row.day_high = quote.day_high if quote.day_high is not None else row.day_high
+            row.day_low = quote.day_low if quote.day_low is not None else row.day_low
+            row.volume = quote.volume if quote.volume is not None else row.volume
             row.currency = quote.currency
             row.source = quote.source
             row.as_of = quote.as_of
@@ -177,3 +186,9 @@ def _upsert_live_bar(
     bar.low_price = min(low_candidates)
     bar.volume = quote.volume or bar.volume
     bar.currency = quote.currency
+
+
+def _change_pct(price: Decimal, previous_close: Decimal | None) -> Decimal | None:
+    if previous_close is None or previous_close <= 0:
+        return None
+    return ((price - previous_close) / previous_close * 100).quantize(Decimal("0.0001"))

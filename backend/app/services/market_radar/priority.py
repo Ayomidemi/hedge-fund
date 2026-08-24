@@ -24,7 +24,7 @@ from app.core.market_constants import (
     RADAR_MAX_P1_PROMOTIONS_PER_OWNER,
     RADAR_PULSE_TICKERS,
 )
-from app.services.market_radar.scoring import RadarCandidate, is_flagged
+from app.services.market_radar.scoring import RadarCandidate, care_tier, is_flagged
 
 
 QUEUE_PRIORITY = {"P0": "urgent", "P1": "high", "P2": "medium", "P3": "low"}
@@ -133,6 +133,7 @@ def build_evidence_package(
         "dimensions": dict(candidate.dimension_scores),
         "facts": _facts(candidate),
         "context": {
+            "care_tier": care_tier(candidate),
             "in_portfolio": candidate.in_portfolio,
             "in_opportunity_queue": candidate.in_opportunity_queue,
             "on_watchlist": candidate.on_watchlist,
@@ -346,10 +347,12 @@ def _write_industry_evidence(
 
 
 def _write_priority_evidence(candidate: RadarCandidate) -> None:
+    candidate.care_tier = care_tier(candidate)
     candidate.evidence["radar_priority"] = candidate.radar_priority
     candidate.evidence["priority_score"] = str(candidate.priority_score)
     candidate.evidence["priority_reasons"] = list(candidate.priority_reasons)
     candidate.evidence["dimension_scores"] = dict(candidate.dimension_scores)
+    candidate.evidence["care_tier"] = candidate.care_tier
     candidate.evidence["in_portfolio"] = candidate.in_portfolio
     candidate.evidence["in_opportunity_queue"] = candidate.in_opportunity_queue
     candidate.evidence["auto_promote"] = candidate.should_auto_promote

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.services.market_data.tiingo_stream import run_tiingo_streams
 from app.services.realtime.connection_manager import connection_manager
 from app.services.realtime.redis_bus import subscribe_events
 
@@ -40,11 +41,16 @@ async def _forward_platform_events() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    listener = asyncio.create_task(_forward_platform_events())
+    tasks = [asyncio.create_task(_forward_platform_events())]
+    if settings.tiingo_stream_enabled:
+        logger.info("tiingo_streams_starting")
+        tasks.append(asyncio.create_task(run_tiingo_streams()))
     yield
-    listener.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await listener
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(

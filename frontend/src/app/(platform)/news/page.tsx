@@ -32,6 +32,9 @@ export default async function NewsPage({ searchParams }: NewsPageProps) {
         market,
         jurisdiction,
         page,
+        page_size: 20,
+        ticker_page: 1,
+        ticker_page_size: 8,
       },
       { accessToken },
     );
@@ -39,8 +42,11 @@ export default async function NewsPage({ searchParams }: NewsPageProps) {
     unavailable = true;
   }
 
+  const overviewKey = ["news-centre", jurisdiction].join(":");
+
   return (
     <NewsCentre
+      key={overviewKey}
       initialOverview={overview}
       initialJurisdiction={jurisdiction}
       unavailable={unavailable}

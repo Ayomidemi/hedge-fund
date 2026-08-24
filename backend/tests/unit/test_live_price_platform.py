@@ -10,6 +10,11 @@ from app.services.market_data.quote_provider import (
     _int,
     _iso_datetime,
 )
+from app.services.market_data.tiingo_stream import (
+    build_subscribe_message,
+    parse_fx_message,
+    parse_iex_reference_message,
+)
 from app.services.market_data.fx_convert import convert_to_usd, is_nigerian_instrument
 from app.services.realtime.events import (
     EVENT_FX_RATE_UPDATED,
@@ -71,6 +76,58 @@ class QuoteParsingTests(TestCase):
         assert parsed is not None
         self.assertEqual(parsed.tzinfo is not None, True)
         self.assertIsNone(_iso_datetime("nope"))
+
+    def test_tiingo_reference_price_stream_message(self) -> None:
+        quote = parse_iex_reference_message(
+            {
+                "service": "iex",
+                "messageType": "A",
+                "data": ["2026-08-24T14:30:00Z", "nvda", 182.25],
+            },
+            received_at=datetime(2026, 8, 24, 14, 30, 1, tzinfo=timezone.utc),
+        )
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote.ticker, "NVDA")
+        self.assertEqual(quote.price, Decimal("182.25"))
+        self.assertEqual(quote.source, "tiingo_stream")
+        self.assertEqual(quote.raw_payload["stream_status"], "live")
+
+    def test_tiingo_fx_stream_message(self) -> None:
+        rate = parse_fx_message(
+            {
+                "service": "fx",
+                "messageType": "A",
+                "data": [
+                    "Q",
+                    "usdngn",
+                    "2026-08-24T14:30:00Z",
+                    1,
+                    1530,
+                    1531.5,
+                    1533,
+                    1,
+                ],
+            }
+        )
+        self.assertIsNotNone(rate)
+        assert rate is not None
+        self.assertEqual(rate.base_currency, "USD")
+        self.assertEqual(rate.quote_currency, "NGN")
+        self.assertEqual(rate.rate, Decimal("1531.5"))
+        self.assertEqual(rate.source, "tiingo_stream")
+
+    def test_tiingo_subscribe_message_redaction_boundary(self) -> None:
+        message = build_subscribe_message(
+            token="secret-token",
+            threshold_level=6,
+            tickers=["NVDA", "AAPL"],
+        )
+        self.assertIn('"authorization": "secret-token"', message)
+        self.assertIn('"authToken": "secret-token"', message)
+        self.assertIn('"thresholdLevel": 6', message)
+        self.assertIn('"nvda"', message)
+        self.assertIn('"aapl"', message)
 
 
 class FxConversionTests(TestCase):

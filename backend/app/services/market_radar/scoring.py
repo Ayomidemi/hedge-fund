@@ -1,12 +1,25 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 
 from app.core.market_constants import (
+    RADAR_POSITION_FLAG_CHANGE_PCT,
+    RADAR_POSITION_FLAG_PRICE_Z,
+    RADAR_POSITION_FLAG_SCORE,
+    RADAR_POSITION_FLAG_VOLUME_RATIO,
     RADAR_SCAN_DELTA_CHANGE_POINTS,
     RADAR_SCAN_DELTA_PRICE_PCT,
+    RADAR_UNIVERSE_FLAG_CHANGE_PCT,
+    RADAR_UNIVERSE_FLAG_SCORE,
+    RADAR_UNIVERSE_FLAG_VOLUME_RATIO,
+    RADAR_WATCHLIST_FLAG_CHANGE_PCT,
+    RADAR_WATCHLIST_FLAG_PRICE_Z,
+    RADAR_WATCHLIST_FLAG_SCORE,
+    RADAR_WATCHLIST_FLAG_VOLUME_RATIO,
 )
+
+CareTier = Literal["position", "watchlist", "queue", "universe"]
 
 
 @dataclass
@@ -45,6 +58,34 @@ class RadarCandidate:
     related_tickers: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
     sparkline: list[dict[str, Any]] = field(default_factory=list)
+    care_tier: CareTier = "universe"
+
+
+@dataclass(frozen=True)
+class CareThresholds:
+    score: Decimal
+    change_pct: Decimal
+    volume_ratio: Decimal
+    price_z: Decimal | None = None
+
+
+_UNIVERSE_THRESHOLDS = CareThresholds(
+    score=Decimal(str(RADAR_UNIVERSE_FLAG_SCORE)),
+    change_pct=Decimal(str(RADAR_UNIVERSE_FLAG_CHANGE_PCT)),
+    volume_ratio=Decimal(str(RADAR_UNIVERSE_FLAG_VOLUME_RATIO)),
+)
+_WATCHLIST_THRESHOLDS = CareThresholds(
+    score=Decimal(str(RADAR_WATCHLIST_FLAG_SCORE)),
+    change_pct=Decimal(str(RADAR_WATCHLIST_FLAG_CHANGE_PCT)),
+    volume_ratio=Decimal(str(RADAR_WATCHLIST_FLAG_VOLUME_RATIO)),
+    price_z=Decimal(str(RADAR_WATCHLIST_FLAG_PRICE_Z)),
+)
+_POSITION_THRESHOLDS = CareThresholds(
+    score=Decimal(str(RADAR_POSITION_FLAG_SCORE)),
+    change_pct=Decimal(str(RADAR_POSITION_FLAG_CHANGE_PCT)),
+    volume_ratio=Decimal(str(RADAR_POSITION_FLAG_VOLUME_RATIO)),
+    price_z=Decimal(str(RADAR_POSITION_FLAG_PRICE_Z)),
+)
 
 
 def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
@@ -109,8 +150,9 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
         flags.append("sector_relative_move")
         score += min(sector_relative * Decimal("1.5"), Decimal("9"))
 
-    if candidate.always_watched and change >= Decimal("2"):
-        flags.append("watched_move")
+    candidate.care_tier = care_tier(candidate)
+    candidate.evidence["care_tier"] = candidate.care_tier
+    score += _apply_care_tier_flags(candidate, flags, change, price_z)
 
     scan_delta = abs(_evidence_decimal(candidate, "scan_delta_change_pct") or Decimal("0"))
     scan_price = abs(_evidence_decimal(candidate, "scan_delta_price_pct") or Decimal("0"))
@@ -129,16 +171,81 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
     return candidate
 
 
+def care_tier(candidate: RadarCandidate) -> CareTier:
+    """Live positions first, then watchlist, then open queue names, then the universe.
+
+    Pulse ETFs are always_watched for coverage, not because the desk owns them.
+    They stay on the universe bar.
+    """
+    if candidate.in_portfolio:
+        return "position"
+    if candidate.on_watchlist:
+        return "watchlist"
+    if candidate.in_opportunity_queue:
+        return "queue"
+    return "universe"
+
+
+def thresholds_for(tier: CareTier) -> CareThresholds:
+    if tier == "position":
+        return _POSITION_THRESHOLDS
+    if tier in {"watchlist", "queue"}:
+        return _WATCHLIST_THRESHOLDS
+    return _UNIVERSE_THRESHOLDS
+
+
 def is_flagged(candidate: RadarCandidate) -> bool:
-    if candidate.anomaly_score >= Decimal("8"):
-        return True
-    if candidate.volume_ratio is not None and candidate.volume_ratio >= Decimal("2.5"):
-        return True
-    if candidate.change_pct is not None and abs(candidate.change_pct) >= Decimal("5"):
-        return True
     if "scan_lurch" in candidate.flags:
         return True
+    thresholds = thresholds_for(care_tier(candidate))
+    if candidate.anomaly_score >= thresholds.score:
+        return True
+    if (
+        candidate.volume_ratio is not None
+        and candidate.volume_ratio >= thresholds.volume_ratio
+    ):
+        return True
+    if (
+        candidate.change_pct is not None
+        and abs(candidate.change_pct) >= thresholds.change_pct
+    ):
+        return True
+    if thresholds.price_z is not None:
+        price_z = abs(_evidence_decimal(candidate, "price_return_zscore") or Decimal("0"))
+        if price_z >= thresholds.price_z:
+            return True
     return False
+
+
+def _apply_care_tier_flags(
+    candidate: RadarCandidate,
+    flags: list[str],
+    change: Decimal,
+    price_z: Decimal,
+) -> Decimal:
+    """Tag holdings and watchlist names earlier. Do not treat pulse ETFs as watched."""
+    tier = candidate.care_tier
+    if tier == "universe":
+        return Decimal("0")
+    thresholds = thresholds_for(tier)
+    volume_hit = (
+        candidate.volume_ratio is not None
+        and candidate.volume_ratio >= thresholds.volume_ratio
+    )
+    z_hit = thresholds.price_z is not None and price_z >= thresholds.price_z
+    if tier == "position":
+        if (
+            candidate.change_pct is not None
+            and candidate.change_pct <= -thresholds.change_pct
+        ):
+            flags.append("position_risk")
+            return Decimal("4")
+        if change >= thresholds.change_pct or volume_hit or z_hit:
+            flags.append("position_move")
+        return Decimal("0")
+    if change >= thresholds.change_pct or volume_hit or z_hit:
+        flags.append("watched_move")
+    return Decimal("0")
 
 
 def _evidence_decimal(candidate: RadarCandidate, key: str) -> Decimal | None:

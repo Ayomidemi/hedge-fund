@@ -71,6 +71,7 @@ class MarketRadarNameResponse(BaseModel):
     on_watchlist: bool = False
     pinned_prior: bool = False
     in_portfolio: bool = False
+    care_tier: str = "universe"
 
 
 class MarketRadarIndustryResponse(BaseModel):
@@ -163,5 +164,6 @@ class MarketRadarOverviewResponse(BaseModel):
     working_set: list[MarketRadarNameResponse]
     flagged: list[MarketRadarNameResponse]
     queue_candidates: list[MarketRadarNameResponse] = Field(default_factory=list)
+    desk_alerts: list[MarketRadarNameResponse] = Field(default_factory=list)
     watchlist: list[RadarWatchlistItemResponse] = Field(default_factory=list)
     scan_changes: list[MarketRadarNameResponse] = Field(default_factory=list)

@@ -64,6 +64,19 @@ async def build_radar_overview(
         for item in named_flagged
         if item.auto_promote or item.radar_priority in {"P0", "P1"}
     ]
+    queue_tickers = {item.ticker for item in queue_candidates}
+    desk_alerts = [
+        item
+        for item in named_flagged
+        if item.care_tier in {"position", "watchlist", "queue"}
+        and item.ticker not in queue_tickers
+    ]
+    desk_alerts.sort(
+        key=lambda item: (
+            {"position": 0, "watchlist": 1, "queue": 2}.get(item.care_tier, 9),
+            item.ticker,
+        )
+    )
 
     return MarketRadarOverviewResponse(
         generated_at=now,
@@ -81,6 +94,7 @@ async def build_radar_overview(
         ],
         flagged=named_flagged,
         queue_candidates=queue_candidates,
+        desk_alerts=desk_alerts,
         watchlist=watchlist_items,
         scan_changes=[
             _name_response(row, watchlist_tickers)
@@ -166,6 +180,7 @@ def _name_response(
         on_watchlist=watchlist,
         pinned_prior=bool(evidence.get("pinned_prior")),
         in_portfolio=bool(evidence.get("in_portfolio")),
+        care_tier=_care_tier_value(row, evidence, watchlist),
     )
 
 
@@ -225,6 +240,21 @@ def _sorted(rows: list[RadarSnapshot]) -> list[RadarSnapshot]:
 
 def _priority_value(row: RadarSnapshot, evidence: dict) -> str | None:
     return getattr(row, "radar_priority", None) or evidence.get("radar_priority")
+
+
+def _care_tier_value(
+    _row: RadarSnapshot, evidence: dict, watchlist: bool
+) -> str:
+    stored = evidence.get("care_tier")
+    if stored in {"position", "watchlist", "queue", "universe"}:
+        return stored
+    if evidence.get("in_portfolio"):
+        return "position"
+    if watchlist:
+        return "watchlist"
+    if evidence.get("in_opportunity_queue"):
+        return "queue"
+    return "universe"
 
 
 def _priority_count(rows: list[RadarSnapshot], priority: str) -> int:

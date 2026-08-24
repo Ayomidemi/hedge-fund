@@ -115,7 +115,9 @@ def _sector_benchmarks() -> dict[str, str]:
 
 RADAR_SECTOR_BENCHMARKS = _sector_benchmarks()
 
-RADAR_VENDOR_QUOTE_SOURCES = frozenset({"fmp", "tiingo", "polygon", "ngnmarket"})
+RADAR_VENDOR_QUOTE_SOURCES = frozenset(
+    {"fmp", "tiingo", "tiingo_stream", "polygon", "ngnmarket"}
+)
 
 # Opportunity Queue promotion. Flagged names stay on Radar; only P0/P1
 # auto-enter the queue, and pulse ETFs never do.
@@ -123,3 +125,20 @@ RADAR_AUTO_PROMOTE_PRIORITIES = ("P0", "P1")
 RADAR_MAX_P1_PROMOTIONS_PER_OWNER = 5
 RADAR_ILLIQUID_USD_DOLLAR_VOLUME = 500_000
 RADAR_PULSE_TICKERS = frozenset(ticker for ticker, _sector, _asset in RADAR_SECTOR_ETFS)
+
+# Care-tier flag thresholds. Same scanner, different sensitivity:
+# live positions first, watchlist/queue next, everyone else last.
+# Pulse ETFs stay on the universe bar even though they are always_watched.
+RADAR_UNIVERSE_FLAG_SCORE = 8
+RADAR_UNIVERSE_FLAG_CHANGE_PCT = 5
+RADAR_UNIVERSE_FLAG_VOLUME_RATIO = 2.5
+
+RADAR_WATCHLIST_FLAG_SCORE = 5
+RADAR_WATCHLIST_FLAG_CHANGE_PCT = 2.5
+RADAR_WATCHLIST_FLAG_VOLUME_RATIO = 1.8
+RADAR_WATCHLIST_FLAG_PRICE_Z = 1.5
+
+RADAR_POSITION_FLAG_SCORE = 3
+RADAR_POSITION_FLAG_CHANGE_PCT = 2
+RADAR_POSITION_FLAG_VOLUME_RATIO = 1.5
+RADAR_POSITION_FLAG_PRICE_Z = 1.25

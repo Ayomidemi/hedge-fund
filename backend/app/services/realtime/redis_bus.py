@@ -37,13 +37,21 @@ async def publish_event(event: dict[str, Any]) -> bool:
         client = aioredis.from_url(settings.redis_url)
         try:
             await client.publish(PLATFORM_EVENTS_CHANNEL, json.dumps(event))
+            if event.get("type") == "news.poll_completed":
+                logger.info(
+                    "news_event_published run_id=%s status=%s target_key=%s",
+                    event.get("payload", {}).get("run_id"),
+                    event.get("payload", {}).get("status"),
+                    event.get("payload", {}).get("target_key"),
+                )
             return True
         finally:
             await client.aclose()
     except Exception as exc:  # noqa: BLE001 - best-effort by design
         logger.warning(
-            "event_publish_failed",
-            extra={"event_type": event.get("type"), "error": str(exc)},
+            "event_publish_failed event_type=%s error=%s",
+            event.get("type"),
+            exc,
         )
         return False
 
@@ -61,7 +69,15 @@ async def subscribe_events() -> AsyncGenerator[dict[str, Any]]:
             if message.get("type") != "message":
                 continue
             try:
-                yield json.loads(message["data"])
+                event = json.loads(message["data"])
+                if event.get("type") == "news.poll_completed":
+                    logger.info(
+                        "news_event_received run_id=%s status=%s target_key=%s",
+                        event.get("payload", {}).get("run_id"),
+                        event.get("payload", {}).get("status"),
+                        event.get("payload", {}).get("target_key"),
+                    )
+                yield event
             except (json.JSONDecodeError, TypeError, KeyError):
                 logger.warning("event_parse_failed")
     finally:

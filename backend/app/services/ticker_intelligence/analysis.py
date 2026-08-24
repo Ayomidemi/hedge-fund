@@ -18,6 +18,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerDeskPreTrade,
     TickerDeskRadar,
     TickerDeskResponse,
+    TickerDeskTriage,
     TickerMemoResponse,
     TickerMemoSummaryResponse,
     TickerScoreResponse,
@@ -37,6 +38,7 @@ from app.models import (
     RadarSnapshot,
     RadarWatchlistItem,
     TickerMemo,
+    TickerTriageRun,
 )
 from app.services.administration.system_log import record_system_log
 from app.services.market_data.universe import quote_symbol_for
@@ -269,10 +271,12 @@ async def get_ticker_desk(
     )
     opportunity = None
     position = None
+    latest_triage = None
     memos: list[TickerMemo] = []
     if instrument is not None:
         opportunity = await _load_desk_opportunity(session, user.id, instrument.id)
         position = await _load_desk_position(session, user.id, instrument.id)
+        latest_triage = await _load_latest_triage(session, user.id, instrument.id)
         memos = await _load_desk_memos(session, user.id, instrument.id)
 
     news = await _load_desk_news(session, variants)
@@ -362,6 +366,22 @@ async def get_ticker_desk(
             if position is not None
             else None
         ),
+        latest_triage=(
+            TickerDeskTriage(
+                id=latest_triage.id,
+                generated_at=latest_triage.generated_at,
+                research_priority=latest_triage.research_priority,
+                initial_view=latest_triage.initial_view,
+                triage_decision=latest_triage.triage_decision,
+                action_label=latest_triage.action_label,
+                confidence_score=latest_triage.confidence_score,
+                composite_score=latest_triage.composite_score,
+                recommended_weight=latest_triage.recommended_weight,
+                next_action=latest_triage.next_action,
+            )
+            if latest_triage is not None
+            else None
+        ),
         memos=[_memo_summary(memo) for memo in memos],
     )
 
@@ -442,6 +462,21 @@ async def _load_desk_position(
         .where(Position.instrument_id == instrument_id)
         .where(Position.quantity > 0)
         .where(Position.closed_at.is_(None))
+    )
+
+
+async def _load_latest_triage(
+    session: AsyncSession, owner_user_id: str, instrument_id
+) -> TickerTriageRun | None:
+    return await session.scalar(
+        select(TickerTriageRun)
+        .where(TickerTriageRun.owner_user_id == owner_user_id)
+        .where(TickerTriageRun.instrument_id == instrument_id)
+        .order_by(
+            TickerTriageRun.generated_at.desc(),
+            TickerTriageRun.created_at.desc(),
+        )
+        .limit(1)
     )
 
 

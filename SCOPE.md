@@ -4361,7 +4361,1045 @@ Build toward section 18.8 without delaying the operating desk:
 
 ---
 
-# 21. Definition of success
+# 21. Real-Time Data and Market Intelligence
+
+## Objective
+
+Pease Capital's data infrastructure should provide **near-real-time market awareness** without requiring every internal feature to independently poll external vendors.
+
+The previous 10-30 minute model should evolve into a hybrid architecture:
+
+```text
+REAL-TIME STREAMS
++
+EVENT-DRIVEN PROCESSING
++
+SHORT-INTERVAL POLLING
++
+SLOW REFERENCE-DATA REFRESH
+```
+
+Different information changes at different speeds. Data should be refreshed according to how quickly the underlying information changes, not according to one global scheduler.
+
+This is not high-frequency trading infrastructure. The goal is for Pease Capital to know that something important is happening within seconds or minutes rather than 10-30 minutes later.
+
+## Target latency
+
+```text
+US price change -> Pease Capital     < 5 seconds
+FX change -> Pease Capital           < 5 seconds
+Portfolio value update              5-15 seconds
+Watchlist market alert              < 30 seconds
+Radar anomaly detection             30-60 seconds
+Existing-position risk alert        < 30 seconds
+News discovery                      1-2 minutes
+Radar AI event summary              1-3 minutes
+Ticker Analyst market metrics       < 1 minute old
+Macro data                          source-dependent
+Fundamentals                        event/daily
+```
+
+## Core architecture
+
+```text
+                     EXTERNAL DATA
+          Tiingo          SEC          NGX Provider
+             |             |                |
+      WebSocket + REST  Events/API       REST/Stream
+             |             |                |
+             +-------------+----------------+
+                           |
+                           v
+                    PROVIDER ADAPTERS
+                           |
+                           v
+                     EVENT INGESTION
+                           |
+             +-------------+-------------+
+             v             v             v
+          Quotes          News           FX
+             |             |             |
+             +-------------+-------------+
+                           |
+                           v
+                       EVENT BUS
+                           |
+        +------------------+------------------+
+        v                  v                  v
+ Snapshot Store     Feature Engine     Historical Store
+        |                  |
+        +------------------+------------------+
+                           |
+                           v
+                      FUND SYSTEMS
+                           |
+        +------------------+------------------+
+        v                  v                  v
+ Market Radar       Ticker Analyst       Portfolio
+        |                  |                  |
+        v                  v                  v
+ Opportunity         Risk Centre       Performance
+ Queue
+```
+
+## Tiingo streaming role
+
+Tiingo should become a streaming provider for US market data and FX where the subscribed plan supports it.
+
+Do not poll Tiingo every few minutes for prices. Use Tiingo's WebSocket feeds:
+
+```text
+wss://api.tiingo.com/iex
+wss://api.tiingo.com/fx
+```
+
+For Pease Capital's current use case, a real-time reference-price stream is sufficient for Radar, monitoring and portfolio valuation. The fund is not currently building an execution algorithm requiring full exchange order-book reconstruction.
+
+## Equity streaming strategy
+
+Do not consume every market event from every US-listed security. Subscribe intelligently rather than indiscriminately.
+
+Use subscription tiers:
+
+```text
+Tier 0  Existing positions
+Tier 1  Active investment candidates
+Tier 2  Watchlist
+Tier 3  Market Radar universe
+```
+
+## Tier 0: Existing positions
+
+Current portfolio holdings are the most important securities in the fund.
+
+Subscribe continuously during the trading session.
+
+Target:
+
+```text
+Provider update -> internal snapshot: immediate
+Feature refresh: 5-15 seconds
+Risk evaluation: 5-15 seconds
+```
+
+Changes should immediately update:
+
+* portfolio NAV;
+* position P&L;
+* exposure;
+* portfolio weights;
+* stop/thesis conditions;
+* Risk Centre.
+
+## Tier 1: Active investment candidates
+
+Includes:
+
+* investment candidates;
+* P0/P1 Opportunity Queue names;
+* securities currently undergoing deep research.
+
+Stream continuously.
+
+Target:
+
+```text
+Market snapshot: real-time
+Radar evaluation: 15-30 seconds
+Ticker Analyst metrics: <30 seconds old
+```
+
+## Tier 2: Watchlist
+
+All explicit watchlist names should be streamed where coverage permits.
+
+Target:
+
+```text
+Price monitoring: real-time stream
+Feature evaluation: 30 seconds
+Material alert: <60 seconds
+```
+
+## Tier 3: Market Radar universe
+
+The liquid Radar universe should consume streaming prices, but Radar should not react to every individual tick.
+
+Instead:
+
+```text
+WebSocket events
+  -> short rolling buffer
+  -> 30-60 second aggregation
+  -> Radar feature calculation
+```
+
+Example:
+
+```text
+10:31:00-10:31:59
+NVDA: open, high, low, last, volume delta
+-> calculate 1-minute observation
+```
+
+Market Radar therefore receives new signal information approximately every minute without polling the vendor every minute.
+
+## New Radar cadence
+
+Replace:
+
+```text
+Every 30 minutes: scan market
+```
+
+with:
+
+```text
+CONTINUOUS: receive market events
+EVERY 30-60 SECONDS: update Radar features
+WHEN SIGNAL THRESHOLD CROSSED: create/update Radar event immediately
+```
+
+An abnormal move should not wait until the next scheduler.
+
+## Event-driven Radar
+
+Radar should maintain state for every monitored instrument.
+
+Example:
+
+```text
+AAPL
+Previous state: return_z = 1.1
+New state: return_z = 3.0
+Threshold: 2.5
+```
+
+When a threshold is crossed:
+
+```text
+THRESHOLD CROSS
+  -> Radar Event
+  -> Priority calculation
+  -> Relationship analysis
+  -> News lookup
+  -> AI summary if material
+```
+
+## Radar evaluation frequency
+
+Recommended:
+
+```text
+Tier 0 positions       5-15 seconds
+Tier 1 opportunities   15-30 seconds
+Tier 2 watchlist       30 seconds
+Tier 3 liquid universe 60 seconds
+```
+
+This does not mean calling Tiingo every 60 seconds. The stream is continuous. The recalculation happens from locally received data.
+
+## Market Radar feature windows
+
+Radar should maintain several windows simultaneously:
+
+```text
+1 minute
+5 minutes
+15 minutes
+1 hour
+1 day
+```
+
+Example:
+
+```text
+AAPL
+1M abnormal move       1.4 sigma
+5M abnormal move       2.8 sigma
+15M abnormal move      3.1 sigma
+1H abnormal move       2.2 sigma
+1D abnormal move       1.7 sigma
+```
+
+Radar should distinguish sudden shocks from persistent session trends.
+
+## Volume monitoring
+
+Do not wait for daily volume. Maintain cumulative volume and compare expected volume at that time of day.
+
+Move from:
+
+```text
+Current volume / Average daily volume
+```
+
+to:
+
+```text
+Volume as of 11:15 AM / Historical average volume as of 11:15 AM
+```
+
+This gives Radar a better abnormal-volume signal.
+
+## Existing position monitoring
+
+Positions should receive the fastest monitoring in the fund.
+
+Pipeline:
+
+```text
+Price Event
+  -> Position Snapshot
+  -> P&L
+  -> Exposure
+  -> Risk Limits
+  -> Thesis Conditions
+```
+
+Target:
+
+```text
+5-15 seconds
+```
+
+Example:
+
+```text
+AAPL
+Move: -4.8%
+Intraday z-score: -3.1
+Volume: 2.7x expected
+Existing position: YES
+Result: P0 POSITION REVIEW
+```
+
+This should immediately surface in:
+
+* Risk Centre;
+* Portfolio;
+* Market Radar;
+* Ticker Desk.
+
+## Portfolio valuation
+
+The portfolio should no longer fetch prices directly. It should consume the current internal market snapshot.
+
+```text
+WebSocket
+  -> MarketSnapshot
+  -> Portfolio valuation
+```
+
+Target UI update:
+
+```text
+5-15 seconds
+```
+
+## FX architecture
+
+FX should also move from polling to WebSockets where provider coverage permits.
+
+Maintain live FX snapshots such as:
+
+```text
+USDNGN
+EURUSD
+GBPUSD
+EURNGN
+```
+
+Pipeline:
+
+```text
+FX stream
+  -> FXSnapshot
+  -> Portfolio conversion
+  -> Risk
+  -> Performance
+```
+
+Target:
+
+```text
+FX snapshot: <5 seconds old
+Portfolio recalculation: 5-15 seconds
+```
+
+## News monitoring
+
+News is different from prices. Do not needlessly poll every ticker.
+
+Maintain one central news ingestion process.
+
+Target:
+
+```text
+every 60-120 seconds
+```
+
+Pipeline:
+
+```text
+Tiingo News
+  -> fetch only articles newer than cursor
+  -> deduplicate
+  -> entity extraction
+  -> map to instruments / sectors
+  -> materiality filter
+  -> event engine
+```
+
+The same article can then affect:
+
+* Market Radar;
+* Watchlist;
+* Ticker Analyst;
+* Position Monitoring;
+* Industry Radar.
+
+One fetch. Multiple consumers.
+
+## Watchlist news
+
+Watchlist names receive increased sensitivity.
+
+Example:
+
+```text
+News arrives
+  -> Entity = AAPL
+  -> AAPL is watchlisted
+  -> Event importance threshold reduced
+```
+
+Target:
+
+```text
+News discovered: 1-2 minutes
+Watchlist event: <2 minutes
+AI summary: <3 minutes
+```
+
+## Position news
+
+Current holdings should receive the highest priority.
+
+```text
+Article
+  -> Current position affected?
+  -> YES
+  -> Materiality analysis
+  -> Risk/thesis alert
+```
+
+Target:
+
+```text
+1-2 minutes
+```
+
+## AI market summaries
+
+AI should not run according to a fixed 30-minute timer. Run AI when something meaningful happens.
+
+Trigger examples:
+
+```text
+P0/P1 Radar event
+Sector anomaly
+Material position news
+Watchlist material news
+Industry breadth shock
+Macro event
+Relationship/rotation event
+```
+
+Pipeline:
+
+```text
+Structured Event
+  -> Evidence bundle
+  -> AI summary
+```
+
+## AI summary latency
+
+For important events:
+
+```text
+market event occurs
+  -> Radar detects:       <60 sec
+  -> evidence collected:  <90 sec
+  -> AI summary:          ~1-3 min total
+```
+
+## Industry Radar
+
+Sector and industry analysis should recompute approximately every minute using locally stored streamed observations.
+
+Track:
+
+* industry return;
+* breadth;
+* abnormal return;
+* volume;
+* volatility;
+* number of flagged names;
+* relative strength.
+
+Example:
+
+```text
+SEMICONDUCTORS
+
+11:32:00
+Breadth:     82% positive
+Return:      +2.1%
+Rel volume:  1.6x
+Anomalies:   7
+
+11:33:00
+Breadth:     91% positive
+Return:      +2.8%
+Rel volume:  1.9x
+Anomalies:   12
+```
+
+## Capital Rotation Engine
+
+The Alternatives/Rotation engine should also become event-driven.
+
+When an industry reaches an anomaly threshold:
+
+```text
+Oil & Gas shock detected
+  -> query relationship graph
+  -> retrieve historical alternatives
+  -> check current relative strength
+  -> rank potential beneficiaries
+```
+
+Target:
+
+```text
+within 1-2 minutes of industry event
+```
+
+## Ticker Analyst freshness
+
+Ticker Analyst should use multiple freshness classes:
+
+```text
+Market data    <60 seconds
+News           <2 minutes where possible
+Radar context  real-time / latest event
+FX             <15 seconds
+Fundamentals   event-driven on filings + daily consistency refresh
+```
+
+Fundamentals do not require real-time polling.
+
+## Quick Triage
+
+When Ticker Analyst opens a ticker, do not fire five external API calls.
+
+It should already have:
+
+```text
+latest market snapshot
+latest Radar features
+latest industry state
+latest news
+latest fundamentals
+current regime
+portfolio position
+watchlist status
+```
+
+Then Quick Triage becomes effectively instant.
+
+Target:
+
+```text
+<1 second internal response
+```
+
+Only missing enrichment should trigger external calls.
+
+## Fundamental refresh
+
+Financial statements that have not changed should not consume API capacity every minute.
+
+Use:
+
+```text
+SEC filing event -> immediately refresh affected company
+Daily -> consistency refresh
+```
+
+## SEC filing monitor
+
+For US securities:
+
+```text
+Portfolio, opportunities, watchlist: 5 minutes
+Broader universe: 15 minutes
+```
+
+Or use an event-capable source later.
+
+New filing flow:
+
+```text
+detect
+  -> ingest
+  -> extract differences
+  -> Ticker Analyst update
+  -> AI filing summary
+```
+
+## Macro and regime updates
+
+Market-derived regime inputs update from streams:
+
+* equity prices;
+* volatility proxies;
+* bonds;
+* commodities;
+* FX.
+
+Update target:
+
+```text
+1 minute
+```
+
+Economic releases such as CPI, unemployment and GDP should update when the data is released, not every minute.
+
+## Data priority matrix
+
+| Data | Acquisition | Internal update target |
+| --- | --- | ---: |
+| Current positions | WebSocket | 5-15 sec |
+| Investment candidates | WebSocket | 15-30 sec |
+| Watchlist prices | WebSocket | 30 sec |
+| Radar universe | WebSocket | 60 sec aggregation |
+| Portfolio NAV | Internal | 5-15 sec |
+| FX | WebSocket | <5 sec snapshot |
+| Sector/industry state | Internal | 60 sec |
+| Radar anomaly | Internal | 30-60 sec |
+| Rotation signals | Event-driven | 1-2 min |
+| News | REST incremental | 1-2 min |
+| Watchlist news alerts | Event-driven | 1-2 min |
+| AI summaries | Event-driven | 1-3 min |
+| Ticker Analyst price | Internal | <60 sec |
+| Fundamentals | Event/daily | filing-dependent |
+| SEC filings | Incremental | ~5 min priority |
+| Instrument metadata | Scheduled | weekly |
+
+## Internal event bus
+
+A real-time fund needs events.
+
+Example events:
+
+```text
+PRICE_UPDATED
+FX_UPDATED
+RADAR_THRESHOLD_CROSSED
+RADAR_PRIORITY_CHANGED
+SECTOR_ANOMALY_DETECTED
+INDUSTRY_ROTATION_DETECTED
+NEWS_RECEIVED
+MATERIAL_NEWS_DETECTED
+FILING_RECEIVED
+WATCHLIST_ALERT
+POSITION_ALERT
+THESIS_RISK_DETECTED
+```
+
+Systems subscribe only to the events they care about.
+
+## Example: market event flow
+
+Suppose NVDA begins moving unusually:
+
+```text
+10:42:06 Tiingo reference price update
+10:42:10 Internal MarketSnapshot updated
+10:42:30 1-minute Radar features recalculated
+          Return z-score: 2.9
+          Relative volume: 2.2x
+          Sector residual: +3.1%
+10:42:31 RADAR_THRESHOLD_CROSSED
+```
+
+Immediately:
+
+```text
+Radar Priority Engine
+Industry Engine
+Relationship Engine
+News Lookup
+```
+
+By approximately 10:43-10:44, the system could produce an enriched explanation:
+
+```text
+NVDA has broken significantly above semiconductor peers on elevated volume.
+The movement appears company-specific rather than simply sector-wide.
+Two related semiconductor names are beginning to show sympathetic strength.
+Relevant news...
+```
+
+## Example: portfolio risk event
+
+```text
+AAPL held by fund
+14:06:04 price update
+14:06:12 portfolio weight recalculated
+14:06:15 position volatility threshold crossed
+```
+
+Result:
+
+```text
+POSITION_ALERT
+AAPL P0
+Reason: Intraday move exceeds risk threshold
+Volume unusually high
+Position contributes 22% of current portfolio VaR
+```
+
+## Stream processing rules
+
+Do not recalculate every expensive model on every tick.
+
+Use a hierarchy:
+
+```text
+EVERY PRICE UPDATE
+  -> update raw snapshot
+
+EVERY 5-15 SEC
+  -> portfolio/risk lightweight calculations
+
+EVERY 30-60 SEC
+  -> Radar features
+
+WHEN THRESHOLD CROSSED
+  -> deeper analysis
+
+WHEN MATERIAL EVENT OCCURS
+  -> AI / Ticker Analyst / relationship models
+```
+
+This gives speed without waste.
+
+## Model recalculation
+
+Models also have different speeds.
+
+Very fast:
+
+```text
+returns
+volume
+momentum
+volatility
+relative strength
+sector residual
+```
+
+Recalculate every 30-60 seconds.
+
+Medium:
+
+```text
+regime probabilities
+portfolio correlations
+short-horizon ML signals
+```
+
+Recalculate every 5-15 minutes or on material state change.
+
+Slow:
+
+```text
+fundamental model
+valuation
+long-horizon ML
+```
+
+Recalculate daily or when underlying data changes.
+
+## Data latency versus model latency
+
+Pease Capital wants data near real-time, but it does not need DCF valuation every second.
+
+A ticker can have a new price every second while its fundamental valuation updates only after:
+
+* earnings;
+* guidance;
+* a material event;
+* a meaningful price threshold.
+
+## Tiingo bandwidth protection
+
+WebSockets reduce REST request pressure, but streaming a full firehose can generate substantial bandwidth.
+
+Use:
+
+```text
+Positions
+Candidates
+Watchlist
+Liquid Radar universe
+```
+
+Do not subscribe to every available US security.
+
+## Tiingo reference price
+
+Tiingo can provide a real-time derived equity reference price through its IEX WebSocket using `thresholdLevel 6`, subject to the subscribed plan and Tiingo's current product terms.
+
+This is well suited for Pease Capital's current needs:
+
+* fresh reference prices;
+* movement detection;
+* portfolio valuation;
+* anomaly signals.
+
+The fund does not currently require a complete exchange-level order book. If full IEX TOPS data is later required, exchange licensing requirements should be reviewed at that time.
+
+## Nigeria
+
+Nigeria should maintain the current provider structure until the upgraded NGX-capable plan is available.
+
+The rest of Pease Capital should not care whether the update came from:
+
+```text
+WebSocket
+```
+
+or:
+
+```text
+REST poll
+```
+
+Both should normalize into the same internal `MarketSnapshot`.
+
+## Failure strategy
+
+If a stream disconnects:
+
+```text
+WebSocket disconnected
+  -> mark provider degraded
+  -> attempt reconnect
+  -> temporarily use REST
+  -> restore stream
+```
+
+The application should never silently serve indefinitely stale data.
+
+Display:
+
+```text
+Market feed: DEGRADED
+Last valid update: 46 seconds ago
+```
+
+## Freshness metadata
+
+Every snapshot must expose:
+
+```text
+provider_timestamp
+received_at
+processed_at
+age_seconds
+source
+stream_status
+```
+
+Example:
+
+```text
+AAPL Price: $XXX
+Source: Tiingo IEX Reference
+Market timestamp: 15:32:05.218
+Received: 15:32:05.401
+Age: 2.1 sec
+```
+
+## Data Health Dashboard
+
+Add a small internal system dashboard.
+
+Example:
+
+```text
+PEASE CAPITAL DATA STATUS
+US Equities LIVE   Latency: 1.4 sec
+FX LIVE            Latency: 0.8 sec
+News LIVE          Last poll: 42 sec ago
+NGX LIVE           Last update: 74 sec ago
+SEC HEALTHY        Last check: 3 min ago
+```
+
+This becomes important once the portfolio depends on automation.
+
+## Revised Market Radar architecture
+
+Market Radar should become:
+
+```text
+                 MARKET RADAR
+                     STREAM
+                       |
+                       v
+               Live Market State
+                       |
+                       v
+              1-Minute Features
+                       |
+         +-------------+-------------+
+         v             v             v
+   Security       Industry       Cross-Asset
+   Anomalies      Anomalies      Relationships
+         |             |             |
+         +-------------+-------------+
+                       |
+                       v
+                Priority Engine
+                       |
+              threshold crossed?
+                       |
+                      YES
+                       |
+                       v
+              Evidence Enrichment
+                       |
+              +--------+--------+
+              v                 v
+            News          Relationships
+              |                 |
+              +--------+--------+
+                       |
+                       v
+                  AI Summary
+                       |
+                       v
+              Opportunity Candidate
+```
+
+## Revised timing philosophy
+
+Pease Capital should no longer think:
+
+```text
+Run every X minutes.
+```
+
+It should think:
+
+```text
+Listen continuously.
+Aggregate intelligently.
+React when state changes.
+```
+
+Desired operating model:
+
+```text
+Prices       seconds
+FX           seconds
+Portfolio    seconds
+Risk         seconds
+Radar        <1 minute
+News         1-2 minutes
+AI           event-driven, ~1-3 minutes
+Ticker Desk  near-current
+Fundamental  when reality changes
+```
+
+## Immediate implementation priority
+
+Phase 1: Streaming foundation
+
+1. Tiingo equity WebSocket client
+2. Tiingo FX WebSocket client
+3. Reconnect / heartbeat handling
+4. Ticker subscription management
+5. Normalized `MarketSnapshot`
+6. Normalized `FXSnapshot`
+7. Local current-state cache
+
+Phase 2: Real-time consumers
+
+8. Portfolio consumes live snapshots
+9. Risk Centre consumes live snapshots
+10. Watchlist consumes live snapshots
+11. Ticker Desk consumes snapshots
+
+Phase 3: Real-time Radar
+
+12. Rolling 1-minute bar builder
+13. Rolling feature engine
+14. Threshold detection
+15. Event bus
+16. Sector/industry aggregation
+17. Radar priority recalculation
+
+Phase 4: Intelligence
+
+18. News polling every 60-120 seconds
+19. News deduplication
+20. Event materiality
+21. Relationship engine triggers
+22. Alternatives / rotation engine
+23. AI evidence summaries
+
+Phase 5: Reliability
+
+24. Fallback REST mode
+25. Provider-health tracking
+26. Latency metrics
+27. Stale-data detection
+28. Usage/bandwidth monitoring
+29. Data-health dashboard
+
+## Final target
+
+The new data infrastructure should create this experience:
+
+> If something material begins happening to a security, industry, watchlist name, portfolio position, FX rate or related market, Pease Capital should generally become aware of the market movement within seconds, classify it within roughly a minute, and produce enriched intelligence within a few minutes.
+
+This replaces:
+
+```text
+10-30 MINUTE POLLING SYSTEM
+```
+
+with:
+
+```text
+CONTINUOUS DATA
++
+~1 MINUTE MARKET INTELLIGENCE
++
+EVENT-DRIVEN RESEARCH
+```
+
+That is much closer to the architecture appropriate for Market Radar, Ticker Analyst, Risk Centre and the portfolio system.
+
+---
+
+# 22. Definition of success
 
 The fund’s first year will be considered successful when:
 
@@ -4382,7 +5420,7 @@ The objective is to build an investment institution whose first capital base hap
 
 ---
 
-# 22. Final operating model
+# 23. Final operating model
 
 Pease Capital will be:
 

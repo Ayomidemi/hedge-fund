@@ -9,7 +9,7 @@ type ModalProps = {
   description?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  size?: "md" | "lg" | "xl";
+  size?: "md" | "lg" | "xl" | "screen";
 };
 
 export function Modal({
@@ -65,8 +65,16 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`relative z-10 flex max-h-[calc(100dvh-12rem)] w-full flex-col modal-panel ${
-          size === "xl" ? "max-w-5xl" : size === "lg" ? "max-w-2xl" : "max-w-lg"
+        className={`relative z-10 flex w-full flex-col modal-panel ${
+          size === "screen" ? "max-h-[calc(100dvh-2rem)]" : "max-h-[calc(100dvh-12rem)]"
+        } ${
+          size === "screen"
+            ? "max-w-7xl"
+            : size === "xl"
+              ? "max-w-5xl"
+              : size === "lg"
+                ? "max-w-2xl"
+                : "max-w-lg"
         }`}
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">

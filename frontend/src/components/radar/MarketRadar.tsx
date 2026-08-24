@@ -18,7 +18,6 @@ import {
   type MarketRadarOverview,
   type RadarWatchlistItem,
 } from "@/lib/api";
-import { WatchlistStrip } from "@/components/radar/WatchlistStrip";
 
 type MarketRadarProps = {
   initialOverview: MarketRadarOverview | null;
@@ -150,7 +149,6 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
 
   return (
     <div className="mx-auto max-w-[1560px] space-y-5">
-      <WatchlistStrip items={overview.watchlist ?? []} onChanged={() => reload()} />
       <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
           <div>
@@ -159,11 +157,14 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
             </p>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">Market Radar</h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Industry-grouped unusual volume, price and risk. Names you have never
-              typed can still appear here.
+              Industry-grouped unusual volume, price and risk. Holdings and watchlist
+              names flag earlier than the rest of the universe.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Link href="/watchlist" className={buttonSecondaryClassName}>
+              Watchlist
+            </Link>
             {(["all", "US", "NG"] as const).map((key) => (
               <button
                 key={key}
@@ -258,6 +259,26 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
             {overview.queue_candidates?.map((name) => (
               <NameRow
                 key={`queue-${name.ticker}`}
+                name={name}
+                busy={busyTickers.has(name.ticker)}
+                onWatchToggle={handleWatchToggle}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {(overview.desk_alerts?.length ?? 0) > 0 ? (
+        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+          <h3 className="text-sm font-semibold">Held & watched</h3>
+          <p className="mt-1 text-xs text-zinc-500">
+            Positions, watchlist and open queue names that moved enough to matter on the
+            book, but not enough to auto-open a queue row.
+          </p>
+          <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-900">
+            {overview.desk_alerts?.map((name) => (
+              <NameRow
+                key={`desk-${name.ticker}`}
                 name={name}
                 busy={busyTickers.has(name.ticker)}
                 onWatchToggle={handleWatchToggle}
@@ -384,13 +405,15 @@ function NameRow({
             <Chip tone={priorityTone(name.radar_priority)}>{name.radar_priority}</Chip>
           ) : null}
           {name.carried_forward ? <Chip tone="zinc">prior session</Chip> : null}
-          {name.on_watchlist ? <Chip tone="emerald">watchlist</Chip> : null}
-          {name.always_watched && !name.on_watchlist ? <Chip tone="zinc">watched</Chip> : null}
-          {name.flags.slice(0, 3).map((flag) => (
-            <Chip key={flag} tone={flagTone(flag)}>
-              {flag.replaceAll("_", " ")}
-            </Chip>
-          ))}
+          <CareChip name={name} />
+          {name.flags
+            .filter((flag) => !CARE_FLAGS.has(flag))
+            .slice(0, 3)
+            .map((flag) => (
+              <Chip key={flag} tone={flagTone(flag)}>
+                {flag.replaceAll("_", " ")}
+              </Chip>
+            ))}
         </div>
       </div>
       <Sparkline points={name.sparkline} changePct={name.change_pct} />
@@ -499,6 +522,30 @@ function priorityTone(priority: string): "amber" | "emerald" | "rose" | "zinc" {
   return "zinc";
 }
 
+function CareChip({ name }: { name: MarketRadarName }) {
+  const flagged = name.flags.length > 0 || Boolean(name.radar_priority);
+  const tier = name.care_tier;
+  if (tier === "position") {
+    return (
+      <Chip tone="rose">{flagged ? "position alert" : "held"}</Chip>
+    );
+  }
+  if (tier === "watchlist" || name.on_watchlist) {
+    return (
+      <Chip tone="emerald">{flagged && tier === "watchlist" ? "watchlist alert" : "watchlist"}</Chip>
+    );
+  }
+  if (tier === "queue") {
+    return <Chip tone={flagged ? "amber" : "zinc"}>{flagged ? "queue alert" : "queue"}</Chip>;
+  }
+  if (name.always_watched) {
+    return <Chip tone="zinc">watched</Chip>;
+  }
+  return null;
+}
+
+const CARE_FLAGS = new Set(["position_risk", "position_move", "watched_move"]);
+
 function Chip({
   children,
   tone,
@@ -602,6 +649,8 @@ function patchWatchlist(
     watchlist,
     working_set: overview.working_set.map(patchName),
     flagged: overview.flagged.map(patchName),
+    queue_candidates: (overview.queue_candidates ?? []).map(patchName),
+    desk_alerts: (overview.desk_alerts ?? []).map(patchName),
     scan_changes: (overview.scan_changes ?? []).map(patchName),
     industries: overview.industries.map((industry) => ({
       ...industry,

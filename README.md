@@ -46,11 +46,19 @@ Database health: http://localhost:8000/api/health/db
 
 For Supabase, set `HF_SUPABASE_DATABASE_URL` in the root `.env` or `backend/.env` to the Supabase Postgres pooler connection string. The backend accepts `postgresql://`, `postgres://`, or `postgresql+asyncpg://`, normalizes Postgres URLs for async SQLAlchemy, and applies Supabase pooler-safe connection options.
 
-### 3. Live price platform (Celery worker)
+### 3. Live price platform
 
-Prices are refreshed centrally by a Celery beat schedule, written to
-`instrument_quotes`, applied to every open position (mark-to-market), and
-pushed to the frontend over WebSocket (`/api/ws`) via Redis pub/sub.
+Prices are written centrally to `instrument_quotes`, applied to every open
+position (mark-to-market), and pushed to the frontend over WebSocket
+(`/api/ws`) via Redis pub/sub.
+
+With `HF_TIINGO_STREAM_ENABLED=true`, US equity marks are streamed from Tiingo
+into the internal cache. FX streaming is separately opt-in with
+`HF_TIINGO_FX_STREAM_ENABLED=true` once the target pairs are confirmed on the
+Tiingo plan. The Celery price refresh remains as a slower fallback/backfill path
+and skips US tickers that already have a fresh stream quote. NGX names continue
+through the NGN Market REST path until an upgraded NGX-capable stream/source is
+available.
 
 Start the full backend stack (Redis + API + Celery) with one command:
 
@@ -67,8 +75,15 @@ Stop API and Celery:
 The key timing and News Centre knobs are in the root `.env`:
 
 ```env
-HF_PRICE_REFRESH_INTERVAL_SECONDS=300   # 5 min on free API tiers; 10 for penny-stock testing
-HF_NEWS_POLL_INTERVAL_SECONDS=600       # 10 min default cadence for News Centre polling
+HF_TIINGO_STREAM_ENABLED=true           # Stream US equity live marks from Tiingo when a key is configured
+HF_TIINGO_STREAM_MARKET_HOURS_ONLY=true # Do not open US equity stream outside regular market hours
+HF_TIINGO_STREAM_FLUSH_SECONDS=5        # Batch stream writes/events instead of writing every tick
+HF_TIINGO_STREAM_RECONNECT_SECONDS=15   # Initial failed stream retry delay
+HF_TIINGO_STREAM_RECONNECT_MAX_SECONDS=60 # Cap failed stream retry backoff
+HF_TIINGO_FX_STREAM_ENABLED=false       # Enable only after confirming pair coverage
+HF_TIINGO_FX_PAIRS=usdngn               # Comma-separated Tiingo FX pairs when FX streaming is enabled
+HF_PRICE_REFRESH_INTERVAL_SECONDS=300   # Fallback/backfill cadence when stream data is stale/missing
+HF_NEWS_POLL_INTERVAL_SECONDS=60        # 1 min default cadence for News Centre polling
 HF_NEWS_POLL_JURISDICTIONS=US           # Scheduled News Centre scope; use US,NG only when desired
 HF_NEWS_TICKER_REFRESH_TTL_SECONDS=1800 # 30 min cache guard for selected-ticker news refreshes
 HF_NEWS_RETENTION_DAYS=50               # Stored news/poll audit retention window

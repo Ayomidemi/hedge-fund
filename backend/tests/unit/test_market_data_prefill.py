@@ -8,7 +8,9 @@ from app.services.ticker_intelligence.market_data import (
     ProviderResult,
     _build_prefill_response,
     _load_ngn_identity_sources,
+    _load_ngn_triage_sources,
     _load_us_identity_sources,
+    _load_us_triage_sources,
     normalize_massive_base_url,
     prefill_ticker,
     resolve_prefill_scope,
@@ -36,6 +38,8 @@ class MarketDataPrefillTests(TestCase):
     def test_resolves_prefill_scope(self) -> None:
         self.assertEqual(resolve_prefill_scope("analysis"), "analysis")
         self.assertEqual(resolve_prefill_scope("full"), "analysis")
+        self.assertEqual(resolve_prefill_scope("triage"), "triage")
+        self.assertEqual(resolve_prefill_scope("screening"), "triage")
         self.assertEqual(resolve_prefill_scope("identity"), "identity")
         self.assertEqual(resolve_prefill_scope(None), "identity")
 
@@ -237,6 +241,37 @@ class MarketDataPrefillRoutingTests(IsolatedAsyncioTestCase):
         load_ngn_market_sources.assert_not_awaited()
         load_ngn_identity_sources.assert_not_awaited()
 
+    async def test_triage_scope_uses_us_triage_sources(self) -> None:
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data._has_market_data_key",
+                return_value=True,
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_sources",
+                new_callable=AsyncMock,
+            ) as load_us_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_identity_sources",
+                new_callable=AsyncMock,
+            ) as load_us_identity_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_triage_sources",
+                new_callable=AsyncMock,
+            ) as load_us_triage_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_triage_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_triage_sources,
+        ):
+            response = await prefill_ticker("AAPL", market_hint="US", scope="triage")
+
+        self.assertEqual(response.instrument.ticker, "AAPL")
+        load_us_triage_sources.assert_awaited_once()
+        load_us_sources.assert_not_awaited()
+        load_us_identity_sources.assert_not_awaited()
+        load_ngn_triage_sources.assert_not_awaited()
+
     async def test_identity_scope_uses_ng_identity_sources(self) -> None:
         with (
             patch(
@@ -267,6 +302,37 @@ class MarketDataPrefillRoutingTests(IsolatedAsyncioTestCase):
         load_ngn_market_sources.assert_not_awaited()
         load_us_sources.assert_not_awaited()
         load_us_identity_sources.assert_not_awaited()
+
+    async def test_triage_scope_uses_ng_triage_sources(self) -> None:
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data._has_market_data_key",
+                return_value=True,
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_market_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_market_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_identity_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_identity_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_ngn_triage_sources",
+                new_callable=AsyncMock,
+            ) as load_ngn_triage_sources,
+            patch(
+                "app.services.ticker_intelligence.market_data._load_us_triage_sources",
+                new_callable=AsyncMock,
+            ) as load_us_triage_sources,
+        ):
+            response = await prefill_ticker("DANGCEM", market_hint="NG", scope="triage")
+
+        self.assertEqual(response.instrument.ticker, "DANGCEM.NG")
+        load_ngn_triage_sources.assert_awaited_once()
+        load_ngn_market_sources.assert_not_awaited()
+        load_ngn_identity_sources.assert_not_awaited()
+        load_us_triage_sources.assert_not_awaited()
 
     async def test_us_identity_loader_fetches_profile_and_quote_only(self) -> None:
         calls: list[str] = []
@@ -318,6 +384,67 @@ class MarketDataPrefillRoutingTests(IsolatedAsyncioTestCase):
         self.assertEqual(context.fmp_quote["price"], 220.1)
         self.assertEqual(context.providers, ["fmp"])
 
+    async def test_us_triage_loader_skips_failed_fmp_and_ratio_paths(self) -> None:
+        calls: list[str] = []
+
+        async def fake_safe_get(_client, path, params=None):
+            calls.append(path)
+            if path == "/v3/reference/tickers/HOOD":
+                return ProviderResult(
+                    payload={
+                        "results": {
+                            "name": "Robinhood Markets, Inc.",
+                            "primary_exchange": "XNAS",
+                            "market_cap": 50_000_000_000,
+                            "cik": "0001783879",
+                        }
+                    }
+                )
+            if path == "/tiingo/daily/hood/prices":
+                return ProviderResult(payload=[{"date": "2026-08-24", "close": 110.25}])
+            return ProviderResult()
+
+        context = PrefillBuildContext(
+            ticker="HOOD",
+            provider_symbol="HOOD",
+            market="US",
+            scope="triage",
+        )
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_fmp_api_key",
+                "fmp",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_polygon_api_key",
+                "polygon",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_tiingo_api_key",
+                "tiingo",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._safe_get",
+                side_effect=fake_safe_get,
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._fetch_sec_fundamentals",
+                new_callable=AsyncMock,
+            ) as fetch_sec,
+        ):
+            await _load_us_triage_sources(context)
+
+        self.assertEqual(
+            calls,
+            ["/v3/reference/tickers/HOOD", "/tiingo/daily/hood/prices"],
+        )
+        self.assertNotIn("/stocks/financials/v1/ratios", calls)
+        self.assertFalse(any(path.startswith("/v3/") for path in calls[1:]))
+        fetch_sec.assert_awaited_once()
+        self.assertEqual(context.details["name"], "Robinhood Markets, Inc.")
+        self.assertEqual(len(context.bars), 1)
+        self.assertEqual(context.providers, ["massive", "tiingo"])
+
     async def test_ng_identity_loader_uses_company_search_before_etfs(self) -> None:
         calls: list[str] = []
 
@@ -357,4 +484,52 @@ class MarketDataPrefillRoutingTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, ["/companies"])
         self.assertEqual(context.ngn_company["name"], "Dangote Cement Plc")
+        self.assertEqual(context.providers, ["ngnmarket"])
+
+    async def test_ng_triage_loader_uses_company_search_and_one_chart(self) -> None:
+        calls: list[str] = []
+
+        async def fake_safe_get(_client, path, params=None):
+            calls.append(path)
+            if path == "/companies":
+                return ProviderResult(
+                    payload={
+                        "data": {
+                            "data": [
+                                {
+                                    "symbol": "DANGCEM",
+                                    "name": "Dangote Cement Plc",
+                                    "price": 480,
+                                }
+                            ]
+                        }
+                    }
+                )
+            if path == "/companies/DANGCEM/chart":
+                return ProviderResult(
+                    payload={"data": [{"date": "2026-08-24", "close": 480}]}
+                )
+            return ProviderResult()
+
+        context = PrefillBuildContext(
+            ticker="DANGCEM.NG",
+            provider_symbol="DANGCEM",
+            market="NG",
+            scope="triage",
+        )
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_ngnmarket_api_key",
+                "ngn",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._safe_get",
+                side_effect=fake_safe_get,
+            ),
+        ):
+            await _load_ngn_triage_sources(context)
+
+        self.assertEqual(calls, ["/companies", "/companies/DANGCEM/chart"])
+        self.assertEqual(context.ngn_company["name"], "Dangote Cement Plc")
+        self.assertEqual(len(context.bars), 1)
         self.assertEqual(context.providers, ["ngnmarket"])

@@ -126,8 +126,11 @@ class TickerVerdictContextResponse(BaseModel):
 
 
 class TickerVerdictResponse(BaseModel):
+    triage_run_id: UUID | None = None
     ticker: str
     name: str
+    instrument: InstrumentCreate
+    metrics: TickerMetricsInput
     market: str
     generated_at: datetime
     research_priority: str
@@ -477,6 +480,19 @@ class TickerDeskPosition(BaseModel):
     average_cost: Decimal
 
 
+class TickerDeskTriage(BaseModel):
+    id: UUID
+    generated_at: datetime
+    research_priority: str
+    initial_view: str
+    triage_decision: str
+    action_label: str
+    confidence_score: Decimal
+    composite_score: Decimal
+    recommended_weight: Decimal
+    next_action: str
+
+
 class TickerDeskResponse(BaseModel):
     ticker: str
     name: str
@@ -488,4 +504,5 @@ class TickerDeskResponse(BaseModel):
     news: TickerDeskNews | None = None
     pre_trade: TickerDeskPreTrade | None = None
     position: TickerDeskPosition | None = None
+    latest_triage: TickerDeskTriage | None = None
     memos: list[TickerMemoSummaryResponse] = Field(default_factory=list)

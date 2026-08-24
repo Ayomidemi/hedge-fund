@@ -25,6 +25,20 @@ async def refresh_fx_rates(session: AsyncSession) -> FxRefreshResult:
     if live_rate is None:
         return FxRefreshResult(updated=False)
 
+    await persist_fx_rate(session, live_rate)
+    logger.info(
+        "fx_rate_refreshed",
+        extra={
+            "pair": f"{live_rate.base_currency}/{live_rate.quote_currency}",
+            "rate": str(live_rate.rate),
+            "source": live_rate.source,
+        },
+    )
+    return FxRefreshResult(updated=True, rate=live_rate)
+
+
+async def persist_fx_rate(session: AsyncSession, live_rate: LiveFxRate) -> None:
+    """Upsert a fetched or streamed FX rate into the internal snapshot table."""
     row = await session.scalar(
         select(FxRate).where(
             FxRate.base_currency == live_rate.base_currency,
@@ -48,15 +62,6 @@ async def refresh_fx_rates(session: AsyncSession) -> FxRefreshResult:
         row.raw_payload = live_rate.raw_payload or {}
 
     await session.flush()
-    logger.info(
-        "fx_rate_refreshed",
-        extra={
-            "pair": f"{live_rate.base_currency}/{live_rate.quote_currency}",
-            "rate": str(live_rate.rate),
-            "source": live_rate.source,
-        },
-    )
-    return FxRefreshResult(updated=True, rate=live_rate)
 
 
 async def load_fx_rates(session: AsyncSession) -> dict[tuple[str, str], FxRate]:

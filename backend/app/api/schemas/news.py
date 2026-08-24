@@ -23,6 +23,7 @@ class NewsItemResponse(BaseModel):
     sentiment_label: str | None = None
     sentiment_score: Decimal | None = None
     tickers: list[str] = Field(default_factory=list)
+    starred: bool = False
 
 
 class NewsPollRunResponse(BaseModel):
@@ -59,7 +60,9 @@ class NewsOverviewResponse(BaseModel):
     current_page: NewsPaginationResponse
     ticker: str | None = None
     ticker_items: list[NewsItemResponse] = Field(default_factory=list)
+    ticker_page: NewsPaginationResponse | None = None
     watchlist_items: list[NewsItemResponse] = Field(default_factory=list)
+    saved_items: list[NewsItemResponse] = Field(default_factory=list)
     provider_notes: list[str] = Field(default_factory=list)
 
 
@@ -71,3 +74,8 @@ class NewsPollRequest(BaseModel):
 class NewsTickerRefreshRequest(BaseModel):
     market: Literal["US", "NG"] | None = None
     force: bool = False
+
+
+class NewsStarResponse(BaseModel):
+    news_item_id: UUID
+    starred: bool

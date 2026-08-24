@@ -146,6 +146,69 @@ class RadarScoringTests(TestCase):
         self.assertFalse(is_flagged(candidate))
         self.assertEqual(candidate.anomaly_score, Decimal("0.00"))
 
+    def test_universe_three_percent_is_not_flagged(self) -> None:
+        candidate = RadarCandidate(
+            ticker="XYZ",
+            name="XYZ",
+            jurisdiction="US",
+            change_pct=Decimal("3.1"),
+        )
+        score_candidate(candidate)
+        self.assertFalse(is_flagged(candidate))
+        self.assertEqual(candidate.care_tier, "universe")
+        self.assertNotIn("watched_move", candidate.flags)
+
+    def test_watchlist_three_percent_is_flagged(self) -> None:
+        candidate = RadarCandidate(
+            ticker="AAPL",
+            name="Apple",
+            jurisdiction="US",
+            on_watchlist=True,
+            change_pct=Decimal("3.1"),
+        )
+        score_candidate(candidate)
+        self.assertTrue(is_flagged(candidate))
+        self.assertEqual(candidate.care_tier, "watchlist")
+        self.assertIn("watched_move", candidate.flags)
+
+    def test_queue_name_uses_watchlist_sensitivity(self) -> None:
+        candidate = RadarCandidate(
+            ticker="MSFT",
+            name="Microsoft",
+            jurisdiction="US",
+            in_opportunity_queue=True,
+            change_pct=Decimal("-2.6"),
+        )
+        score_candidate(candidate)
+        self.assertTrue(is_flagged(candidate))
+        self.assertEqual(candidate.care_tier, "queue")
+
+    def test_position_two_percent_drop_is_flagged(self) -> None:
+        candidate = RadarCandidate(
+            ticker="GTCO.NG",
+            name="GTCO",
+            jurisdiction="NG",
+            in_portfolio=True,
+            change_pct=Decimal("-2.1"),
+        )
+        score_candidate(candidate)
+        self.assertTrue(is_flagged(candidate))
+        self.assertEqual(candidate.care_tier, "position")
+        self.assertIn("position_risk", candidate.flags)
+
+    def test_pulse_etf_three_percent_is_not_a_watchlist_alert(self) -> None:
+        candidate = RadarCandidate(
+            ticker="SPY",
+            name="SPY",
+            jurisdiction="US",
+            always_watched=True,
+            change_pct=Decimal("3.0"),
+        )
+        score_candidate(candidate)
+        self.assertFalse(is_flagged(candidate))
+        self.assertEqual(candidate.care_tier, "universe")
+        self.assertNotIn("watched_move", candidate.flags)
+
     def test_evidence_driven_anomalies_are_flagged(self) -> None:
         candidate = RadarCandidate(
             ticker="MSFT",
@@ -751,5 +814,35 @@ class RadarPriorityTests(TestCase):
         self.assertEqual(sum(1 for item in selected if item.radar_priority == "P0"), 3)
         self.assertLessEqual(sum(1 for item in selected if item.radar_priority == "P1"), 5)
         self.assertNotIn("NOISE", {item.ticker for item in selected})
+
+    def test_watchlist_sensitive_flag_is_not_auto_promoted(self) -> None:
+        candidate = RadarCandidate(
+            ticker="AAPL",
+            name="Apple",
+            jurisdiction="US",
+            on_watchlist=True,
+            change_pct=Decimal("3.0"),
+        )
+        score_candidate(candidate)
+        assign_priority(candidate)
+        self.assertTrue(is_flagged(candidate))
+        self.assertIn(candidate.radar_priority, {"P2", "P3"})
+        self.assertFalse(is_auto_promotable(candidate))
+
+    def test_position_small_drop_flags_but_is_not_p0(self) -> None:
+        candidate = RadarCandidate(
+            ticker="GTCO.NG",
+            name="GTCO",
+            jurisdiction="NG",
+            in_portfolio=True,
+            change_pct=Decimal("-2.1"),
+        )
+        score_candidate(candidate)
+        assign_priority(candidate)
+        self.assertTrue(is_flagged(candidate))
+        self.assertNotEqual(candidate.radar_priority, "P0")
+        self.assertFalse(is_auto_promotable(candidate))
+        package = build_evidence_package(candidate)
+        self.assertEqual(package["context"]["care_tier"], "position")
 
 

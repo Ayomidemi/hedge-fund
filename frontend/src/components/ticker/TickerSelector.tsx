@@ -41,6 +41,8 @@ type TickerSelectorProps = {
   onMarketChange?: (market: TickerMarket) => void;
   onSuggestion?: (suggestion: TickerSuggestion | null) => void;
   onTickerChange?: (value: string) => void;
+  onClear?: () => void;
+  allowClear?: boolean;
   placeholder?: string;
   required?: boolean;
   tickerLabel?: string;
@@ -71,6 +73,8 @@ export function TickerSelector({
   onMarketChange,
   onSuggestion,
   onTickerChange,
+  onClear,
+  allowClear = false,
   placeholder = "e.g. AAPL",
   required,
   tickerLabel = "Ticker",
@@ -272,6 +276,23 @@ export function TickerSelector({
     }
   }
 
+  function handleClear() {
+    suggestionRequestId.current += 1;
+    detailsRequestId.current += 1;
+    setSuggestions([]);
+    setOpen(false);
+    setActiveIndex(-1);
+    setSuggestionsLoading(false);
+    setDetailsLoading(false);
+    if (value === undefined) {
+      setInternalValue("");
+    }
+    onTickerChange?.("");
+    onSuggestion?.(null);
+    onDetails?.(null);
+    onClear?.();
+  }
+
   const showDropdown = open && !disabled && (options.length > 0 || suggestionsLoading);
   const loading = suggestionsLoading || detailsLoading;
   const controlClassName = className ?? inputClassName;
@@ -303,7 +324,7 @@ export function TickerSelector({
             aria-expanded={showDropdown}
             autoComplete="off"
             autoFocus={autoFocus}
-            className={`${controlClassName} uppercase pr-10`}
+            className={`${controlClassName} uppercase ${allowClear && inputValue ? "pr-16" : "pr-10"}`}
             disabled={disabled}
             id={inputId}
             name={tickerName ?? undefined}
@@ -318,9 +339,33 @@ export function TickerSelector({
             value={inputValue}
           />
           {loading ? (
-            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-zinc-400">
+            <span
+              className={`pointer-events-none absolute inset-y-0 flex items-center text-xs text-zinc-400 ${
+                allowClear && inputValue ? "right-9" : "right-3"
+              }`}
+            >
               ...
             </span>
+          ) : null}
+          {allowClear && inputValue ? (
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleClear}
+              aria-label="Clear ticker"
+              title="Clear ticker"
+              className="absolute inset-y-0 right-2 flex items-center rounded-md px-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+            >
+              <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden="true">
+                <path
+                  d="M5.2 5.2 14.8 14.8M14.8 5.2 5.2 14.8"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeWidth="1.8"
+                />
+              </svg>
+            </button>
           ) : null}
           {showDropdown ? (
             <div

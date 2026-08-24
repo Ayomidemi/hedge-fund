@@ -11,7 +11,10 @@ from app.api.schemas.ticker_intelligence import (
     TickerVerdictResponse,
 )
 from app.core.auth import AuthenticatedUser
+from app.models import Instrument, TickerTriageRun
+from app.services.administration.system_log import record_system_log
 from app.services.market_data.quote_cache import get_cached_quote_price
+from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.analysis import get_ticker_desk
 from app.services.ticker_intelligence.market_data import (
     prefill_ticker,
@@ -27,7 +30,98 @@ async def build_ticker_verdict(
     market: str | None = None,
     user: AuthenticatedUser,
 ) -> TickerVerdictResponse:
-    prefill = await prefill_ticker(ticker, market_hint=market, scope="analysis")
+    response, _instrument = await _compose_ticker_verdict(
+        session,
+        ticker,
+        market=market,
+        user=user,
+        persist_instrument=False,
+    )
+    return response
+
+
+async def create_ticker_triage(
+    session: AsyncSession,
+    ticker: str,
+    *,
+    market: str | None = None,
+    user: AuthenticatedUser,
+) -> TickerVerdictResponse:
+    response, instrument = await _compose_ticker_verdict(
+        session,
+        ticker,
+        market=market,
+        user=user,
+        persist_instrument=True,
+    )
+    if instrument is None:
+        raise RuntimeError("Ticker triage could not resolve an instrument.")
+
+    triage = TickerTriageRun(
+        owner_user_id=user.id,
+        instrument_id=instrument.id,
+        generated_at=response.generated_at,
+        market=response.market,
+        research_priority=response.research_priority,
+        initial_view=response.initial_view,
+        triage_decision=response.triage_decision,
+        action_label=response.action_label,
+        confidence_score=response.confidence_score,
+        conviction_score=response.conviction_score,
+        composite_score=response.composite_score,
+        recommended_weight=response.recommended_weight,
+        top_drivers=response.top_drivers,
+        top_blockers=response.top_blockers,
+        why_now=response.why_now,
+        next_action=response.next_action,
+        warnings=response.warnings,
+        source_reference=response.source_reference,
+        provider=response.provider,
+        data_timestamp=response.data_timestamp,
+        metrics=response.metrics.model_dump(mode="json", exclude_none=True),
+        context=response.context.model_dump(mode="json"),
+        scorecard=[score.model_dump(mode="json") for score in response.scorecard],
+    )
+    session.add(triage)
+    await session.flush()
+    triage_id = triage.id
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="research",
+        event="ticker_triage_run",
+        message=(
+            f"{instrument.ticker} quick triage — "
+            f"{response.triage_decision} ({response.research_priority})."
+        ),
+        context={
+            "ticker": instrument.ticker,
+            "triage_run_id": str(triage.id),
+            "market": response.market,
+            "triage_decision": response.triage_decision,
+            "research_priority": response.research_priority,
+            "composite_score": str(response.composite_score),
+            "confidence_score": str(response.confidence_score),
+        },
+    )
+    await session.commit()
+
+    return response.model_copy(update={"triage_run_id": triage_id})
+
+
+async def _compose_ticker_verdict(
+    session: AsyncSession,
+    ticker: str,
+    *,
+    market: str | None,
+    user: AuthenticatedUser,
+    persist_instrument: bool,
+) -> tuple[TickerVerdictResponse, Instrument | None]:
+    prefill = await prefill_ticker(ticker, market_hint=market, scope="triage")
+    instrument = await upsert_instrument(session, prefill.instrument) if persist_instrument else None
+    if instrument is not None:
+        await session.flush()
+
     live_price = await get_cached_quote_price(session, prefill.instrument.ticker)
     if live_price is not None:
         prefill.metrics.current_price = live_price
@@ -51,9 +145,11 @@ async def build_ticker_verdict(
     low_scores = sorted(scorecard.scores, key=lambda item: item.score)
     warnings = _warnings(prefill.source_warnings, scorecard.confidence_score)
 
-    return TickerVerdictResponse(
+    response = TickerVerdictResponse(
         ticker=prefill.instrument.ticker,
         name=prefill.instrument.name,
+        instrument=prefill.instrument,
+        metrics=prefill.metrics,
         market=_market_from_prefill(
             prefill.instrument.ticker,
             prefill.instrument.currency,
@@ -98,6 +194,7 @@ async def build_ticker_verdict(
             for score in scorecard.scores
         ],
     )
+    return response, instrument
 
 
 def _triage_decision(score: Decimal, confidence: Decimal) -> str:
@@ -204,5 +301,4 @@ def _warnings(source_warnings: list[str], confidence: Decimal) -> list[str]:
     warnings = list(dict.fromkeys(source_warnings))
     if confidence < Decimal("45"):
         warnings.insert(0, "Data coverage is too thin for a capital decision.")
-    warnings.append("Quick Triage is research screening only, not trade approval.")
     return warnings

@@ -66,21 +66,22 @@ async def fetch_current_news(
     fetches: list[NewsFetch] = []
 
     if "US" in requested:
-        fetches.extend(
-            [
-                NewsFetch(
-                    "US:tiingo:latest",
-                    lambda: _fetch_tiingo_news(tickers=[]),
-                ),
-                NewsFetch(
-                    "US:fmp:stock-latest",
-                    lambda: _fetch_fmp_latest_news(
-                        include_general=False,
-                        include_press_releases=False,
-                    ),
-                ),
-            ]
+        fetches.append(
+            NewsFetch(
+                "US:tiingo:latest",
+                lambda: _fetch_tiingo_news(tickers=[]),
+            )
         )
+        # FMP news is paused until the paid plan is restored.
+        # fetches.append(
+        #     NewsFetch(
+        #         "US:fmp:stock-latest",
+        #         lambda: _fetch_fmp_latest_news(
+        #             include_general=False,
+        #             include_press_releases=False,
+        #         ),
+        #     )
+        # )
         if include_ticker_batches and us_tickers:
             us_batch = us_tickers[:NEWS_TICKER_BATCH_LIMIT]
             fetches.append(
@@ -146,10 +147,11 @@ async def fetch_news_for_ticker(
             f"US:tiingo:ticker:{symbol}",
             lambda: _fetch_tiingo_news(tickers=[symbol]),
         ),
-        NewsFetch(
-            f"US:fmp:ticker-stock:{symbol}",
-            lambda: _fetch_fmp_ticker_news(symbol, include_press_releases=False),
-        ),
+        # FMP news is paused until the paid plan is restored.
+        # NewsFetch(
+        #     f"US:fmp:ticker-stock:{symbol}",
+        #     lambda: _fetch_fmp_ticker_news(symbol, include_press_releases=False),
+        # ),
     ]
     if not settings.hf_tiingo_api_key and settings.hf_polygon_api_key:
         fetches.append(

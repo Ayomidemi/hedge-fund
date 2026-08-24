@@ -55,7 +55,10 @@ from app.services.ticker_intelligence.market_data import (
     prefill_ticker,
     search_ticker_suggestions,
 )
-from app.services.ticker_intelligence.verdict import build_ticker_verdict
+from app.services.ticker_intelligence.verdict import (
+    build_ticker_verdict,
+    create_ticker_triage,
+)
 from app.services.ticker_intelligence.ml_training import (
     MLTrainingDataUnavailableError,
     backfill_yahoo_prices,
@@ -413,6 +416,26 @@ async def read_ticker_verdict(
 ) -> TickerVerdictResponse:
     try:
         return await build_ticker_verdict(session, ticker, market=market, user=user)
+    except MarketDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/{ticker}/triage",
+    response_model=TickerVerdictResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_ticker_triage_run(
+    ticker: str,
+    market: str | None = Query(default=None, max_length=16),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> TickerVerdictResponse:
+    try:
+        return await create_ticker_triage(session, ticker, market=market, user=user)
     except MarketDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

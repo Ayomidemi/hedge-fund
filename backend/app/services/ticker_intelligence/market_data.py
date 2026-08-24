@@ -25,7 +25,7 @@ from app.services.ticker_intelligence.sec_fundamentals import (
 
 logger = logging.getLogger(__name__)
 
-PrefillScope = Literal["identity", "analysis"]
+PrefillScope = Literal["identity", "triage", "analysis"]
 
 
 class MarketDataUnavailableError(RuntimeError):
@@ -97,11 +97,15 @@ async def prefill_ticker(
     if resolution.market == "NG":
         if prefill_scope == "identity":
             await _load_ngn_identity_sources(context)
+        elif prefill_scope == "triage":
+            await _load_ngn_triage_sources(context)
         else:
             await _load_ngn_market_sources(context)
     else:
         if prefill_scope == "identity":
             await _load_us_identity_sources(context)
+        elif prefill_scope == "triage":
+            await _load_us_triage_sources(context)
         else:
             await _load_us_sources(context)
 
@@ -223,6 +227,8 @@ def resolve_prefill_scope(scope: str | None = None) -> PrefillScope:
     normalized_scope = (scope or "").strip().lower()
     if normalized_scope in {"analysis", "full", "research"}:
         return "analysis"
+    if normalized_scope in {"triage", "quick", "screen", "screening"}:
+        return "triage"
     return "identity"
 
 
@@ -284,6 +290,23 @@ async def _load_us_sources(context: PrefillBuildContext) -> None:
     await _load_tiingo_sources(context)
 
 
+async def _load_us_triage_sources(context: PrefillBuildContext) -> None:
+    if settings.hf_polygon_api_key:
+        await _load_polygon_identity_sources(context)
+
+    if settings.hf_tiingo_api_key:
+        await _load_tiingo_price_sources(
+            context,
+            include_meta=not _has_named_instrument(context),
+        )
+    elif settings.hf_polygon_api_key:
+        await _load_polygon_bars_sources(context)
+    elif settings.hf_fmp_api_key:
+        await _load_fmp_identity_sources(context)
+
+    await _fetch_sec_fundamentals(context)
+
+
 async def _load_polygon_identity_sources(context: PrefillBuildContext) -> None:
     if not settings.hf_polygon_api_key:
         return
@@ -334,6 +357,25 @@ async def _load_polygon_sources(context: PrefillBuildContext) -> None:
     context.ratios = _first_result(ratios.payload)
     context.bars = _results(bars.payload) or context.bars
     _record_provider(context, "massive", [details, ratios, bars])
+
+
+async def _load_polygon_bars_sources(context: PrefillBuildContext) -> None:
+    if not settings.hf_polygon_api_key:
+        return
+
+    async with httpx.AsyncClient(
+        base_url=settings.polygon_base_url,
+        timeout=httpx.Timeout(10.0),
+        headers={"Authorization": f"Bearer {settings.hf_polygon_api_key}"},
+    ) as client:
+        bars = await _safe_get(
+            client,
+            _bars_path(context.provider_symbol),
+            params={"adjusted": "true", "sort": "asc", "limit": "50000"},
+        )
+
+    context.bars = _results(bars.payload) or context.bars
+    _record_provider(context, "massive", [bars])
 
 
 async def _load_fmp_identity_sources(context: PrefillBuildContext) -> None:
@@ -398,6 +440,14 @@ async def _load_tiingo_identity_sources(context: PrefillBuildContext) -> None:
 
 
 async def _load_tiingo_sources(context: PrefillBuildContext) -> None:
+    await _load_tiingo_price_sources(context, include_meta=True)
+
+
+async def _load_tiingo_price_sources(
+    context: PrefillBuildContext,
+    *,
+    include_meta: bool,
+) -> None:
     if not settings.hf_tiingo_api_key:
         return
 
@@ -408,20 +458,24 @@ async def _load_tiingo_sources(context: PrefillBuildContext) -> None:
         timeout=httpx.Timeout(10.0),
         headers={"Authorization": f"Token {settings.hf_tiingo_api_key}"},
     ) as client:
-        meta = await _safe_get(
-            client, f"/tiingo/daily/{context.provider_symbol.lower()}"
-        )
+        results: list[ProviderResult] = []
+        if include_meta:
+            meta = await _safe_get(
+                client, f"/tiingo/daily/{context.provider_symbol.lower()}"
+            )
+            results.append(meta)
+            context.tiingo_meta = meta.payload if isinstance(meta.payload, dict) else {}
         prices = await _safe_get(
             client,
             f"/tiingo/daily/{context.provider_symbol.lower()}/prices",
             params={"startDate": start.isoformat(), "endDate": today.isoformat()},
         )
+        results.append(prices)
 
-    context.tiingo_meta = meta.payload if isinstance(meta.payload, dict) else {}
     tiingo_bars = _list_payload(prices.payload)
     if tiingo_bars and not context.bars:
         context.bars = tiingo_bars
-    _record_provider(context, "tiingo", [meta, prices])
+    _record_provider(context, "tiingo", results)
 
 
 async def _load_ngn_identity_sources(context: PrefillBuildContext) -> None:
@@ -503,6 +557,50 @@ async def _load_ngn_market_sources(context: PrefillBuildContext) -> None:
         "ngnmarket",
         [companies, identifiers, etfs, company, company_chart, etf, etf_chart],
     )
+
+
+async def _load_ngn_triage_sources(context: PrefillBuildContext) -> None:
+    if not settings.hf_ngnmarket_api_key:
+        context.warnings.append("NGN Market API key is missing.")
+        return
+
+    symbol = context.provider_symbol
+    results: list[ProviderResult] = []
+    async with httpx.AsyncClient(
+        base_url=settings.ngnmarket_base_url,
+        timeout=httpx.Timeout(10.0),
+        headers={"Authorization": f"Bearer {settings.hf_ngnmarket_api_key}"},
+    ) as client:
+        companies = await _safe_get(
+            client,
+            "/companies",
+            params={"search": symbol, "limit": "10"},
+        )
+        results.append(companies)
+        context.ngn_company = _find_symbol_payload(companies.payload, symbol)
+
+        if context.ngn_company:
+            company_chart = await _safe_get(
+                client,
+                f"/companies/{symbol}/chart",
+                params={"period": "1y", "format": "ohlcv"},
+            )
+            results.append(company_chart)
+            context.bars = _chart_points(company_chart.payload) or context.bars
+        else:
+            etfs = await _safe_get(client, "/etfs")
+            results.append(etfs)
+            context.ngn_etf = _find_symbol_payload(etfs.payload, symbol)
+            if context.ngn_etf:
+                etf_chart = await _safe_get(
+                    client,
+                    f"/etfs/{symbol}/chart",
+                    params={"period": "1y", "format": "ohlcv"},
+                )
+                results.append(etf_chart)
+                context.bars = _chart_points(etf_chart.payload) or context.bars
+
+    _record_provider(context, "ngnmarket", results)
 
 
 async def _fetch_sec_fundamentals(context: PrefillBuildContext) -> None:

@@ -798,6 +798,7 @@ def _snapshot_from_candidate(
         flags=candidate.flags,
         evidence={
             **candidate.evidence,
+            "care_tier": candidate.care_tier,
             "on_watchlist": candidate.on_watchlist,
             "pinned_prior": candidate.pinned_prior,
             "in_portfolio": candidate.in_portfolio,

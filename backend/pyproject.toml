@@ -11,7 +11,9 @@ dependencies = [
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
     "python-dotenv>=1.0.1",
+    "certifi>=2024.8.30",
     "httpx>=0.28.0",
+    "websockets>=14.0",
     "numpy>=2.0.0",
     "yfinance>=0.2.54",
 ]

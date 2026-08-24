@@ -59,7 +59,7 @@ async function fetchApi<T>(
 ): Promise<T> {
   const accessToken = await resolveAccessToken(options?.accessToken);
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    next: { revalidate: 0 },
+    cache: "no-store",
     headers: buildAuthHeaders(accessToken),
   });
 
@@ -100,6 +100,28 @@ async function patchApi<TResponse, TPayload>(
   const accessToken = await resolveAccessToken(options?.accessToken);
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildAuthHeaders(accessToken),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
+
+  return response.json() as Promise<TResponse>;
+}
+
+async function putApi<TResponse, TPayload>(
+  path: string,
+  payload: TPayload,
+  options?: ApiRequestOptions,
+): Promise<TResponse> {
+  const accessToken = await resolveAccessToken(options?.accessToken);
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "PUT",
     headers: {
       "Content-Type": "application/json",
       ...buildAuthHeaders(accessToken),
@@ -510,6 +532,16 @@ export type TickerAnalysisInput = {
   source_reference?: string;
 };
 
+export type TickerResolvedInstrument = {
+  ticker: string;
+  name: string;
+  asset_class: TickerAnalysisInput["instrument"]["asset_class"];
+  exchange: string | null;
+  currency: string;
+  sector: string | null;
+  industry: string | null;
+};
+
 export type TickerAIDraftInput = {
   instrument: TickerAnalysisInput["instrument"];
   metrics: TickerMetricsInput;
@@ -620,12 +652,27 @@ export type TickerDesk = {
     quantity: string;
     average_cost: string;
   } | null;
+  latest_triage: {
+    id: string;
+    generated_at: string;
+    research_priority: "high" | "medium" | "low" | string;
+    initial_view: string;
+    triage_decision: "research" | "watch" | "reject" | string;
+    action_label: string;
+    confidence_score: string;
+    composite_score: string;
+    recommended_weight: string;
+    next_action: string;
+  } | null;
   memos: TickerMemoSummary[];
 };
 
 export type TickerVerdict = {
+  triage_run_id: string | null;
   ticker: string;
   name: string;
+  instrument: TickerResolvedInstrument;
+  metrics: TickerMetricsInput;
   market: "US" | "NG" | string;
   generated_at: string;
   research_priority: "high" | "medium" | "low" | string;
@@ -660,15 +707,7 @@ export type TickerVerdict = {
 };
 
 export type TickerPrefill = {
-  instrument: {
-    ticker: string;
-    name: string;
-    asset_class: TickerAnalysisInput["instrument"]["asset_class"];
-    exchange: string | null;
-    currency: string;
-    sector: string | null;
-    industry: string | null;
-  };
+  instrument: TickerResolvedInstrument;
   metrics: TickerMetricsInput;
   provider: string;
   source_reference: string;
@@ -679,7 +718,7 @@ export type TickerPrefill = {
 
 export type TickerSuggestion = TickerPrefill["instrument"];
 
-export type TickerPrefillScope = "identity" | "analysis";
+export type TickerPrefillScope = "identity" | "triage" | "analysis";
 
 export type ComparativeMetric = {
   metric: string;
@@ -1492,6 +1531,23 @@ export function getTickerVerdict(
   );
 }
 
+export function createTickerTriage(
+  ticker: string,
+  params?: { market?: string },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.market) search.set("market", params.market);
+  const query = search.toString();
+  return postApi<TickerVerdict, Record<string, never>>(
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/triage${
+      query ? `?${query}` : ""
+    }`,
+    {},
+    options,
+  );
+}
+
 export function getTickerPrefill(
   ticker: string,
   market?: string,
@@ -2018,6 +2074,8 @@ export type MarketRadarName = {
   stale_reason: string | null;
   on_watchlist?: boolean;
   pinned_prior?: boolean;
+  in_portfolio?: boolean;
+  care_tier?: "position" | "watchlist" | "queue" | "universe";
 };
 
 export type MarketRadarIndustry = {
@@ -2100,6 +2158,7 @@ export type MarketRadarOverview = {
   working_set: MarketRadarName[];
   flagged: MarketRadarName[];
   queue_candidates?: MarketRadarName[];
+  desk_alerts?: MarketRadarName[];
   watchlist: RadarWatchlistItem[];
   scan_changes: MarketRadarName[];
 };
@@ -2127,6 +2186,7 @@ export type NewsItem = {
   sentiment_label: string | null;
   sentiment_score: string | null;
   tickers: string[];
+  starred: boolean;
 };
 
 export type NewsPollRun = {
@@ -2163,7 +2223,9 @@ export type NewsOverview = {
   current_page: NewsPagination;
   ticker: string | null;
   ticker_items: NewsItem[];
+  ticker_page?: NewsPagination | null;
   watchlist_items: NewsItem[];
+  saved_items: NewsItem[];
   provider_notes: string[];
 };
 
@@ -2174,6 +2236,8 @@ export function getNewsOverview(
     jurisdiction?: "US" | "NG" | "all";
     page?: number;
     page_size?: number;
+    ticker_page?: number;
+    ticker_page_size?: number;
   },
   options?: ApiRequestOptions,
 ) {
@@ -2185,6 +2249,10 @@ export function getNewsOverview(
   }
   if (params?.page) search.set("page", String(params.page));
   if (params?.page_size) search.set("page_size", String(params.page_size));
+  if (params?.ticker_page) search.set("ticker_page", String(params.ticker_page));
+  if (params?.ticker_page_size) {
+    search.set("ticker_page_size", String(params.ticker_page_size));
+  }
   const query = search.toString();
   return fetchApi<NewsOverview>(`/api/news/overview${query ? `?${query}` : ""}`, options);
 }
@@ -2208,6 +2276,18 @@ export function refreshTickerNews(
   return postApi<NewsPollRun, { market?: "US" | "NG"; force?: boolean }>(
     `/api/news/ticker/${encodeURIComponent(ticker)}/refresh`,
     payload ?? {},
+    options,
+  );
+}
+
+export function setNewsStar(
+  newsItemId: string,
+  starred: boolean,
+  options?: ApiRequestOptions,
+) {
+  return putApi<{ news_item_id: string; starred: boolean }, Record<string, never>>(
+    `/api/news/items/${encodeURIComponent(newsItemId)}/star?starred=${String(starred)}`,
+    {},
     options,
   );
 }

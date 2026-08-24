@@ -113,7 +113,6 @@ export function LiveDataProvider({ children }: { children: React.ReactNode }) {
 
       if (event.type === "news.poll_completed") {
         setLastNewsPoll(event.payload);
-        scheduleRouterRefresh();
       }
     },
     [scheduleRouterRefresh],

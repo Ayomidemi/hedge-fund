@@ -1,7 +1,14 @@
+from datetime import datetime, timezone
 from decimal import Decimal
-from unittest import TestCase
+from types import SimpleNamespace
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
-from app.api.schemas.ticker_intelligence import TickerMetricsInput
+from app.api.schemas.operating_core import InstrumentCreate
+from app.api.schemas.ticker_intelligence import TickerMetricsInput, TickerPrefillResponse
+from app.core.auth import AuthenticatedUser
+from app.services.ticker_intelligence.verdict import create_ticker_triage
 from app.services.ticker_intelligence.scoring import (
     action_from_score,
     recommended_weight_from_score,
@@ -68,3 +75,116 @@ class TickerDeskTests(TestCase):
 
         self.assertEqual(ticker_variants("dangcem.ng"), {"DANGCEM", "DANGCEM.NG"})
         self.assertEqual(ticker_variants("aapl"), {"AAPL", "AAPL.NG"})
+
+
+class TickerTriageTests(IsolatedAsyncioTestCase):
+    async def test_create_ticker_triage_persists_screen_with_cached_price(self) -> None:
+        session = FakeTriageSession()
+        instrument = SimpleNamespace(id=uuid4(), ticker="AAPL")
+        prefill = TickerPrefillResponse(
+            instrument=InstrumentCreate(
+                ticker="AAPL",
+                name="Apple Inc.",
+                asset_class="equity",
+                exchange="XNAS",
+                currency="USD",
+                sector="Technology",
+                industry="Consumer Electronics",
+            ),
+            metrics=TickerMetricsInput(
+                current_price=Decimal("150.00"),
+                market_cap_billion=Decimal("3000"),
+                pe_ratio=Decimal("24"),
+                forward_pe=Decimal("20"),
+                revenue_growth_pct=Decimal("8"),
+                earnings_growth_pct=Decimal("10"),
+                free_cash_flow_yield_pct=Decimal("4.5"),
+                net_margin_pct=Decimal("24"),
+                debt_to_equity=Decimal("0.35"),
+                price_vs_200d_pct=Decimal("6"),
+                relative_strength_6m_pct=Decimal("8"),
+                volatility_30d_pct=Decimal("22"),
+            ),
+            provider="test-provider",
+            source_reference="test://aapl",
+            data_timestamp=datetime(2026, 8, 24, tzinfo=timezone.utc),
+            source_warnings=[],
+            raw_sources={},
+        )
+
+        with (
+            patch(
+                "app.services.ticker_intelligence.verdict.prefill_ticker",
+                new_callable=AsyncMock,
+                return_value=prefill,
+            ) as prefill_ticker,
+            patch(
+                "app.services.ticker_intelligence.verdict.upsert_instrument",
+                new_callable=AsyncMock,
+                return_value=instrument,
+            ) as upsert_instrument,
+            patch(
+                "app.services.ticker_intelligence.verdict.get_cached_quote_price",
+                new_callable=AsyncMock,
+                return_value=Decimal("151.00"),
+            ),
+            patch(
+                "app.services.ticker_intelligence.verdict.get_ticker_desk",
+                new_callable=AsyncMock,
+                return_value=SimpleNamespace(
+                    on_watchlist=False,
+                    position=None,
+                    opportunity=None,
+                    radar=None,
+                    news=None,
+                    pre_trade=None,
+                    memos=[],
+                ),
+            ),
+            patch(
+                "app.services.ticker_intelligence.verdict.record_system_log",
+                new_callable=AsyncMock,
+            ),
+        ):
+            response = await create_ticker_triage(
+                session,
+                "AAPL",
+                market="US",
+                user=AuthenticatedUser(id="user-1", email="pm@example.com"),
+            )
+
+        prefill_ticker.assert_awaited_once_with(
+            "AAPL",
+            market_hint="US",
+            scope="triage",
+        )
+        upsert_instrument.assert_awaited_once()
+        triage = next(
+            item
+            for item in session.added
+            if item.__class__.__name__ == "TickerTriageRun"
+        )
+        self.assertTrue(session.committed)
+        self.assertEqual(response.triage_run_id, triage.id)
+        self.assertEqual(response.metrics.current_price, Decimal("151.00"))
+        self.assertEqual(triage.metrics["current_price"], "151.00")
+        self.assertEqual(triage.provider, "test-provider")
+
+
+class FakeTriageSession:
+    def __init__(self) -> None:
+        self.added = []
+        self.flushed = 0
+        self.committed = False
+
+    def add(self, item) -> None:
+        self.added.append(item)
+
+    async def flush(self) -> None:
+        self.flushed += 1
+        for item in self.added:
+            if getattr(item, "id", None) is None:
+                item.id = uuid4()
+
+    async def commit(self) -> None:
+        self.committed = True

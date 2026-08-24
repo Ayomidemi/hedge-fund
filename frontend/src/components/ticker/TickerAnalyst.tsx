@@ -8,14 +8,19 @@ import { LoaderCover } from "@/components/ui/Loader";
 import { Modal } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/ToastProvider";
 import {
+  addRadarWatchlistItem,
+  createOpportunity,
   createTickerAIDraft,
   createTickerAnalysis,
+  createTickerTriage,
   getTickerDesk,
   getTickerMemo,
   getTickerMLReport,
   getTickerPrefill,
-  getTickerVerdict,
   runResearchDataPipeline,
+  type OpportunityCreateInput,
+  type OpportunityPriority,
+  type OpportunityStatus,
   type TickerAIDraft,
   type TickerAIDraftInput,
   type TickerAnalysis,
@@ -25,6 +30,7 @@ import {
   type TickerMemo,
   type TickerMemoSummary,
   type TickerPrefill,
+  type TickerResolvedInstrument,
   type TickerVerdict,
 } from "@/lib/api";
 import {
@@ -150,14 +156,25 @@ export function TickerAnalyst({
     setError(null);
   }
 
-  async function startNewAnalysis(fromTicker?: string) {
-    const symbol = (fromTicker ?? "").trim().toUpperCase();
+  async function startNewAnalysis(fromTicker?: string, seededPrefill?: TickerPrefill) {
+    const symbol = (seededPrefill?.instrument.ticker ?? fromTicker ?? "").trim().toUpperCase();
     setMode("workflow");
     resetWorkflow();
     setIntakeTicker(symbol);
-    setIntakeMarket(symbol.endsWith(".NG") ? "NG" : "US");
+    setIntakeMarket(
+      seededPrefill ? marketFromInstrument(seededPrefill.instrument) : tickerMarket(symbol),
+    );
     if (!symbol) {
       window.setTimeout(() => formRef.current?.reset(), 0);
+      return;
+    }
+
+    if (seededPrefill) {
+      setPrefillData(seededPrefill);
+      setPrefillWarnings(
+        seededPrefill.source_warnings.filter(isAnalystVisibleWarning),
+      );
+      setStep("prefill");
       return;
     }
 
@@ -165,7 +182,7 @@ export function TickerAnalyst({
     try {
       const prefill = await getTickerPrefill(
         symbol,
-        symbol.endsWith(".NG") ? "NG" : "US",
+        tickerMarket(symbol),
         "analysis",
       );
       setPrefillData(prefill);
@@ -483,7 +500,11 @@ export function TickerAnalyst({
           <TickerDeskView
             desk={desk}
             loadingId={memoLoadingId}
+            onDeskChange={setDesk}
             onOpenMemo={handleOpenMemo}
+            onNewAnalysis={(prefill) =>
+              void startNewAnalysis(prefill?.instrument.ticker ?? desk.ticker, prefill)
+            }
           />
         ) : (
           <div className="rounded-xl border border-zinc-200 bg-white p-5 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
@@ -499,6 +520,14 @@ export function TickerAnalyst({
     <div className="mx-auto max-w-[1560px] space-y-5">
       <HistoryHeader onNewAnalysis={() => void startNewAnalysis()} />
       {error && <ErrorNotice message={error} />}
+      <QuickTriageHome
+        onOpenTicker={(ticker) =>
+          router.push(`/ticker-analyst?ticker=${encodeURIComponent(ticker)}`)
+        }
+        onNewAnalysis={(prefill) =>
+          void startNewAnalysis(prefill?.instrument.ticker, prefill)
+        }
+      />
       <MemoIndex
         loadingId={memoLoadingId}
         memos={recentMemos}
@@ -595,18 +624,26 @@ function QueueStatusNotice({
 function TickerDeskView({
   desk,
   loadingId,
+  onDeskChange,
   onOpenMemo,
+  onNewAnalysis,
 }: {
   desk: TickerDesk;
   loadingId: string | null;
+  onDeskChange: (desk: TickerDesk) => void;
   onOpenMemo: (memoId: string) => void;
+  onNewAnalysis: (prefill: TickerPrefill) => void;
 }) {
   const ticker = desk.ticker;
   const radar = desk.radar;
 
   return (
     <>
-      <QuickTriageSection desk={desk} />
+      <QuickTriageSection
+        desk={desk}
+        onDeskChange={onDeskChange}
+        onNewAnalysis={onNewAnalysis}
+      />
 
       <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap gap-3 text-sm">
@@ -723,17 +760,38 @@ function TickerDeskView({
   );
 }
 
-function QuickTriageSection({ desk }: { desk: TickerDesk }) {
+function QuickTriageHome({
+  onOpenTicker,
+  onNewAnalysis,
+}: {
+  onOpenTicker: (ticker: string) => void;
+  onNewAnalysis: (prefill: TickerPrefill) => void;
+}) {
+  const [market, setMarket] = useState<TickerMarket>("US");
+  const [ticker, setTicker] = useState("");
   const [verdict, setVerdict] = useState<TickerVerdict | null>(null);
+  const [desk, setDesk] = useState<TickerDesk | null>(null);
   const [loading, setLoading] = useState(false);
-  const market = desk.ticker.endsWith(".NG") ? "NG" : "US";
+  const normalizedTicker = normalizeTickerInput(ticker);
 
   async function handleRun() {
+    if (!normalizedTicker) {
+      toast.error("Choose a ticker first.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const next = await getTickerVerdict(desk.ticker, { market });
+      const next = await createTickerTriage(normalizedTicker, { market });
       setVerdict(next);
-      toast.success(`${next.ticker} quick triage completed.`);
+      setTicker(next.ticker);
+      setMarket(tickerMarket(next.ticker, next.instrument.currency));
+      try {
+        setDesk(await getTickerDesk(next.ticker));
+      } catch {
+        setDesk(null);
+      }
+      toast.success(`${next.ticker} quick triage saved.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Quick triage failed.");
     } finally {
@@ -741,12 +799,99 @@ function QuickTriageSection({ desk }: { desk: TickerDesk }) {
     }
   }
 
-  const latestMemo = desk.memos[0] ?? null;
-  const shownAction = verdict?.action_label ?? latestMemo?.action ?? "Not run";
-  const shownDecision = verdict?.triage_decision ?? "pending";
-  const shownPriority = verdict?.research_priority ?? "not set";
-  const shownConfidence = verdict?.confidence_score ?? latestMemo?.confidence_score;
-  const shownWeight = verdict?.recommended_weight;
+  function resetForMarket(nextMarket: TickerMarket) {
+    setMarket(nextMarket);
+    setTicker("");
+    setVerdict(null);
+    setDesk(null);
+  }
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+            Quick Triage
+          </p>
+          <h3 className="mt-1 text-2xl font-semibold tracking-normal">
+            First-pass ticker decision
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleRun()}
+          disabled={loading || !normalizedTicker}
+          className={buttonClassName}
+        >
+          {loading ? "Running..." : verdict ? "Run again" : "Run quick triage"}
+        </button>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+        <TickerSelector
+          required
+          detailsScope="identity"
+          fetchDetailsOnSelect={false}
+          market={market}
+          value={ticker}
+          onMarketChange={resetForMarket}
+          onTickerChange={(value) => {
+            setTicker(value);
+            setVerdict(null);
+            setDesk(null);
+          }}
+          className={inputClassName}
+        />
+        <Field label="Current State">
+          <input
+            readOnly
+            value={verdict ? formatLabel(verdict.triage_decision) : "Not run"}
+            className={inputClassName}
+          />
+        </Field>
+      </div>
+
+      <QuickTriageResult
+        desk={desk}
+        verdict={verdict}
+        onDeskChange={setDesk}
+        onNewAnalysis={onNewAnalysis}
+        onOpenTicker={onOpenTicker}
+      />
+    </section>
+  );
+}
+
+function QuickTriageSection({
+  desk,
+  onDeskChange,
+  onNewAnalysis,
+}: {
+  desk: TickerDesk;
+  onDeskChange: (desk: TickerDesk) => void;
+  onNewAnalysis: (prefill: TickerPrefill) => void;
+}) {
+  const [verdict, setVerdict] = useState<TickerVerdict | null>(null);
+  const [loading, setLoading] = useState(false);
+  const market = tickerMarket(desk.ticker);
+
+  async function handleRun() {
+    setLoading(true);
+    try {
+      const next = await createTickerTriage(desk.ticker, { market });
+      setVerdict(next);
+      try {
+        onDeskChange(await getTickerDesk(next.ticker));
+      } catch {
+        // The persisted triage is still useful even if the surrounding desk refresh fails.
+      }
+      toast.success(`${next.ticker} quick triage saved.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Quick triage failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
@@ -756,15 +901,15 @@ function QuickTriageSection({ desk }: { desk: TickerDesk }) {
             Quick Triage
           </p>
           <h3 className="mt-1 text-2xl font-semibold tracking-tight">
-            {formatLabel(shownAction)}
+            {formatLabel(
+              verdict?.action_label ?? desk.latest_triage?.action_label ?? "Not run",
+            )}
           </h3>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-500">
-            {verdict
-              ? verdict.next_action
-              : latestMemo
-                ? "Showing the latest saved memo action. Run quick triage for a fresh screen."
-                : "Run a lightweight screen to decide whether this ticker should be researched, watched, or rejected."}
-          </p>
+          {desk.latest_triage && !verdict ? (
+            <p className="mt-2 text-sm text-zinc-500">
+              Last run {formatDateTime(desk.latest_triage.generated_at)}
+            </p>
+          ) : null}
         </div>
         <button
           type="button"
@@ -772,17 +917,64 @@ function QuickTriageSection({ desk }: { desk: TickerDesk }) {
           disabled={loading}
           className={buttonClassName}
         >
-          {loading ? "Running..." : verdict ? "Refresh triage" : "Run quick triage"}
+          {loading ? "Running..." : desk.latest_triage || verdict ? "Refresh triage" : "Run quick triage"}
         </button>
       </div>
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <QuickTriageResult
+        desk={desk}
+        verdict={verdict}
+        onDeskChange={onDeskChange}
+        onNewAnalysis={onNewAnalysis}
+      />
+    </section>
+  );
+}
+
+function QuickTriageResult({
+  desk,
+  verdict,
+  onDeskChange,
+  onNewAnalysis,
+  onOpenTicker,
+}: {
+  desk: TickerDesk | null;
+  verdict: TickerVerdict | null;
+  onDeskChange?: (desk: TickerDesk) => void;
+  onNewAnalysis: (prefill: TickerPrefill) => void;
+  onOpenTicker?: (ticker: string) => void;
+}) {
+  const latestTriage = desk?.latest_triage ?? null;
+  const latestMemo = desk?.memos[0] ?? null;
+  const shownAction = verdict?.action_label ?? latestTriage?.action_label ?? latestMemo?.action ?? "Not run";
+  const shownDecision = verdict?.triage_decision ?? latestTriage?.triage_decision ?? "pending";
+  const shownPriority = verdict?.research_priority ?? latestTriage?.research_priority ?? "not set";
+  const shownInitialView = verdict?.initial_view ?? latestTriage?.initial_view;
+  const shownConfidence =
+    verdict?.confidence_score ?? latestTriage?.confidence_score ?? latestMemo?.confidence_score;
+  const shownComposite = verdict?.composite_score ?? latestTriage?.composite_score ?? latestMemo?.composite_score;
+  const shownWeight = verdict?.recommended_weight ?? latestTriage?.recommended_weight;
+  const nextAction =
+    verdict?.next_action ??
+    latestTriage?.next_action ??
+    (latestMemo ? "Showing the latest saved memo action." : "No quick triage run yet.");
+
+  return (
+    <div className="mt-5">
+      <p className="max-w-3xl text-sm leading-6 text-zinc-500">{nextAction}</p>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        <MetricCard label="Action" value={formatLabel(shownAction)} />
         <MetricCard label="Decision" value={formatLabel(shownDecision)} />
         <MetricCard label="Priority" value={formatLabel(shownPriority)} />
-        <MetricCard label="Initial view" value={verdict ? formatLabel(verdict.initial_view) : "-"} />
+        <MetricCard label="Initial view" value={shownInitialView ? formatLabel(shownInitialView) : "-"} />
         <MetricCard
           label="Confidence"
           value={shownConfidence ? `${score(shownConfidence)}%` : "-"}
+        />
+        <MetricCard
+          label="Composite"
+          value={shownComposite ? score(shownComposite) : "-"}
         />
         <MetricCard
           label="Max weight"
@@ -791,27 +983,36 @@ function QuickTriageSection({ desk }: { desk: TickerDesk }) {
       </div>
 
       {verdict ? (
-        <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_0.8fr]">
-          <TriageList title="Top drivers" items={verdict.top_drivers} />
-          <TriageList title="Top blockers" items={verdict.top_blockers} />
-          <section className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Why Now
-            </p>
-            <p className="mt-3 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
-              {verdict.why_now}
-            </p>
-            <div className="mt-4 grid gap-2 text-xs text-zinc-500">
-              <span>Provider: {verdict.provider}</span>
-              <span>Data: {formatDateTime(verdict.data_timestamp)}</span>
-            </div>
-          </section>
-        </div>
+        <>
+          <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_0.8fr]">
+            <TriageList title="Top drivers" items={verdict.top_drivers} />
+            <TriageList title="Top blockers" items={verdict.top_blockers} />
+            <section className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Why Now
+              </p>
+              <p className="mt-3 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+                {verdict.why_now}
+              </p>
+              <div className="mt-4 grid gap-2 text-xs text-zinc-500">
+                <span>Provider: {verdict.provider}</span>
+                <span>Data: {formatDateTime(verdict.data_timestamp)}</span>
+              </div>
+            </section>
+          </div>
+          <TriageActions
+            desk={desk}
+            verdict={verdict}
+            onDeskChange={onDeskChange}
+            onNewAnalysis={onNewAnalysis}
+            onOpenTicker={onOpenTicker}
+          />
+        </>
       ) : (
         <div className="mt-5 grid gap-3 text-sm text-zinc-500 sm:grid-cols-3">
-          <p>Radar: {desk.radar?.scan_state ? formatLabel(desk.radar.scan_state) : "No recent flag"}</p>
-          <p>Queue: {desk.opportunity ? formatLabel(desk.opportunity.status) : "Not queued"}</p>
-          <p>Position: {desk.position ? "Owned" : "No live position"}</p>
+          <p>Radar: {desk?.radar?.scan_state ? formatLabel(desk.radar.scan_state) : "No recent flag"}</p>
+          <p>Queue: {desk?.opportunity ? formatLabel(desk.opportunity.status) : "Not queued"}</p>
+          <p>Position: {desk?.position ? "Owned" : "No live position"}</p>
         </div>
       )}
 
@@ -820,7 +1021,106 @@ function QuickTriageSection({ desk }: { desk: TickerDesk }) {
           <WarningNotice warnings={verdict.warnings} />
         </div>
       ) : null}
-    </section>
+    </div>
+  );
+}
+
+function TriageActions({
+  desk,
+  verdict,
+  onDeskChange,
+  onNewAnalysis,
+  onOpenTicker,
+}: {
+  desk: TickerDesk | null;
+  verdict: TickerVerdict;
+  onDeskChange?: (desk: TickerDesk) => void;
+  onNewAnalysis: (prefill: TickerPrefill) => void;
+  onOpenTicker?: (ticker: string) => void;
+}) {
+  const [pending, setPending] = useState<"watchlist" | "opportunity" | null>(null);
+  const queued = Boolean(desk?.opportunity);
+  const watched = Boolean(desk?.on_watchlist);
+
+  async function refreshDesk() {
+    if (!onDeskChange) return;
+    try {
+      onDeskChange(await getTickerDesk(verdict.ticker));
+    } catch {
+      // The action still completed; the next navigation/reload will pick up desk state.
+    }
+  }
+
+  async function handleWatchlist() {
+    setPending("watchlist");
+    try {
+      await addRadarWatchlistItem({
+        ticker: verdict.ticker,
+        market: marketApiValue(verdict.market),
+        notes: `${formatLabel(verdict.triage_decision)}: ${verdict.next_action}`,
+      });
+      await refreshDesk();
+      toast.success(`${verdict.ticker} added to the radar watchlist.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Watchlist update failed.");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleOpportunity() {
+    setPending("opportunity");
+    try {
+      await createOpportunity(buildOpportunityFromVerdict(verdict));
+      await refreshDesk();
+      toast.success(`${verdict.ticker} moved into the opportunity queue.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Opportunity could not be created.");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <div className="mt-5 flex flex-wrap gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-900">
+      <button
+        type="button"
+        onClick={() => onNewAnalysis(prefillFromVerdict(verdict))}
+        className={buttonClassName}
+      >
+        Deep Research
+      </button>
+      <button
+        type="button"
+        onClick={() => void handleWatchlist()}
+        disabled={watched || pending !== null}
+        className={secondaryButtonClassName}
+      >
+        {watched ? "On Watchlist" : pending === "watchlist" ? "Saving..." : "Add Watchlist"}
+      </button>
+      <button
+        type="button"
+        onClick={() => void handleOpportunity()}
+        disabled={queued || pending !== null}
+        className={secondaryButtonClassName}
+      >
+        {queued ? "In Queue" : pending === "opportunity" ? "Saving..." : "Move to Queue"}
+      </button>
+      {onOpenTicker ? (
+        <button
+          type="button"
+          onClick={() => onOpenTicker(verdict.ticker)}
+          className={secondaryButtonClassName}
+        >
+          Open Desk
+        </button>
+      ) : null}
+      {verdict.context.has_position ? (
+        <Link href="/risk-centre" className={secondaryButtonClassName}>
+          Risk Centre
+        </Link>
+      ) : null}
+    </div>
   );
 }
 
@@ -1712,6 +2012,9 @@ function formatAnalystWarning(warning: string) {
 
 function isAnalystVisibleWarning(warning: string) {
   const normalized = warning.trim().toLowerCase();
+  if (normalized === "quick triage is research screening only, not trade approval.") {
+    return false;
+  }
   if (normalized.includes("not available for this api key or plan")) {
     return false;
   }
@@ -1903,6 +2206,82 @@ function metricText(scores: MemoScores, metricName: string) {
   const item = scores.scorecard.find((scoreItem) => scoreItem.name === metricName);
   if (!item) return "Not scored";
   return `${score(item.score)}/100 - ${item.notes}`;
+}
+
+function tickerMarket(ticker: string, currency?: string | null): TickerMarket {
+  if (ticker.trim().toUpperCase().endsWith(".NG") || currency?.toUpperCase() === "NGN") {
+    return "NG";
+  }
+  return "US";
+}
+
+function marketFromInstrument(instrument: TickerResolvedInstrument): TickerMarket {
+  return tickerMarket(instrument.ticker, instrument.currency);
+}
+
+function marketApiValue(market: string): "US" | "NG" {
+  return market.toUpperCase() === "NG" ? "NG" : "US";
+}
+
+function prefillFromVerdict(verdict: TickerVerdict): TickerPrefill {
+  return {
+    instrument: verdict.instrument,
+    metrics: verdict.metrics,
+    provider: verdict.provider,
+    source_reference: verdict.source_reference,
+    data_timestamp: verdict.data_timestamp,
+    source_warnings: verdict.warnings,
+    raw_sources: {
+      source: "quick_triage",
+      triage_run_id: verdict.triage_run_id,
+    },
+  };
+}
+
+function buildOpportunityFromVerdict(verdict: TickerVerdict): OpportunityCreateInput {
+  return {
+    instrument: opportunityInstrument(verdict.instrument),
+    status: opportunityStatus(verdict.triage_decision),
+    priority: opportunityPriority(verdict.research_priority),
+    thesis: `${verdict.action_label}: ${verdict.why_now}`,
+    research_question: `Should ${verdict.ticker} move from quick triage into a funded candidate?`,
+    next_action: verdict.next_action,
+    time_horizon: "6-18 months",
+    conviction_score: verdict.conviction_score,
+    target_weight: verdict.recommended_weight,
+    notes: [
+      `Quick Triage: ${formatLabel(verdict.triage_decision)}`,
+      `Initial view: ${formatLabel(verdict.initial_view)}`,
+      `Provider: ${verdict.provider}`,
+      `Data timestamp: ${formatDateTime(verdict.data_timestamp)}`,
+    ].join("\n"),
+  };
+}
+
+function opportunityInstrument(
+  instrument: TickerResolvedInstrument,
+): OpportunityCreateInput["instrument"] {
+  return {
+    ticker: instrument.ticker,
+    name: instrument.name,
+    asset_class: instrument.asset_class,
+    exchange: instrument.exchange ?? undefined,
+    currency: instrument.currency,
+    sector: instrument.sector ?? undefined,
+    industry: instrument.industry ?? undefined,
+  };
+}
+
+function opportunityStatus(decision: string): OpportunityStatus {
+  if (decision === "research") return "research";
+  if (decision === "watch") return "watchlist";
+  return "screening";
+}
+
+function opportunityPriority(priority: string): OpportunityPriority {
+  if (priority === "high") return "high";
+  if (priority === "low") return "low";
+  return "medium";
 }
 
 function buildPayload(formData: FormData): TickerAnalysisInput {

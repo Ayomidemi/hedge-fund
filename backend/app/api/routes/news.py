@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import UUID
 
 from app.api.schemas.news import (
     NewsOverviewResponse,
     NewsPollRequest,
     NewsPollRunResponse,
+    NewsStarResponse,
     NewsTickerRefreshRequest,
 )
 from app.core.auth import AuthenticatedUser, require_authenticated_user
@@ -15,6 +17,7 @@ from app.services.news.centre import (
     news_run_response,
     poll_news,
     refresh_ticker_news,
+    set_news_star,
 )
 from app.services.realtime.events import news_poll_completed_event
 from app.services.realtime.redis_bus import publish_event
@@ -29,6 +32,8 @@ async def read_news_overview(
     jurisdiction: str | None = Query(default="all"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=5, le=50),
+    ticker_page: int = Query(default=1, ge=1),
+    ticker_page_size: int = Query(default=8, ge=5, le=20),
     session: AsyncSession = Depends(get_session),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> NewsOverviewResponse:
@@ -39,6 +44,8 @@ async def read_news_overview(
         jurisdiction=jurisdiction,
         page=page,
         page_size=page_size,
+        ticker_page=ticker_page,
+        ticker_page_size=ticker_page_size,
         owner_user_id=user.id,
     )
 
@@ -81,6 +88,25 @@ async def refresh_news_ticker(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await _publish_run(run)
     return news_run_response(run)
+
+
+@router.put("/items/{news_item_id}/star", response_model=NewsStarResponse)
+async def update_news_star(
+    news_item_id: UUID,
+    starred: bool = Query(default=True),
+    session: AsyncSession = Depends(get_session),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> NewsStarResponse:
+    try:
+        saved = await set_news_star(
+            session,
+            news_item_id=news_item_id,
+            owner_user_id=user.id,
+            starred=starred,
+        )
+    except NewsUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return NewsStarResponse(news_item_id=news_item_id, starred=saved)
 
 
 async def _publish_run(run) -> None:

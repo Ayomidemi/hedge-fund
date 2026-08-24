@@ -129,6 +129,9 @@ class Instrument(Base, TimestampMixin):
     quote: Mapped["InstrumentQuote | None"] = relationship(
         back_populates="instrument", uselist=False
     )
+    triage_runs: Mapped[list["TickerTriageRun"]] = relationship(
+        back_populates="instrument"
+    )
 
 
 class Portfolio(Base, TimestampMixin):
@@ -726,6 +729,9 @@ class NewsItem(Base, TimestampMixin):
     ticker_links: Mapped[list["NewsTickerLink"]] = relationship(
         back_populates="news_item", cascade="all, delete-orphan"
     )
+    stars: Mapped[list["NewsItemStar"]] = relationship(
+        back_populates="news_item", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint("provider", "provider_id", name="uq_news_items_provider_id"),
@@ -764,6 +770,31 @@ class NewsTickerLink(Base, TimestampMixin):
     )
 
 
+class NewsItemStar(Base, TimestampMixin):
+    """User-saved news article."""
+
+    __tablename__ = "news_item_stars"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    news_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("news_items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    news_item: Mapped["NewsItem"] = relationship(back_populates="stars")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "news_item_id",
+            name="uq_news_item_stars_owner_item",
+        ),
+        Index("ix_news_item_stars_owner_created", "owner_user_id", "created_at"),
+    )
+
+
 class TickerMemo(Base, TimestampMixin):
     __tablename__ = "ticker_memos"
 
@@ -794,6 +825,58 @@ class TickerMemo(Base, TimestampMixin):
     model_version_label: Mapped[str | None] = mapped_column(String(128))
 
     instrument: Mapped["Instrument"] = relationship(back_populates="ticker_memos")
+
+
+class TickerTriageRun(Base, TimestampMixin):
+    """Persisted quick screen before full Ticker Analyst underwriting."""
+
+    __tablename__ = "ticker_triage_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    market: Mapped[str] = mapped_column(String(16), nullable=False)
+    research_priority: Mapped[str] = mapped_column(String(32), nullable=False)
+    initial_view: Mapped[str] = mapped_column(String(32), nullable=False)
+    triage_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    action_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    conviction_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    composite_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    recommended_weight: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    top_drivers: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    top_blockers: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    why_now: Mapped[str] = mapped_column(Text, nullable=False)
+    next_action: Mapped[str] = mapped_column(Text, nullable=False)
+    warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    source_reference: Mapped[str] = mapped_column(String(512), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    context: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    scorecard: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+
+    instrument: Mapped["Instrument"] = relationship(back_populates="triage_runs")
+
+    __table_args__ = (
+        Index(
+            "ix_ticker_triage_owner_instrument_generated",
+            "owner_user_id",
+            "instrument_id",
+            "generated_at",
+        ),
+        Index("ix_ticker_triage_owner_generated", "owner_user_id", "generated_at"),
+        Index("ix_ticker_triage_decision", "triage_decision"),
+    )
 
 
 class Opportunity(Base, TimestampMixin):

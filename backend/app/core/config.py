@@ -41,9 +41,22 @@ class Settings(BaseSettings):
     hf_fmp_base_url: str = "https://financialmodelingprep.com/api"
     hf_tiingo_api_key: str | None = None
     hf_tiingo_base_url: str = "https://api.tiingo.com"
+    hf_tiingo_stream_enabled: bool = False
+    hf_tiingo_stream_market_hours_only: bool = True
+    hf_tiingo_equity_stream_url: str = "wss://api.tiingo.com/iex"
+    hf_tiingo_equity_threshold_level: int = 6
+    hf_tiingo_fx_stream_enabled: bool = False
+    hf_tiingo_fx_stream_url: str = "wss://api.tiingo.com/fx"
+    hf_tiingo_fx_threshold_level: int = 5
+    hf_tiingo_fx_pairs: str = ""
+    hf_tiingo_stream_flush_seconds: int = 5
+    hf_tiingo_stream_reconnect_seconds: int = 5
+    hf_tiingo_stream_reconnect_max_seconds: int = 60
+    hf_tiingo_stream_subscription_refresh_seconds: int = 300
+    hf_tiingo_stream_max_tickers: int = 250
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
-    hf_news_poll_interval_seconds: int = 600
+    hf_news_poll_interval_seconds: int = 60
     hf_news_poll_jurisdictions: str = "US"
     hf_news_ticker_refresh_ttl_seconds: int = 1800
     hf_news_retention_days: int = 50
@@ -168,6 +181,66 @@ class Settings(BaseSettings):
         return self.hf_tiingo_base_url.strip().rstrip("/")
 
     @property
+    def tiingo_stream_enabled(self) -> bool:
+        return bool(self.hf_tiingo_stream_enabled and self.hf_tiingo_api_key)
+
+    @property
+    def tiingo_fx_stream_enabled(self) -> bool:
+        return bool(
+            self.tiingo_stream_enabled
+            and self.hf_tiingo_fx_stream_enabled
+            and self.tiingo_fx_pairs
+        )
+
+    @property
+    def tiingo_equity_stream_url(self) -> str:
+        return self.hf_tiingo_equity_stream_url.strip()
+
+    @property
+    def tiingo_fx_stream_url(self) -> str:
+        return self.hf_tiingo_fx_stream_url.strip()
+
+    @property
+    def tiingo_equity_threshold_level(self) -> int:
+        return max(int(self.hf_tiingo_equity_threshold_level), 0)
+
+    @property
+    def tiingo_fx_threshold_level(self) -> int:
+        return max(int(self.hf_tiingo_fx_threshold_level), 0)
+
+    @property
+    def tiingo_fx_pairs(self) -> tuple[str, ...]:
+        pairs = []
+        for item in self.hf_tiingo_fx_pairs.split(","):
+            normalized = item.strip().lower().replace("/", "")
+            if len(normalized) == 6:
+                pairs.append(normalized)
+        return tuple(dict.fromkeys(pairs))
+
+    @property
+    def tiingo_stream_flush_seconds(self) -> int:
+        return max(int(self.hf_tiingo_stream_flush_seconds), 1)
+
+    @property
+    def tiingo_stream_reconnect_seconds(self) -> int:
+        return max(int(self.hf_tiingo_stream_reconnect_seconds), 1)
+
+    @property
+    def tiingo_stream_reconnect_max_seconds(self) -> int:
+        return max(
+            int(self.hf_tiingo_stream_reconnect_max_seconds),
+            self.tiingo_stream_reconnect_seconds,
+        )
+
+    @property
+    def tiingo_stream_subscription_refresh_seconds(self) -> int:
+        return max(int(self.hf_tiingo_stream_subscription_refresh_seconds), 60)
+
+    @property
+    def tiingo_stream_max_tickers(self) -> int:
+        return max(int(self.hf_tiingo_stream_max_tickers), 1)
+
+    @property
     def supabase_url(self) -> str | None:
         value = (self.hf_supabase_url or "").strip().rstrip("/")
         return value or None
@@ -178,7 +251,7 @@ class Settings(BaseSettings):
 
     @property
     def news_poll_interval_seconds(self) -> int:
-        return max(int(self.hf_news_poll_interval_seconds), 60)
+        return max(int(self.hf_news_poll_interval_seconds), 30)
 
     @property
     def news_poll_jurisdictions(self) -> tuple[str, ...]:

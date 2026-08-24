@@ -3,7 +3,7 @@ from unittest import TestCase
 from unittest.mock import AsyncMock, patch
 
 from app.main import app
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.services.news import providers
 from app.services.news.providers import NewsFetchResult, normalize_ticker
 from app.services.realtime.events import news_poll_completed_event
@@ -19,6 +19,8 @@ class NewsCentreRouteTests(TestCase):
         self.assertIn("post", paths["/api/news/poll"])
         self.assertIn("/api/news/ticker/{ticker}/refresh", paths)
         self.assertIn("post", paths["/api/news/ticker/{ticker}/refresh"])
+        self.assertIn("/api/news/items/{news_item_id}/star", paths)
+        self.assertIn("put", paths["/api/news/items/{news_item_id}/star"])
 
     def test_news_overview_exposes_pagination_params(self) -> None:
         operation = app.openapi()["paths"]["/api/news/overview"]["get"]
@@ -26,6 +28,8 @@ class NewsCentreRouteTests(TestCase):
 
         self.assertIn("page", parameters)
         self.assertIn("page_size", parameters)
+        self.assertIn("ticker_page", parameters)
+        self.assertIn("ticker_page_size", parameters)
 
 
 class NewsRetentionTests(TestCase):
@@ -70,16 +74,10 @@ class NewsProviderTests(TestCase):
                 )
             )
 
-        self.assertEqual(result.calls, 2)
-        self.assertEqual(
-            result.provider_plan,
-            ["US:tiingo:latest", "US:fmp:stock-latest"],
-        )
+        self.assertEqual(result.calls, 1)
+        self.assertEqual(result.provider_plan, ["US:tiingo:latest"])
         tiingo_news.assert_awaited_once_with(tickers=[])
-        fmp_news.assert_awaited_once_with(
-            include_general=False,
-            include_press_releases=False,
-        )
+        fmp_news.assert_not_called()
         ngn_disclosures.assert_not_called()
         ngn_company.assert_not_called()
 
@@ -132,7 +130,7 @@ class NewsProviderTests(TestCase):
                 providers,
                 "_fetch_fmp_latest_news",
                 new=AsyncMock(return_value=NewsFetchResult(calls=1)),
-            ),
+            ) as fmp_news,
             patch.object(
                 providers,
                 "_fetch_ngn_disclosures",
@@ -152,16 +150,45 @@ class NewsProviderTests(TestCase):
                 )
             )
 
-        self.assertEqual(result.calls, 3)
+        self.assertEqual(result.calls, 2)
         self.assertEqual(
             result.provider_plan,
             [
                 "US:tiingo:latest",
-                "US:fmp:stock-latest",
                 "NG:ngnmarket:disclosures",
             ],
         )
         ngn_company.assert_not_called()
+        fmp_news.assert_not_called()
+
+    def test_us_ticker_refresh_does_not_call_fmp(self) -> None:
+        with (
+            patch.object(
+                providers,
+                "_fetch_tiingo_news",
+                new=AsyncMock(return_value=NewsFetchResult(calls=1)),
+            ) as tiingo_news,
+            patch.object(
+                providers,
+                "_fetch_fmp_ticker_news",
+                new=AsyncMock(return_value=NewsFetchResult(calls=1)),
+            ) as fmp_news,
+        ):
+            result = asyncio.run(providers.fetch_news_for_ticker("SCGLY", market="US"))
+
+        self.assertIn("US:tiingo:ticker:SCGLY", result.provider_plan)
+        tiingo_news.assert_awaited_once_with(tickers=["SCGLY"])
+        fmp_news.assert_not_called()
+        self.assertFalse(any("fmp" in label for label in result.provider_plan))
+
+
+class NewsPollIntervalTests(TestCase):
+    def test_news_poll_interval_defaults_to_sixty_seconds(self) -> None:
+        self.assertEqual(
+            Settings.model_fields["hf_news_poll_interval_seconds"].default,
+            60,
+        )
+        self.assertGreaterEqual(settings.news_poll_interval_seconds, 30)
 
 
 class NewsRealtimeEventTests(TestCase):

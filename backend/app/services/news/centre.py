@@ -3,7 +3,10 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from uuid import UUID
+
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +20,7 @@ from app.core.config import settings
 from app.models import (
     Instrument,
     NewsItem,
+    NewsItemStar,
     NewsPollRun,
     NewsTickerLink,
     RadarRun,
@@ -35,7 +39,8 @@ logger = logging.getLogger(__name__)
 
 CURRENT_NEWS_DEFAULT_PAGE_SIZE = 20
 CURRENT_NEWS_MAX_PAGE_SIZE = 50
-TICKER_NEWS_LIMIT = 60
+TICKER_NEWS_DEFAULT_PAGE_SIZE = 8
+TICKER_NEWS_MAX_PAGE_SIZE = 20
 WATCHLIST_NEWS_LIMIT = 50
 
 
@@ -53,6 +58,7 @@ async def poll_news(
     started_at = datetime.now(timezone.utc)
     jurisdictions = _poll_jurisdictions(jurisdiction)
     target_key = _jurisdiction_key(jurisdictions)
+    run_notes = [f"Current news requested for {target_key}."]
     run = NewsPollRun(
         started_at=started_at,
         status="running",
@@ -60,10 +66,11 @@ async def poll_news(
         target_scope="current",
         target_key=target_key,
         interval_seconds=settings.news_poll_interval_seconds,
-        notes=[f"Current news requested for {target_key}."],
+        notes=run_notes,
     )
     session.add(run)
     await session.flush()
+    run_id = run.id
 
     try:
         recent = await _recent_completed_run(
@@ -112,10 +119,17 @@ async def poll_news(
         await session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.exception("news_poll_failed")
-        run.status = "failed"
-        run.finished_at = datetime.now(timezone.utc)
-        run.errors = [{"error": str(exc)}]
-        await session.commit()
+        await _record_failed_run(
+            session,
+            run_id=run_id,
+            started_at=started_at,
+            trigger=trigger,
+            target_scope="current",
+            target_key=target_key,
+            interval_seconds=settings.news_poll_interval_seconds,
+            notes=run_notes,
+            error=str(exc),
+        )
         raise
 
     await session.refresh(run)
@@ -134,6 +148,7 @@ async def refresh_ticker_news(
         raise NewsUnavailableError("Ticker is required.")
 
     started_at = datetime.now(timezone.utc)
+    run_notes = [f"Ticker refresh requested for {normalized}."]
     run = NewsPollRun(
         started_at=started_at,
         status="running",
@@ -141,10 +156,11 @@ async def refresh_ticker_news(
         target_scope="ticker",
         target_key=normalized,
         interval_seconds=settings.news_poll_interval_seconds,
-        notes=[f"Ticker refresh requested for {normalized}."],
+        notes=run_notes,
     )
     session.add(run)
     await session.flush()
+    run_id = run.id
 
     try:
         recent = await _recent_completed_run(
@@ -187,10 +203,17 @@ async def refresh_ticker_news(
         await session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.exception("ticker_news_refresh_failed", extra={"ticker": normalized})
-        run.status = "failed"
-        run.finished_at = datetime.now(timezone.utc)
-        run.errors = [{"error": str(exc)}]
-        await session.commit()
+        await _record_failed_run(
+            session,
+            run_id=run_id,
+            started_at=started_at,
+            trigger="ticker",
+            target_scope="ticker",
+            target_key=normalized,
+            interval_seconds=settings.news_poll_interval_seconds,
+            notes=run_notes,
+            error=str(exc),
+        )
         raise
 
     await session.refresh(run)
@@ -205,6 +228,8 @@ async def build_news_overview(
     jurisdiction: str | None = None,
     page: int = 1,
     page_size: int = CURRENT_NEWS_DEFAULT_PAGE_SIZE,
+    ticker_page: int = 1,
+    ticker_page_size: int = TICKER_NEWS_DEFAULT_PAGE_SIZE,
     owner_user_id: str | None = None,
 ) -> NewsOverviewResponse:
     generated_at = datetime.now(timezone.utc)
@@ -213,6 +238,8 @@ async def build_news_overview(
     normalized_jurisdiction = _normalize_jurisdiction(jurisdiction)
     current_page = max(page, 1)
     current_page_size = min(max(page_size, 5), CURRENT_NEWS_MAX_PAGE_SIZE)
+    selected_ticker_page = max(ticker_page, 1)
+    selected_ticker_page_size = min(max(ticker_page_size, 5), TICKER_NEWS_MAX_PAGE_SIZE)
 
     current, current_total = await _current_items(
         session,
@@ -220,22 +247,43 @@ async def build_news_overview(
         page=current_page,
         page_size=current_page_size,
     )
-    ticker_items = (
-        await _items_for_tickers(session, [normalized_ticker], limit=TICKER_NEWS_LIMIT)
+    ticker_items, ticker_total = (
+        await _items_for_tickers(
+            session,
+            [normalized_ticker],
+            page=selected_ticker_page,
+            page_size=selected_ticker_page_size,
+        )
         if normalized_ticker
-        else []
+        else ([], 0)
     )
     watchlist_tickers = await _watchlist_tickers(session, owner_user_id)
-    watchlist_items = (
-        await _items_for_tickers(session, watchlist_tickers, limit=WATCHLIST_NEWS_LIMIT)
+    watchlist_items, _watchlist_total = (
+        await _items_for_tickers(
+            session,
+            watchlist_tickers,
+            page=1,
+            page_size=WATCHLIST_NEWS_LIMIT,
+        )
         if watchlist_tickers
-        else []
+        else ([], 0)
+    )
+    saved_items = await _saved_items(session, owner_user_id, limit=WATCHLIST_NEWS_LIMIT)
+    starred_ids = await _starred_item_ids(
+        session,
+        owner_user_id,
+        [
+            *(item.id for item in current),
+            *(item.id for item in ticker_items),
+            *(item.id for item in watchlist_items),
+            *(item.id for item in saved_items),
+        ],
     )
 
     return NewsOverviewResponse(
         generated_at=generated_at,
         latest_run=news_run_response(latest_run) if latest_run else None,
-        current=[_item_response(item) for item in current],
+        current=[_item_response(item, starred_ids=starred_ids) for item in current],
         current_page=NewsPaginationResponse(
             page=current_page,
             page_size=current_page_size,
@@ -244,10 +292,58 @@ async def build_news_overview(
             has_previous=current_page > 1,
         ),
         ticker=normalized_ticker,
-        ticker_items=[_item_response(item) for item in ticker_items],
-        watchlist_items=[_item_response(item) for item in watchlist_items],
+        ticker_items=[
+            _item_response(item, starred_ids=starred_ids) for item in ticker_items
+        ],
+        ticker_page=(
+            NewsPaginationResponse(
+                page=selected_ticker_page,
+                page_size=selected_ticker_page_size,
+                total=ticker_total,
+                has_next=selected_ticker_page * selected_ticker_page_size < ticker_total,
+                has_previous=selected_ticker_page > 1,
+            )
+            if normalized_ticker
+            else None
+        ),
+        watchlist_items=[
+            _item_response(item, starred_ids=starred_ids) for item in watchlist_items
+        ],
+        saved_items=[
+            _item_response(item, starred_ids=starred_ids) for item in saved_items
+        ],
         provider_notes=list(latest_run.notes or []) if latest_run else [],
     )
+
+
+async def set_news_star(
+    session: AsyncSession,
+    *,
+    news_item_id: UUID,
+    owner_user_id: str,
+    starred: bool,
+) -> bool:
+    exists = await session.scalar(select(NewsItem.id).where(NewsItem.id == news_item_id))
+    if exists is None:
+        raise NewsUnavailableError("News item was not found.")
+
+    current = await session.scalar(
+        select(NewsItemStar)
+        .where(NewsItemStar.news_item_id == news_item_id)
+        .where(NewsItemStar.owner_user_id == owner_user_id)
+    )
+    if starred:
+        if current is None:
+            session.add(
+                NewsItemStar(
+                    news_item_id=news_item_id,
+                    owner_user_id=owner_user_id,
+                )
+            )
+    elif current is not None:
+        await session.delete(current)
+    await session.commit()
+    return starred
 
 
 async def _news_targets(session: AsyncSession) -> tuple[list[str], list[str]]:
@@ -288,32 +384,40 @@ async def _upsert_provider_items(
         if not title:
             continue
         provider_id = provider_item.provider_id[:512]
-        existing = await session.scalar(
-            select(NewsItem)
-            .options(selectinload(NewsItem.ticker_links))
-            .where(NewsItem.provider == provider_item.provider)
-            .where(NewsItem.provider_id == provider_id)
-        )
+        existing = await _select_news_item(session, provider_item.provider, provider_id)
         if existing is None:
-            news_item = NewsItem(
-                provider=provider_item.provider,
-                provider_id=provider_id,
-                source_name=_clip(provider_item.source_name, 255),
-                title=title,
-                summary=provider_item.summary,
-                url=_clip(provider_item.url, 2048),
-                published_at=provider_item.published_at,
-                crawled_at=provider_item.crawled_at,
-                jurisdiction=provider_item.jurisdiction,
-                event_type=provider_item.event_type,
-                sentiment_label=provider_item.sentiment_label,
-                sentiment_score=provider_item.sentiment_score,
-                raw_payload=provider_item.raw_payload,
-            )
-            session.add(news_item)
-            await session.flush()
-            linked_tickers: set[str] = set()
-            created += 1
+            try:
+                async with session.begin_nested():
+                    news_item = NewsItem(
+                        provider=provider_item.provider,
+                        provider_id=provider_id,
+                        source_name=_clip(provider_item.source_name, 255),
+                        title=title,
+                        summary=provider_item.summary,
+                        url=_clip(provider_item.url, 2048),
+                        published_at=provider_item.published_at,
+                        crawled_at=provider_item.crawled_at,
+                        jurisdiction=provider_item.jurisdiction,
+                        event_type=provider_item.event_type,
+                        sentiment_label=provider_item.sentiment_label,
+                        sentiment_score=provider_item.sentiment_score,
+                        raw_payload=provider_item.raw_payload,
+                    )
+                    session.add(news_item)
+                    await session.flush()
+                linked_tickers: set[str] = set()
+                created += 1
+            except IntegrityError:
+                existing = await _select_news_item(
+                    session, provider_item.provider, provider_id
+                )
+                if existing is None:
+                    raise
+                news_item = existing
+                linked_tickers = {link.ticker.upper() for link in news_item.ticker_links}
+                changed = _apply_item_updates(news_item, provider_item)
+                if changed:
+                    updated += 1
         else:
             news_item = existing
             linked_tickers = {link.ticker.upper() for link in news_item.ticker_links}
@@ -325,18 +429,67 @@ async def _upsert_provider_items(
             if ticker in linked_tickers:
                 continue
             instrument = await _instrument_for_ticker(session, ticker, instrument_cache)
-            session.add(
-                NewsTickerLink(
-                    news_item_id=news_item.id,
-                    ticker=ticker,
-                    instrument_id=instrument.id if instrument else None,
-                    sentiment_label=provider_item.sentiment_label,
-                    sentiment_score=provider_item.sentiment_score,
-                )
-            )
+            try:
+                async with session.begin_nested():
+                    session.add(
+                        NewsTickerLink(
+                            news_item_id=news_item.id,
+                            ticker=ticker,
+                            instrument_id=instrument.id if instrument else None,
+                            sentiment_label=provider_item.sentiment_label,
+                            sentiment_score=provider_item.sentiment_score,
+                        )
+                    )
+                    await session.flush()
+            except IntegrityError:
+                pass
             linked_tickers.add(ticker)
 
     return created, updated
+
+
+async def _select_news_item(
+    session: AsyncSession,
+    provider: str,
+    provider_id: str,
+) -> NewsItem | None:
+    return await session.scalar(
+        select(NewsItem)
+        .options(selectinload(NewsItem.ticker_links))
+        .where(NewsItem.provider == provider)
+        .where(NewsItem.provider_id == provider_id)
+    )
+
+
+async def _record_failed_run(
+    session: AsyncSession,
+    *,
+    run_id: UUID,
+    started_at: datetime,
+    trigger: str,
+    target_scope: str,
+    target_key: str,
+    interval_seconds: int,
+    notes: list[str],
+    error: str,
+) -> None:
+    await session.rollback()
+    run = await session.get(NewsPollRun, run_id)
+    if run is None:
+        run = NewsPollRun(
+            id=run_id,
+            started_at=started_at,
+            trigger=trigger,
+            target_scope=target_scope,
+            target_key=target_key,
+            interval_seconds=interval_seconds,
+            notes=notes,
+        )
+        session.add(run)
+    run.status = "failed"
+    run.finished_at = datetime.now(timezone.utc)
+    run.errors = [{"error": error}]
+    await session.commit()
 
 
 def _apply_item_updates(news_item: NewsItem, provider_item: ProviderNewsItem) -> bool:
@@ -458,24 +611,33 @@ async def _items_for_tickers(
     session: AsyncSession,
     tickers: list[str | None],
     *,
-    limit: int,
-) -> list[NewsItem]:
+    page: int = 1,
+    page_size: int = TICKER_NEWS_DEFAULT_PAGE_SIZE,
+) -> tuple[list[NewsItem], int]:
     normalized = [ticker for ticker in {item for item in tickers if item} if ticker]
     if not normalized:
-        return []
-    rows = list(
-        await session.scalars(
-            select(NewsItem)
-            .join(NewsTickerLink, NewsTickerLink.news_item_id == NewsItem.id)
-            .options(selectinload(NewsItem.ticker_links))
-            .where(NewsTickerLink.ticker.in_(normalized))
-            .order_by(
-                NewsItem.published_at.desc().nullslast(),
-                NewsItem.created_at.desc(),
-            )
-            .limit(limit)
-        )
+        return [], 0
+    count_query = (
+        select(func.count(func.distinct(NewsItem.id)))
+        .select_from(NewsItem)
+        .join(NewsTickerLink, NewsTickerLink.news_item_id == NewsItem.id)
+        .where(NewsTickerLink.ticker.in_(normalized))
     )
+    query = (
+        select(NewsItem)
+        .join(NewsTickerLink, NewsTickerLink.news_item_id == NewsItem.id)
+        .options(selectinload(NewsItem.ticker_links))
+        .where(NewsTickerLink.ticker.in_(normalized))
+        .order_by(
+            NewsItem.published_at.desc().nullslast(),
+            NewsItem.created_at.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .distinct()
+    )
+    total = int(await session.scalar(count_query) or 0)
+    rows = list(await session.scalars(query))
     deduped: list[NewsItem] = []
     seen: set = set()
     for item in rows:
@@ -483,7 +645,7 @@ async def _items_for_tickers(
             continue
         seen.add(item.id)
         deduped.append(item)
-    return deduped
+    return deduped, total
 
 
 async def _watchlist_tickers(
@@ -500,7 +662,42 @@ async def _watchlist_tickers(
     return [ticker.upper() for ticker in rows]
 
 
-def _item_response(item: NewsItem) -> NewsItemResponse:
+async def _saved_items(
+    session: AsyncSession,
+    owner_user_id: str | None,
+    *,
+    limit: int,
+) -> list[NewsItem]:
+    if not owner_user_id:
+        return []
+    return list(
+        await session.scalars(
+            select(NewsItem)
+            .join(NewsItemStar, NewsItemStar.news_item_id == NewsItem.id)
+            .options(selectinload(NewsItem.ticker_links))
+            .where(NewsItemStar.owner_user_id == owner_user_id)
+            .order_by(NewsItemStar.created_at.desc())
+            .limit(limit)
+        )
+    )
+
+
+async def _starred_item_ids(
+    session: AsyncSession,
+    owner_user_id: str | None,
+    item_ids: list[UUID],
+) -> set[UUID]:
+    if not owner_user_id or not item_ids:
+        return set()
+    rows = await session.scalars(
+        select(NewsItemStar.news_item_id)
+        .where(NewsItemStar.owner_user_id == owner_user_id)
+        .where(NewsItemStar.news_item_id.in_(set(item_ids)))
+    )
+    return set(rows)
+
+
+def _item_response(item: NewsItem, *, starred_ids: set[UUID] | None = None) -> NewsItemResponse:
     return NewsItemResponse(
         id=item.id,
         provider=item.provider,
@@ -516,6 +713,7 @@ def _item_response(item: NewsItem) -> NewsItemResponse:
         sentiment_label=item.sentiment_label,
         sentiment_score=item.sentiment_score,
         tickers=sorted({link.ticker for link in item.ticker_links}),
+        starred=item.id in (starred_ids or set()),
     )
 
 
