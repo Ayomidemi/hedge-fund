@@ -4,10 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { toast } from "@/components/ui/ToastProvider";
 import { TickerSelector } from "@/components/ticker/TickerSelector";
-import {
-  buttonPrimaryClassName,
-  buttonSecondaryClassName,
-} from "@/components/ui/form-styles";
+import { buttonPrimaryClassName } from "@/components/ui/form-styles";
 import {
   addRadarWatchlistItem,
   removeRadarWatchlistItem,
@@ -83,14 +80,9 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
     <div className="mx-auto max-w-[1100px] space-y-5">
       <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div className="border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-            Lookout
-          </p>
           <h2 className="mt-1 text-2xl font-semibold tracking-tight">Watchlist</h2>
           <p className="mt-1 max-w-2xl text-sm text-zinc-500">
-            A manual list of names you want on the tape. Radar watches movement
-            against yesterday, against the name&apos;s own history, and against the
-            last scan. Nothing here is a buy.
+            Tickers you want Radar to keep close.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-3 px-5 py-4">
@@ -112,9 +104,6 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
           >
             {saving ? "Adding…" : "Add to watchlist"}
           </button>
-          <Link href="/market-radar" className={buttonSecondaryClassName}>
-            Back to radar
-          </Link>
         </div>
       </section>
 
@@ -171,9 +160,11 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
                   <button
                     type="button"
                     onClick={() => void handleRemove(item.ticker)}
-                    className={buttonSecondaryClassName}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-zinc-200 text-zinc-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500/30 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-rose-900/70 dark:hover:bg-rose-950/40 dark:hover:text-rose-300"
+                    aria-label={`Remove ${item.ticker} from watchlist`}
+                    title={`Remove ${item.ticker}`}
                   >
-                    Remove
+                    <TrashIcon />
                   </button>
                 </div>
               </div>
@@ -182,6 +173,27 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
         )}
       </section>
     </div>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
   );
 }
 
