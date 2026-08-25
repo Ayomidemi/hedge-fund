@@ -20,6 +20,7 @@ import {
   type OpportunityStatus,
   type OpportunityUpdateInput,
 } from "@/lib/api";
+import { tickerHubPath } from "@/lib/ticker-hub-path";
 
 type OpportunityQueueProps = {
   queue: OpportunityQueueData | null;
@@ -467,16 +468,16 @@ function OpportunityDetail({
 
       <div className="mt-4 flex flex-wrap gap-2 text-sm">
         <Link
-          href={`/ticker-analyst?ticker=${encodeURIComponent(ticker)}`}
+          href={tickerHubPath(ticker)}
           className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
         >
-          Ticker Analyst
+          Ticker hub
         </Link>
         <Link
-          href={`/watchlist/${encodeURIComponent(ticker)}`}
+          href={`/ticker-analyst?analyze=${encodeURIComponent(ticker)}&workflow=1`}
           className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
         >
-          Radar watchlist
+          Full analysis
         </Link>
         <Link
           href="/risk-centre"

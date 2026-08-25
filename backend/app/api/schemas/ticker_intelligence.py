@@ -451,6 +451,17 @@ class TickerDeskRadar(BaseModel):
     scan_state: str | None = None
     scan_delta_change_pct: str | None = None
     as_of: datetime | None = None
+    price: Decimal | None = None
+    jurisdiction: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    radar_priority: str | None = None
+    move_scope: str | None = None
+    industry_status: str | None = None
+    price_return_zscore: str | None = None
+    sector_relative_return_pct: str | None = None
+    volume_ratio: Decimal | None = None
 
 
 class TickerDeskOpportunity(BaseModel):
@@ -466,6 +477,7 @@ class TickerDeskNews(BaseModel):
     source_name: str | None = None
     published_at: datetime | None = None
     event_type: str | None = None
+    url: str | None = None
 
 
 class TickerDeskPreTrade(BaseModel):
@@ -512,10 +524,13 @@ class TickerDeskResponse(BaseModel):
     name: str
     asset_class: str
     exchange: str | None = None
+    jurisdiction: str | None = None
     on_watchlist: bool = False
+    in_portfolio: bool = False
     radar: TickerDeskRadar | None = None
     opportunity: TickerDeskOpportunity | None = None
     news: TickerDeskNews | None = None
+    recent_headlines: list[TickerDeskNews] = Field(default_factory=list)
     pre_trade: TickerDeskPreTrade | None = None
     position: TickerDeskPosition | None = None
     latest_triage: TickerDeskTriage | None = None

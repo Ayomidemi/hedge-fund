@@ -622,12 +622,25 @@ export type TickerDesk = {
   name: string;
   asset_class: string;
   exchange: string | null;
+  jurisdiction: string | null;
   on_watchlist: boolean;
+  in_portfolio: boolean;
   radar: {
     change_pct: string | null;
     scan_state: string | null;
     scan_delta_change_pct: string | null;
     as_of: string | null;
+    price: string | null;
+    jurisdiction: string | null;
+    sector: string | null;
+    industry: string | null;
+    flags: string[];
+    radar_priority: string | null;
+    move_scope: string | null;
+    industry_status: string | null;
+    price_return_zscore: string | null;
+    sector_relative_return_pct: string | null;
+    volume_ratio: string | null;
   } | null;
   opportunity: {
     id: string;
@@ -641,7 +654,16 @@ export type TickerDesk = {
     source_name: string | null;
     published_at: string | null;
     event_type: string | null;
+    url: string | null;
   } | null;
+  recent_headlines: Array<{
+    id: string;
+    title: string;
+    source_name: string | null;
+    published_at: string | null;
+    event_type: string | null;
+    url: string | null;
+  }>;
   pre_trade: {
     id: string;
     decision: string;

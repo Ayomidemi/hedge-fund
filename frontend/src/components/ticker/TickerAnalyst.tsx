@@ -37,11 +37,13 @@ import {
   normalizeTickerInput,
   type TickerMarket,
 } from "@/lib/ticker-prefill-form";
+import { tickerHubPath } from "@/lib/ticker-hub-path";
 
 type TickerAnalystProps = {
   recentMemos: TickerMemoSummary[];
   initialTicker: string | null;
   initialDesk: TickerDesk | null;
+  startInWorkflow?: boolean;
   isUnavailable: boolean;
 };
 
@@ -95,6 +97,7 @@ export function TickerAnalyst({
   recentMemos,
   initialTicker,
   initialDesk,
+  startInWorkflow = false,
   isUnavailable,
 }: TickerAnalystProps) {
   const router = useRouter();
@@ -125,7 +128,12 @@ export function TickerAnalyst({
   );
 
   useEffect(() => {
-    if (!initialTicker || initialDesk) return;
+    if (!initialTicker || !startInWorkflow) return;
+    void startNewAnalysis(initialTicker);
+  }, [initialTicker, startInWorkflow]);
+
+  useEffect(() => {
+    if (!initialTicker || initialDesk || startInWorkflow) return;
     let cancelled = false;
     void (async () => {
       await Promise.resolve();
@@ -143,7 +151,7 @@ export function TickerAnalyst({
     return () => {
       cancelled = true;
     };
-  }, [initialDesk, initialTicker]);
+  }, [initialDesk, initialTicker, startInWorkflow]);
 
   function resetWorkflow() {
     setStep("ticker");
@@ -521,9 +529,7 @@ export function TickerAnalyst({
       <HistoryHeader onNewAnalysis={() => void startNewAnalysis()} />
       {error && <ErrorNotice message={error} />}
       <QuickTriageHome
-        onOpenTicker={(ticker) =>
-          router.push(`/ticker-analyst?ticker=${encodeURIComponent(ticker)}`)
-        }
+        onOpenTicker={(ticker) => router.push(tickerHubPath(ticker))}
         onNewAnalysis={(prefill) =>
           void startNewAnalysis(prefill?.instrument.ticker, prefill)
         }
@@ -532,9 +538,7 @@ export function TickerAnalyst({
         loadingId={memoLoadingId}
         memos={recentMemos}
         onOpenMemo={handleOpenMemo}
-        onOpenTicker={(ticker) =>
-          router.push(`/ticker-analyst?ticker=${encodeURIComponent(ticker)}`)
-        }
+        onOpenTicker={(ticker) => router.push(tickerHubPath(ticker))}
       />
       <TickerMemoModal memo={selectedMemo} onClose={() => setSelectedMemo(null)} />
     </div>
@@ -655,14 +659,10 @@ function TickerDeskView({
       <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap gap-3 text-sm">
           <Link
-            href={
-              desk.on_watchlist
-                ? `/watchlist/${encodeURIComponent(ticker)}`
-                : "/watchlist"
-            }
+            href={tickerHubPath(ticker)}
             className="text-zinc-700 underline-offset-4 hover:underline dark:text-zinc-300"
           >
-            Radar watchlist
+            Ticker hub
           </Link>
           <Link
             href="/opportunity-queue"
@@ -922,13 +922,8 @@ function DecisionSnapshotCard({
               Risk Centre
             </Link>
           ) : null}
-          <Link
-            href={`/news?ticker=${encodeURIComponent(ticker)}${
-              ticker.endsWith(".NG") ? "&market=NG" : "&market=US"
-            }`}
-            className={secondaryButtonClassName}
-          >
-            News
+          <Link href={tickerHubPath(ticker)} className={secondaryButtonClassName}>
+            Ticker hub
           </Link>
         </div>
       </div>

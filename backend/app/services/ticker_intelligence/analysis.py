@@ -280,7 +280,8 @@ async def get_ticker_desk(
         latest_triage = await _load_latest_triage(session, user.id, instrument.id)
         memos = await _load_desk_memos(session, user.id, instrument.id)
 
-    news = await _load_desk_news(session, variants)
+    news_headlines = await _load_desk_news_headlines(session, variants)
+    news = news_headlines[0] if news_headlines else None
     pre_trade = await _load_desk_pre_trade(session, user.id, variants)
 
     logger.info(
@@ -322,7 +323,17 @@ async def get_ticker_desk(
             if instrument is not None
             else (snapshot.exchange if snapshot is not None else None)
         ),
+        jurisdiction=(
+            snapshot.jurisdiction
+            if snapshot is not None
+            else (
+                "NG"
+                if display_ticker.endswith(".NG")
+                else ("US" if instrument is not None else None)
+            )
+        ),
         on_watchlist=watchlist is not None,
+        in_portfolio=position is not None,
         radar=(
             TickerDeskRadar(
                 change_pct=snapshot.change_pct,
@@ -335,6 +346,19 @@ async def get_ticker_desk(
                     else None
                 ),
                 as_of=snapshot.source_as_of or snapshot.as_of,
+                price=snapshot.price,
+                jurisdiction=snapshot.jurisdiction,
+                sector=snapshot.sector,
+                industry=snapshot.industry,
+                flags=list(snapshot.flags or []),
+                radar_priority=snapshot.radar_priority or evidence.get("radar_priority"),
+                move_scope=_text(evidence.get("move_scope")),
+                industry_status=_text(evidence.get("industry_status")),
+                price_return_zscore=_text(evidence.get("price_return_zscore")),
+                sector_relative_return_pct=_text(
+                    evidence.get("sector_relative_return_pct")
+                ),
+                volume_ratio=snapshot.volume_ratio,
             )
             if snapshot is not None
             else None
@@ -349,17 +373,8 @@ async def get_ticker_desk(
             if opportunity is not None
             else None
         ),
-        news=(
-            TickerDeskNews(
-                id=news.id,
-                title=news.title,
-                source_name=news.source_name,
-                published_at=news.published_at,
-                event_type=news.event_type,
-            )
-            if news is not None
-            else None
-        ),
+        news=_desk_news_item(news) if news is not None else None,
+        recent_headlines=[_desk_news_item(item) for item in news_headlines],
         pre_trade=(
             TickerDeskPreTrade(
                 id=pre_trade.id,
@@ -673,16 +688,47 @@ async def _load_desk_memos(
     )
 
 
-async def _load_desk_news(session: AsyncSession, variants: set[str]) -> NewsItem | None:
+async def _load_desk_news_headlines(
+    session: AsyncSession, variants: set[str], *, limit: int = 8
+) -> list[NewsItem]:
     if not variants:
-        return None
-    return await session.scalar(
-        select(NewsItem)
-        .join(NewsTickerLink)
-        .where(NewsTickerLink.ticker.in_(variants))
-        .order_by(NewsItem.published_at.desc().nullslast(), NewsItem.created_at.desc())
-        .limit(1)
+        return []
+    return list(
+        await session.scalars(
+            select(NewsItem)
+            .join(NewsTickerLink)
+            .where(NewsTickerLink.ticker.in_(variants))
+            .order_by(
+                NewsItem.published_at.desc().nullslast(),
+                NewsItem.created_at.desc(),
+            )
+            .limit(limit)
+            .distinct()
+        )
     )
+
+
+def _desk_news_item(item: NewsItem) -> TickerDeskNews:
+    return TickerDeskNews(
+        id=item.id,
+        title=item.title,
+        source_name=item.source_name,
+        published_at=item.published_at,
+        event_type=item.event_type,
+        url=item.url,
+    )
+
+
+def _text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+async def _load_desk_news(session: AsyncSession, variants: set[str]) -> NewsItem | None:
+    headlines = await _load_desk_news_headlines(session, variants, limit=1)
+    return headlines[0] if headlines else None
 
 
 async def _load_desk_pre_trade(

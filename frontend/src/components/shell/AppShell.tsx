@@ -52,6 +52,11 @@ export function AppShell({ children, userOrgName }: AppShellProps) {
         ? pathname === "/"
         : pathname === item.href || pathname.startsWith(`${item.href}/`),
     )?.label ?? "Fund Dashboard";
+  const tickerHubMatch = pathname.match(/^\/ticker\/([^/]+)/i);
+  const headerTitle = tickerHubMatch
+    ? decodeURIComponent(tickerHubMatch[1]).toUpperCase()
+    : (pageTitles[activeLabel] ?? "Portfolio Control Room");
+  const headerEyebrow = tickerHubMatch ? "Ticker" : activeLabel;
 
   return (
     <div className="flex min-h-screen bg-[#f6f7f4] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
@@ -102,11 +107,9 @@ export function AppShell({ children, userOrgName }: AppShellProps) {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                {activeLabel}
+                {headerEyebrow}
               </p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-normal">
-                {pageTitles[activeLabel] ?? "Portfolio Control Room"}
-              </h1>
+              <h1 className="mt-1 text-2xl font-semibold tracking-normal">{headerTitle}</h1>
             </div>
 
             <div className="flex items-center gap-4">

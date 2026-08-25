@@ -18,6 +18,7 @@ import {
   type MarketRadarOverview,
   type RadarWatchlistItem,
 } from "@/lib/api";
+import { tickerHubPath } from "@/lib/ticker-hub-path";
 
 type MarketRadarProps = {
   initialOverview: MarketRadarOverview | null;
@@ -394,9 +395,7 @@ function NameRow({
   const scanState = evidenceText(name.evidence, "scan_state");
   const scanDelta = evidenceText(name.evidence, "scan_delta_change_pct");
   const moveScope = evidenceText(name.evidence, "move_scope");
-  const href = name.on_watchlist
-    ? `/watchlist/${encodeURIComponent(name.ticker)}`
-    : `/ticker-analyst?ticker=${encodeURIComponent(name.ticker)}`;
+  const href = tickerHubPath(name.ticker);
 
   return (
     <div className="grid gap-3 py-3 sm:grid-cols-[minmax(190px,1fr)_120px_150px] sm:items-center">

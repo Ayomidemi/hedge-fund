@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     hf_tiingo_stream_max_tickers: int = 250
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
-    hf_news_poll_interval_seconds: int = 60
+    hf_news_poll_interval_seconds: int = 300
     hf_news_poll_jurisdictions: str = "US"
     hf_news_ticker_refresh_ttl_seconds: int = 1800
     hf_news_retention_days: int = 50

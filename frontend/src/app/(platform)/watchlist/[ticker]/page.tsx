@@ -1,43 +1,13 @@
-import { WatchlistTicker } from "@/components/radar/WatchlistTicker";
-import {
-  getRadarWatchlistChart,
-  getRadarWatchlistTicker,
-  type RadarWatchlistChart,
-  type RadarWatchlistDetail,
-} from "@/lib/api";
-import { getServerAccessToken } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import { tickerHubPath } from "@/lib/ticker-hub-path";
 
-type WatchlistTickerPageProps = {
+type WatchlistTickerRedirectProps = {
   params: Promise<{ ticker: string }>;
 };
 
-export default async function WatchlistTickerPage({ params }: WatchlistTickerPageProps) {
+export default async function WatchlistTickerRedirectPage({
+  params,
+}: WatchlistTickerRedirectProps) {
   const { ticker } = await params;
-  const decoded = decodeURIComponent(ticker);
-  let detail: RadarWatchlistDetail | null = null;
-  let chart: RadarWatchlistChart | null = null;
-  const accessToken = await getServerAccessToken();
-  const unavailable = !accessToken;
-
-  if (accessToken) {
-    try {
-      detail = await getRadarWatchlistTicker(decoded, { accessToken });
-    } catch {
-      detail = null;
-    }
-    try {
-      chart = await getRadarWatchlistChart(decoded, "1d", { accessToken });
-    } catch {
-      chart = null;
-    }
-  }
-
-  return (
-    <WatchlistTicker
-      ticker={decoded.toUpperCase()}
-      initialDetail={detail}
-      initialChart={chart}
-      unavailable={unavailable}
-    />
-  );
+  redirect(tickerHubPath(decodeURIComponent(ticker)));
 }

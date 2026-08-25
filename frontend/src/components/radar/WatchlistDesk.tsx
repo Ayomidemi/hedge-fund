@@ -13,6 +13,7 @@ import {
   removeRadarWatchlistItem,
   type RadarWatchlistItem,
 } from "@/lib/api";
+import { tickerHubPath } from "@/lib/ticker-hub-path";
 import type { TickerMarket } from "@/lib/ticker-prefill-form";
 
 const priceFormat = new Intl.NumberFormat("en-US", {
@@ -131,7 +132,7 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
               >
                 <div className="min-w-0">
                   <Link
-                    href={`/watchlist/${encodeURIComponent(item.ticker)}`}
+                    href={tickerHubPath(item.ticker)}
                     className="text-sm font-semibold hover:underline"
                   >
                     {item.ticker}
