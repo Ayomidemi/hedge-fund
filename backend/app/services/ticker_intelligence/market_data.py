@@ -683,10 +683,13 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
             "SEC Companyfacts",
             context,
         )
+    pe_ratio = _valid_pe_ratio(_price_to_earnings(context), "Vendor", context)
+    if pe_ratio is None:
+        pe_ratio = _valid_pe_ratio(fundamentals.pe_ratio, "SEC Companyfacts", context)
     metrics = TickerMetricsInput(
         current_price=_latest_price(context),
         market_cap_billion=_market_cap_billion(context),
-        pe_ratio=_price_to_earnings(context) or fundamentals.pe_ratio,
+        pe_ratio=pe_ratio,
         forward_pe=_decimal_from_keys(context.fmp_ratios, "forwardPERatioTTM"),
         revenue_growth_pct=fundamentals.revenue_growth_pct,
         earnings_growth_pct=fundamentals.earnings_growth_pct,
@@ -1068,6 +1071,21 @@ def _valid_debt_to_equity(
     if value < 0:
         context.warnings.append(
             f"{source} debt-to-equity was negative and was excluded because shareholder equity may be negative."
+        )
+        return None
+    return value
+
+
+def _valid_pe_ratio(
+    value: Decimal | None,
+    source: str,
+    context: PrefillBuildContext,
+) -> Decimal | None:
+    if value is None:
+        return None
+    if value <= 0:
+        context.warnings.append(
+            f"{source} P/E was non-positive and was excluded."
         )
         return None
     return value

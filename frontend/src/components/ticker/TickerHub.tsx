@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { WatchlistButton } from "@/components/radar/WatchlistButton";
 import { TickerPriceChart, chartRangeLabel } from "@/components/ticker/TickerPriceChart";
 import { toast } from "@/components/ui/ToastProvider";
 import {
@@ -11,16 +12,17 @@ import {
 import {
   addRadarWatchlistItem,
   createTickerTriage,
-  getRadarWatchlistChart,
+  getTickerChart,
   getTickerDesk,
   refreshTickerNews,
   removeRadarWatchlistItem,
   type RadarWatchlistChart,
   type TickerDesk,
 } from "@/lib/api";
-import { tickerHubPath, tickerMarketFromSymbol } from "@/lib/ticker-hub-path";
+import { tickerMarketFromSymbol } from "@/lib/ticker-hub-path";
 
 const CHART_RANGES = ["1d", "1m", "3m", "1y", "5y"] as const;
+const NEWS_PAGE_SIZE = 5;
 const queueStatusLabels: Record<string, string> = {
   discovered: "Discovered",
   screening: "Screening",
@@ -62,30 +64,29 @@ export function TickerHub({
   const [metric, setMetric] = useState<"price" | "volume">("price");
   const [loadingChart, setLoadingChart] = useState(false);
   const [loadingDesk, setLoadingDesk] = useState(false);
+  const [watchlistBusy, setWatchlistBusy] = useState(false);
   const [refreshingNews, setRefreshingNews] = useState(false);
   const [runningTriage, setRunningTriage] = useState(false);
+  const [newsPage, setNewsPage] = useState(0);
   const market = tickerMarketFromSymbol(ticker);
 
   useEffect(() => {
     setDesk(initialDesk);
     setChart(initialChart);
+    setNewsPage(0);
   }, [initialDesk, initialChart, ticker]);
 
   useEffect(() => {
-    if (!desk?.on_watchlist) {
-      setChart(null);
-      return;
-    }
     if (range === "1d" && initialChart?.range === "1d") {
       setChart(initialChart);
       return;
     }
     setLoadingChart(true);
-    void getRadarWatchlistChart(ticker, range)
+    void getTickerChart(ticker, range)
       .then(setChart)
       .catch(() => toast.error("Chart could not load."))
       .finally(() => setLoadingChart(false));
-  }, [desk?.on_watchlist, initialChart, range, ticker]);
+  }, [initialChart, range, ticker]);
 
   async function reloadDesk() {
     setLoadingDesk(true);
@@ -99,6 +100,7 @@ export function TickerHub({
   }
 
   async function handleWatchToggle() {
+    setWatchlistBusy(true);
     try {
       if (desk?.on_watchlist) {
         await removeRadarWatchlistItem(ticker);
@@ -110,6 +112,8 @@ export function TickerHub({
       await reloadDesk();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Watchlist update failed.");
+    } finally {
+      setWatchlistBusy(false);
     }
   }
 
@@ -118,6 +122,7 @@ export function TickerHub({
     try {
       await refreshTickerNews(ticker, { market });
       await reloadDesk();
+      setNewsPage(0);
       toast.success("News refreshed.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "News refresh failed.");
@@ -151,17 +156,22 @@ export function TickerHub({
   if (!desk) {
     return (
       <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="text-xl font-semibold">{ticker}</h2>
+        <div className="mt-1 flex items-center gap-2">
+          <h2 className="text-xl font-semibold">{ticker}</h2>
+          <WatchlistButton
+            ticker={ticker}
+            watched={false}
+            busy={watchlistBusy}
+            onClick={() => void handleWatchToggle()}
+          />
+        </div>
         <p className="mt-2 text-sm text-zinc-500">
           No desk data yet. Run a market scan or add this name to your watchlist.
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4">
           <Link href="/market-radar" className={buttonSecondaryClassName}>
             Market Radar
           </Link>
-          <button type="button" onClick={() => void handleWatchToggle()} className={buttonPrimaryClassName}>
-            Add to watchlist
-          </button>
         </div>
       </section>
     );
@@ -173,6 +183,12 @@ export function TickerHub({
     : desk.news
       ? [desk.news]
       : [];
+  const newsPageCount = Math.max(1, Math.ceil(headlines.length / NEWS_PAGE_SIZE));
+  const safeNewsPage = Math.min(newsPage, newsPageCount - 1);
+  const pagedHeadlines = headlines.slice(
+    safeNewsPage * NEWS_PAGE_SIZE,
+    safeNewsPage * NEWS_PAGE_SIZE + NEWS_PAGE_SIZE,
+  );
 
   return (
     <div className="mx-auto max-w-[1180px] space-y-5">
@@ -182,7 +198,15 @@ export function TickerHub({
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               Ticker
             </p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight">{desk.ticker}</h2>
+            <div className="mt-1 flex items-center gap-2">
+              <h2 className="text-2xl font-semibold tracking-tight">{desk.ticker}</h2>
+              <WatchlistButton
+                ticker={desk.ticker}
+                watched={desk.on_watchlist}
+                busy={watchlistBusy || loadingDesk}
+                onClick={() => void handleWatchToggle()}
+              />
+            </div>
             <p className="mt-1 text-sm text-zinc-500">
               {desk.name}
               {desk.jurisdiction ? ` · ${desk.jurisdiction}` : ""}
@@ -216,7 +240,7 @@ export function TickerHub({
               ) : null}
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Link
               href={`/ticker-analyst?analyze=${encodeURIComponent(desk.ticker)}&workflow=1`}
               className={buttonPrimaryClassName}
@@ -231,17 +255,6 @@ export function TickerHub({
             >
               {runningTriage ? "Running…" : desk.latest_triage ? "Refresh triage" : "Quick triage"}
             </button>
-            <button
-              type="button"
-              onClick={() => void handleWatchToggle()}
-              disabled={loadingDesk}
-              className={buttonSecondaryClassName}
-            >
-              {desk.on_watchlist ? "Remove watchlist" : "Add watchlist"}
-            </button>
-            <Link href="/market-radar" className={buttonSecondaryClassName}>
-              Radar
-            </Link>
           </div>
         </div>
 
@@ -299,6 +312,51 @@ export function TickerHub({
         </div>
       </section>
 
+      <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold">
+              {metric === "price" ? "Price" : "Volume"} · {chartRangeLabel(range)}
+            </h3>
+            <p className="mt-1 text-xs text-zinc-500">
+              {range === "1d"
+                ? "Same-day radar film: each scan is a frame. Hover a point for its price."
+                : "Daily bars from stored history. Hover a point for its price."}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(["price", "volume"] as const).map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setMetric(key)}
+                className={metric === key ? buttonPrimaryClassName : buttonSecondaryClassName}
+              >
+                {key === "price" ? "Price" : "Volume"}
+              </button>
+            ))}
+            {CHART_RANGES.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setRange(key)}
+                className={range === key ? buttonPrimaryClassName : buttonSecondaryClassName}
+              >
+                {key.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="mt-4">
+          {loadingChart ? (
+            <p className="text-sm text-zinc-500">Loading chart…</p>
+          ) : (
+            <TickerPriceChart chart={chart} metric={metric} />
+          )}
+        </div>
+        {chart?.note ? <p className="mt-3 text-xs text-zinc-500">{chart.note}</p> : null}
+      </section>
+
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
         <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -308,39 +366,67 @@ export function TickerHub({
                 Stored headlines linked to {desk.ticker}. Refresh pulls a fresh ticker feed.
               </p>
             </div>
-            <button
-              type="button"
+            <RefreshIconButton
+              busy={refreshingNews}
+              label="Refresh news"
               onClick={() => void handleRefreshNews()}
-              disabled={refreshingNews}
-              className={buttonSecondaryClassName}
-            >
-              {refreshingNews ? "Refreshing…" : "Refresh news"}
-            </button>
+            />
           </div>
           {headlines.length ? (
-            <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
-              {headlines.map((item) => (
-                <li key={item.id} className="py-3 first:pt-0">
-                  {item.url ? (
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sm font-medium hover:underline"
-                    >
-                      {item.title}
-                    </a>
-                  ) : (
-                    <p className="text-sm font-medium">{item.title}</p>
-                  )}
-                  <p className="mt-1 text-xs text-zinc-500">
-                    {[item.source_name, item.published_at ? dateTime.format(new Date(item.published_at)) : null]
-                      .filter(Boolean)
-                      .join(" · ")}
+            <>
+              <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
+                {pagedHeadlines.map((item) => (
+                  <li key={item.id} className="py-3 first:pt-0">
+                    {item.url ? (
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm font-medium hover:underline"
+                      >
+                        {item.title}
+                      </a>
+                    ) : (
+                      <p className="text-sm font-medium">{item.title}</p>
+                    )}
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {[item.source_name, item.published_at ? dateTime.format(new Date(item.published_at)) : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              {headlines.length > NEWS_PAGE_SIZE ? (
+                <div className="mt-4 flex items-center justify-between gap-3 border-t border-zinc-100 pt-3 dark:border-zinc-900">
+                  <p className="text-xs text-zinc-500">
+                    {safeNewsPage * NEWS_PAGE_SIZE + 1}–
+                    {Math.min((safeNewsPage + 1) * NEWS_PAGE_SIZE, headlines.length)} of{" "}
+                    {headlines.length}
                   </p>
-                </li>
-              ))}
-            </ul>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={safeNewsPage === 0}
+                      onClick={() => setNewsPage((page) => Math.max(0, page - 1))}
+                      className={buttonSecondaryClassName}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      disabled={safeNewsPage >= newsPageCount - 1}
+                      onClick={() =>
+                        setNewsPage((page) => Math.min(newsPageCount - 1, page + 1))
+                      }
+                      className={buttonSecondaryClassName}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </>
           ) : (
             <p className="mt-4 text-sm text-zinc-500">
               No stored headlines for this ticker yet. Refresh news or wait for the next poll to
@@ -395,54 +481,42 @@ export function TickerHub({
           ) : null}
         </section>
       </div>
-
-      {desk.on_watchlist ? (
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-semibold">
-                {metric === "price" ? "Price" : "Volume"} · {chartRangeLabel(range)}
-              </h3>
-              <p className="mt-1 text-xs text-zinc-500">
-                {range === "1d"
-                  ? "Same-day radar film: each scan is a frame."
-                  : "Daily bars from stored history."}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {(["price", "volume"] as const).map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setMetric(key)}
-                  className={metric === key ? buttonPrimaryClassName : buttonSecondaryClassName}
-                >
-                  {key === "price" ? "Price" : "Volume"}
-                </button>
-              ))}
-              {CHART_RANGES.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setRange(key)}
-                  className={range === key ? buttonPrimaryClassName : buttonSecondaryClassName}
-                >
-                  {key.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-4">
-            {loadingChart ? (
-              <p className="text-sm text-zinc-500">Loading chart…</p>
-            ) : (
-              <TickerPriceChart chart={chart} metric={metric} />
-            )}
-          </div>
-          {chart?.note ? <p className="mt-3 text-xs text-zinc-500">{chart.note}</p> : null}
-        </section>
-      ) : null}
     </div>
+  );
+}
+
+function RefreshIconButton({
+  busy,
+  label,
+  onClick,
+}: {
+  busy: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      title={label}
+      aria-label={label}
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+    >
+      <svg
+        viewBox="0 0 20 20"
+        className={`h-4 w-4 ${busy ? "animate-spin" : ""}`}
+        aria-hidden="true"
+      >
+        <path
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          d="M10 3.5a6.5 6.5 0 1 1-5.2 2.6M4.5 4.5v3h3"
+        />
+      </svg>
+    </button>
   );
 }
 

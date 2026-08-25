@@ -139,6 +139,19 @@ class MarketDataPrefillTests(TestCase):
             response.source_warnings,
         )
 
+    def test_non_positive_pe_ratio_is_excluded_with_warning(self) -> None:
+        response = _build_prefill_response(
+            PrefillBuildContext(
+                ticker="XPON",
+                details={"name": "Expion360 Inc.", "type": "CS"},
+                ratios={"price": 1.25, "price_to_earnings": -0.95},
+                providers=["massive"],
+            )
+        )
+
+        self.assertIsNone(response.metrics.pe_ratio)
+        self.assertIn("Vendor P/E was non-positive and was excluded.", response.source_warnings)
+
     def test_negative_provider_debt_to_equity_falls_back_to_valid_source(self) -> None:
         response = _build_prefill_response(
             PrefillBuildContext(

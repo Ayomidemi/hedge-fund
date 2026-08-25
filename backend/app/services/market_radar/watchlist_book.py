@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -62,6 +63,12 @@ class WatchlistNotFoundError(WatchlistError):
 
 class WatchlistValidationError(WatchlistError):
     pass
+
+
+@dataclass(frozen=True)
+class _ChartSubject:
+    ticker: str
+    jurisdiction: str
 
 
 async def list_watchlist(
@@ -149,6 +156,40 @@ async def get_watchlist_detail(
         **_item_response(item, snapshot).model_dump(),
         clocks=_clocks(snapshot),
     )
+
+
+async def get_ticker_chart(
+    session: AsyncSession,
+    *,
+    ticker: str,
+    range_key: str,
+) -> RadarWatchlistChartResponse:
+    normalized = ticker.strip().upper()
+    variants = {
+        normalized,
+        normalized.removesuffix(".NG"),
+        f"{normalized.removesuffix('.NG')}.NG",
+    }
+    resolved = await _resolve_identity(session, normalized)
+    display_ticker = resolved["ticker"] or normalized
+    for candidate in variants:
+        identity = await _resolve_identity(session, candidate)
+        if identity.get("ticker"):
+            display_ticker = identity["ticker"]
+            break
+
+    subject = _ChartSubject(
+        ticker=display_ticker,
+        jurisdiction=jurisdiction_for_ticker(display_ticker),
+    )
+    normalized_range = (range_key or "1d").lower()
+    if normalized_range not in RADAR_CHART_RANGES:
+        raise WatchlistValidationError(
+            f"Range must be one of {', '.join(RADAR_CHART_RANGES)}."
+        )
+    if normalized_range == "1d":
+        return await _intraday_film(session, subject)
+    return await _daily_chart(session, subject, normalized_range)
 
 
 async def get_watchlist_chart(
@@ -280,7 +321,7 @@ async def _latest_snapshots(
 
 
 async def _intraday_film(
-    session: AsyncSession, item: RadarWatchlistItem
+    session: AsyncSession, item: RadarWatchlistItem | _ChartSubject
 ) -> RadarWatchlistChartResponse:
     start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     rows = list(
@@ -332,7 +373,7 @@ async def _intraday_film(
 
 async def _daily_chart(
     session: AsyncSession,
-    item: RadarWatchlistItem,
+    item: RadarWatchlistItem | _ChartSubject,
     range_key: str,
 ) -> RadarWatchlistChartResponse:
     lookback = RADAR_CHART_LOOKBACK_DAYS[range_key]

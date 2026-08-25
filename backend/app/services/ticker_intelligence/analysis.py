@@ -280,7 +280,7 @@ async def get_ticker_desk(
         latest_triage = await _load_latest_triage(session, user.id, instrument.id)
         memos = await _load_desk_memos(session, user.id, instrument.id)
 
-    news_headlines = await _load_desk_news_headlines(session, variants)
+    news_headlines = await _load_desk_news_headlines(session, variants, limit=24)
     news = news_headlines[0] if news_headlines else None
     pre_trade = await _load_desk_pre_trade(session, user.id, variants)
 

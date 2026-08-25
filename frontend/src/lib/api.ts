@@ -1550,6 +1550,17 @@ export function getTickerDesk(ticker: string, options?: ApiRequestOptions) {
   );
 }
 
+export function getTickerChart(
+  ticker: string,
+  range = "1d",
+  options?: ApiRequestOptions,
+) {
+  return fetchApi<RadarWatchlistChart>(
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/chart?range=${encodeURIComponent(range)}`,
+    options,
+  );
+}
+
 export function getTickerVerdict(
   ticker: string,
   params?: { market?: string },

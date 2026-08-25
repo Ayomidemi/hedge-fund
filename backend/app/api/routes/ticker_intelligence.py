@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.schemas.market_radar import RadarWatchlistChartResponse
 from app.api.schemas.ticker_intelligence import (
     BacktestRunCreate,
     BacktestRunResponse,
@@ -37,6 +38,10 @@ from app.api.schemas.ticker_intelligence import (
 )
 from app.core.auth import AuthenticatedUser, require_authenticated_user
 from app.db.session import get_session
+from app.services.market_radar.watchlist_book import (
+    WatchlistValidationError,
+    get_ticker_chart,
+)
 from app.services.ticker_intelligence.ai_draft import (
     AIDraftUnavailableError,
     generate_ticker_ai_draft,
@@ -396,6 +401,19 @@ async def read_ticker_suggestions(
         market_hint=market,
         limit=limit,
     )
+
+
+@router.get("/{ticker}/chart", response_model=RadarWatchlistChartResponse)
+async def read_ticker_chart(
+    ticker: str,
+    range: str = Query(default="1d", max_length=8),
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> RadarWatchlistChartResponse:
+    try:
+        return await get_ticker_chart(session, ticker=ticker, range_key=range)
+    except WatchlistValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{ticker}/desk", response_model=TickerDeskResponse)

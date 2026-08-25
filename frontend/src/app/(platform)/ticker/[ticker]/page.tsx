@@ -1,6 +1,6 @@
 import { TickerHub } from "@/components/ticker/TickerHub";
 import {
-  getRadarWatchlistChart,
+  getTickerChart,
   getTickerDesk,
   type RadarWatchlistChart,
   type TickerDesk,
@@ -24,12 +24,10 @@ export default async function TickerPage({ params }: TickerPageProps) {
     } catch {
       desk = null;
     }
-    if (desk?.on_watchlist) {
-      try {
-        chart = await getRadarWatchlistChart(ticker, "1d", { accessToken });
-      } catch {
-        chart = null;
-      }
+    try {
+      chart = await getTickerChart(ticker, "1d", { accessToken });
+    } catch {
+      chart = null;
     }
   }
 
