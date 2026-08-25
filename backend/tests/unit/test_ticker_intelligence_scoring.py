@@ -76,6 +76,76 @@ class TickerDeskTests(TestCase):
         self.assertEqual(ticker_variants("dangcem.ng"), {"DANGCEM", "DANGCEM.NG"})
         self.assertEqual(ticker_variants("aapl"), {"AAPL", "AAPL.NG"})
 
+    def test_decision_snapshot_turns_research_triage_into_buy_candidate(self) -> None:
+        from app.services.ticker_intelligence.analysis import _build_decision_snapshot
+
+        snapshot = _build_decision_snapshot(
+            latest_triage=SimpleNamespace(
+                confidence_score=Decimal("65"),
+                composite_score=Decimal("72"),
+                generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+                next_action="Proceed to deep research.",
+                recommended_weight=Decimal("0.0300"),
+                triage_decision="research",
+            ),
+            position=None,
+            opportunity=None,
+            watchlist_id=None,
+            radar_snapshot=None,
+            radar_evidence={},
+            pre_trade=None,
+            news=None,
+            memo_count=0,
+        )
+
+        self.assertEqual(snapshot.action, "buy_candidate")
+        self.assertEqual(snapshot.action_label, "Buy Candidate")
+        self.assertEqual(snapshot.stance, "constructive")
+
+    def test_decision_snapshot_flags_owned_reject_as_position_review(self) -> None:
+        from app.services.ticker_intelligence.analysis import _build_decision_snapshot
+
+        snapshot = _build_decision_snapshot(
+            latest_triage=SimpleNamespace(
+                confidence_score=Decimal("70"),
+                composite_score=Decimal("35"),
+                generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+                next_action="Reject for now.",
+                recommended_weight=Decimal("0.0000"),
+                triage_decision="reject",
+            ),
+            position=SimpleNamespace(quantity=Decimal("10")),
+            opportunity=None,
+            watchlist_id=None,
+            radar_snapshot=None,
+            radar_evidence={},
+            pre_trade=None,
+            news=None,
+            memo_count=0,
+        )
+
+        self.assertEqual(snapshot.action, "review_position")
+        self.assertEqual(snapshot.action_label, "Review Position")
+        self.assertEqual(snapshot.stance, "risk")
+
+    def test_decision_snapshot_asks_for_triage_when_no_saved_screen_exists(self) -> None:
+        from app.services.ticker_intelligence.analysis import _build_decision_snapshot
+
+        snapshot = _build_decision_snapshot(
+            latest_triage=None,
+            position=None,
+            opportunity=None,
+            watchlist_id=None,
+            radar_snapshot=None,
+            radar_evidence={},
+            pre_trade=None,
+            news=None,
+            memo_count=0,
+        )
+
+        self.assertEqual(snapshot.action, "run_triage")
+        self.assertEqual(snapshot.action_label, "Run Quick Triage")
+
 
 class TickerTriageTests(IsolatedAsyncioTestCase):
     async def test_create_ticker_triage_persists_screen_with_cached_price(self) -> None:

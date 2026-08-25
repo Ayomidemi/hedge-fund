@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, select, tuple_
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -42,6 +42,8 @@ CURRENT_NEWS_MAX_PAGE_SIZE = 50
 TICKER_NEWS_DEFAULT_PAGE_SIZE = 8
 TICKER_NEWS_MAX_PAGE_SIZE = 20
 WATCHLIST_NEWS_LIMIT = 50
+
+NEWS_UPSERT_BATCH_SIZE = 100
 
 
 class NewsUnavailableError(RuntimeError):
@@ -375,90 +377,220 @@ async def _upsert_provider_items(
     session: AsyncSession,
     items: list[ProviderNewsItem],
 ) -> tuple[int, int]:
+    """Batch-upsert provider news and ticker links.
+
+    Replaces per-row SELECT/INSERT/FLUSH loops that were timing out under
+    Tiingo volume. Chunks keep each statement under the DB timeout.
+    """
+    prepared = _prepare_provider_items(items)
+    if not prepared:
+        return 0, 0
+
     created = 0
     updated = 0
-    instrument_cache: dict[str, Instrument | None] = {}
-
-    for provider_item in items:
-        title = provider_item.title.strip()
-        if not title:
-            continue
-        provider_id = provider_item.provider_id[:512]
-        existing = await _select_news_item(session, provider_item.provider, provider_id)
-        if existing is None:
-            try:
-                async with session.begin_nested():
-                    news_item = NewsItem(
-                        provider=provider_item.provider,
-                        provider_id=provider_id,
-                        source_name=_clip(provider_item.source_name, 255),
-                        title=title,
-                        summary=provider_item.summary,
-                        url=_clip(provider_item.url, 2048),
-                        published_at=provider_item.published_at,
-                        crawled_at=provider_item.crawled_at,
-                        jurisdiction=provider_item.jurisdiction,
-                        event_type=provider_item.event_type,
-                        sentiment_label=provider_item.sentiment_label,
-                        sentiment_score=provider_item.sentiment_score,
-                        raw_payload=provider_item.raw_payload,
-                    )
-                    session.add(news_item)
-                    await session.flush()
-                linked_tickers: set[str] = set()
-                created += 1
-            except IntegrityError:
-                existing = await _select_news_item(
-                    session, provider_item.provider, provider_id
-                )
-                if existing is None:
-                    raise
-                news_item = existing
-                linked_tickers = {link.ticker.upper() for link in news_item.ticker_links}
-                changed = _apply_item_updates(news_item, provider_item)
-                if changed:
-                    updated += 1
-        else:
-            news_item = existing
-            linked_tickers = {link.ticker.upper() for link in news_item.ticker_links}
-            changed = _apply_item_updates(news_item, provider_item)
-            if changed:
-                updated += 1
-
-        for ticker in _normalized_tickers(provider_item):
-            if ticker in linked_tickers:
-                continue
-            instrument = await _instrument_for_ticker(session, ticker, instrument_cache)
-            try:
-                async with session.begin_nested():
-                    session.add(
-                        NewsTickerLink(
-                            news_item_id=news_item.id,
-                            ticker=ticker,
-                            instrument_id=instrument.id if instrument else None,
-                            sentiment_label=provider_item.sentiment_label,
-                            sentiment_score=provider_item.sentiment_score,
-                        )
-                    )
-                    await session.flush()
-            except IntegrityError:
-                pass
-            linked_tickers.add(ticker)
-
+    for offset in range(0, len(prepared), NEWS_UPSERT_BATCH_SIZE):
+        chunk = prepared[offset : offset + NEWS_UPSERT_BATCH_SIZE]
+        chunk_created, chunk_updated = await _upsert_provider_item_chunk(session, chunk)
+        created += chunk_created
+        updated += chunk_updated
     return created, updated
 
 
-async def _select_news_item(
+def _prepare_provider_items(
+    items: list[ProviderNewsItem],
+) -> list[ProviderNewsItem]:
+    """Drop empty titles and dedupe by provider identity (last write wins)."""
+    prepared: dict[tuple[str, str], ProviderNewsItem] = {}
+    for item in items:
+        title = item.title.strip()
+        if not title:
+            continue
+        key = (item.provider, item.provider_id[:512])
+        prepared[key] = item
+    return list(prepared.values())
+
+
+async def _upsert_provider_item_chunk(
     session: AsyncSession,
-    provider: str,
-    provider_id: str,
-) -> NewsItem | None:
-    return await session.scalar(
-        select(NewsItem)
-        .options(selectinload(NewsItem.ticker_links))
-        .where(NewsItem.provider == provider)
-        .where(NewsItem.provider_id == provider_id)
+    items: list[ProviderNewsItem],
+) -> tuple[int, int]:
+    keys = [(item.provider, item.provider_id[:512]) for item in items]
+    existing_rows = (
+        await session.scalars(
+            select(NewsItem).where(
+                tuple_(NewsItem.provider, NewsItem.provider_id).in_(keys)
+            )
+        )
+    ).all()
+    existing_by_key = {
+        (row.provider, row.provider_id): row for row in existing_rows
+    }
+
+    created = 0
+    updated = 0
+    insert_rows: list[dict] = []
+    item_by_key: dict[tuple[str, str], ProviderNewsItem] = {}
+
+    for item in items:
+        key = (item.provider, item.provider_id[:512])
+        item_by_key[key] = item
+        existing = existing_by_key.get(key)
+        if existing is None:
+            insert_rows.append(_news_item_values(item, news_item_id=uuid4()))
+            created += 1
+            continue
+        if _apply_item_updates(existing, item):
+            updated += 1
+
+    if insert_rows:
+        statement = insert(NewsItem).values(insert_rows)
+        statement = statement.on_conflict_do_update(
+            constraint="uq_news_items_provider_id",
+            set_={
+                "source_name": statement.excluded.source_name,
+                "title": statement.excluded.title,
+                "summary": statement.excluded.summary,
+                "url": statement.excluded.url,
+                "published_at": statement.excluded.published_at,
+                "crawled_at": statement.excluded.crawled_at,
+                "jurisdiction": statement.excluded.jurisdiction,
+                "event_type": statement.excluded.event_type,
+                "sentiment_label": statement.excluded.sentiment_label,
+                "sentiment_score": statement.excluded.sentiment_score,
+                "raw_payload": statement.excluded.raw_payload,
+                "updated_at": func.now(),
+            },
+        ).returning(NewsItem.id, NewsItem.provider, NewsItem.provider_id)
+        inserted = (await session.execute(statement)).all()
+        for news_item_id, provider, provider_id in inserted:
+            existing_by_key[(provider, provider_id)] = NewsItem(
+                id=news_item_id,
+                provider=provider,
+                provider_id=provider_id,
+            )
+
+    # Ensure every key has an id, including conflict races that skipped insert.
+    missing_keys = [key for key in keys if key not in existing_by_key]
+    if missing_keys:
+        recovered = (
+            await session.scalars(
+                select(NewsItem).where(
+                    tuple_(NewsItem.provider, NewsItem.provider_id).in_(missing_keys)
+                )
+            )
+        ).all()
+        for row in recovered:
+            existing_by_key[(row.provider, row.provider_id)] = row
+
+    await _upsert_ticker_links(session, items=items, news_items_by_key=existing_by_key)
+    return created, updated
+
+
+def _news_item_values(
+    item: ProviderNewsItem, *, news_item_id: UUID
+) -> dict:
+    return {
+        "id": news_item_id,
+        "provider": item.provider,
+        "provider_id": item.provider_id[:512],
+        "source_name": _clip(item.source_name, 255),
+        "title": item.title.strip(),
+        "summary": item.summary,
+        "url": _clip(item.url, 2048),
+        "published_at": item.published_at,
+        "crawled_at": item.crawled_at,
+        "jurisdiction": item.jurisdiction,
+        "event_type": item.event_type,
+        "sentiment_label": item.sentiment_label,
+        "sentiment_score": item.sentiment_score,
+        "raw_payload": item.raw_payload or {},
+    }
+
+
+async def _upsert_ticker_links(
+    session: AsyncSession,
+    *,
+    items: list[ProviderNewsItem],
+    news_items_by_key: dict[tuple[str, str], NewsItem],
+) -> None:
+    desired: list[tuple[UUID, str, ProviderNewsItem]] = []
+    tickers: set[str] = set()
+    for item in items:
+        key = (item.provider, item.provider_id[:512])
+        news_item = news_items_by_key.get(key)
+        if news_item is None:
+            continue
+        for ticker in _normalized_tickers(item):
+            desired.append((news_item.id, ticker, item))
+            tickers.add(ticker)
+
+    if not desired:
+        return
+
+    instruments = await _instruments_for_tickers(session, tickers)
+    news_item_ids = {news_item_id for news_item_id, _ticker, _item in desired}
+    existing_links = {
+        (row.news_item_id, row.ticker.upper())
+        for row in (
+            await session.scalars(
+                select(NewsTickerLink).where(
+                    NewsTickerLink.news_item_id.in_(news_item_ids)
+                )
+            )
+        ).all()
+    }
+
+    link_rows: list[dict] = []
+    seen: set[tuple[UUID, str]] = set()
+    for news_item_id, ticker, item in desired:
+        link_key = (news_item_id, ticker.upper())
+        if link_key in existing_links or link_key in seen:
+            continue
+        seen.add(link_key)
+        instrument = instruments.get(ticker)
+        if instrument is None and ticker.endswith(".NG"):
+            instrument = instruments.get(ticker.removesuffix(".NG"))
+        link_rows.append(
+            {
+                "id": uuid4(),
+                "news_item_id": news_item_id,
+                "ticker": ticker,
+                "instrument_id": instrument.id if instrument else None,
+                "sentiment_label": item.sentiment_label,
+                "sentiment_score": item.sentiment_score,
+            }
+        )
+
+    if not link_rows:
+        return
+
+    for offset in range(0, len(link_rows), NEWS_UPSERT_BATCH_SIZE):
+        chunk = link_rows[offset : offset + NEWS_UPSERT_BATCH_SIZE]
+        statement = (
+            insert(NewsTickerLink)
+            .values(chunk)
+            .on_conflict_do_nothing(constraint="uq_news_ticker_links_item_ticker")
+        )
+        await session.execute(statement)
+
+
+async def _instruments_for_tickers(
+    session: AsyncSession,
+    tickers: set[str],
+) -> dict[str, Instrument]:
+    if not tickers:
+        return {}
+    lookup = set(tickers)
+    lookup.update(
+        ticker.removesuffix(".NG") for ticker in tickers if ticker.endswith(".NG")
     )
+    rows = (
+        await session.scalars(
+            select(Instrument).where(Instrument.ticker.in_(lookup))
+        )
+    ).all()
+    return {row.ticker: row for row in rows}
+
 
 
 async def _record_failed_run(
@@ -512,22 +644,6 @@ def _apply_item_updates(news_item: NewsItem, provider_item: ProviderNewsItem) ->
             changed = True
     return changed
 
-
-async def _instrument_for_ticker(
-    session: AsyncSession,
-    ticker: str,
-    cache: dict[str, Instrument | None],
-) -> Instrument | None:
-    if ticker in cache:
-        return cache[ticker]
-
-    instrument = await session.scalar(select(Instrument).where(Instrument.ticker == ticker))
-    if instrument is None and ticker.endswith(".NG"):
-        instrument = await session.scalar(
-            select(Instrument).where(Instrument.ticker == ticker.removesuffix(".NG"))
-        )
-    cache[ticker] = instrument
-    return cache[ticker]
 
 
 async def _latest_run(session: AsyncSession) -> NewsPollRun | None:

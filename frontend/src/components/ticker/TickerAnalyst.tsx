@@ -639,6 +639,13 @@ function TickerDeskView({
 
   return (
     <>
+      {desk.decision_snapshot ? (
+        <DecisionSnapshotCard
+          snapshot={desk.decision_snapshot}
+          ticker={ticker}
+        />
+      ) : null}
+
       <QuickTriageSection
         desk={desk}
         onDeskChange={onDeskChange}
@@ -807,49 +814,59 @@ function QuickTriageHome({
   }
 
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-            Quick Triage
-          </p>
-          <h3 className="mt-1 text-2xl font-semibold tracking-normal">
-            First-pass ticker decision
-          </h3>
+    <>
+      <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+              Quick Triage
+            </p>
+            <h3 className="mt-1 text-2xl font-semibold tracking-normal">
+              First-pass ticker decision
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleRun()}
+            disabled={loading || !normalizedTicker}
+            className={buttonClassName}
+          >
+            {loading ? "Running..." : verdict ? "Run again" : "Run quick triage"}
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => void handleRun()}
-          disabled={loading || !normalizedTicker}
-          className={buttonClassName}
-        >
-          {loading ? "Running..." : verdict ? "Run again" : "Run quick triage"}
-        </button>
-      </div>
 
-      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
-        <TickerSelector
-          required
-          detailsScope="identity"
-          fetchDetailsOnSelect={false}
-          market={market}
-          value={ticker}
-          onMarketChange={resetForMarket}
-          onTickerChange={(value) => {
-            setTicker(value);
-            setVerdict(null);
-            setDesk(null);
-          }}
-          className={inputClassName}
-        />
-        <Field label="Current State">
-          <input
-            readOnly
-            value={verdict ? formatLabel(verdict.triage_decision) : "Not run"}
+        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+          <TickerSelector
+            required
+            detailsScope="identity"
+            fetchDetailsOnSelect={false}
+            market={market}
+            value={ticker}
+            onMarketChange={resetForMarket}
+            onTickerChange={(value) => {
+              setTicker(value);
+              setVerdict(null);
+              setDesk(null);
+            }}
             className={inputClassName}
           />
-        </Field>
-      </div>
+          <Field label="Current State">
+            <input
+              readOnly
+              value={verdict ? formatLabel(verdict.triage_decision) : "Not run"}
+              className={inputClassName}
+            />
+          </Field>
+        </div>
+      </section>
+
+      {desk?.decision_snapshot ? (
+        <DecisionSnapshotCard
+          snapshot={desk.decision_snapshot}
+          ticker={desk.ticker}
+          onNewAnalysis={verdict ? () => onNewAnalysis(prefillFromVerdict(verdict)) : undefined}
+        />
+      ) : null}
 
       <QuickTriageResult
         desk={desk}
@@ -858,6 +875,119 @@ function QuickTriageHome({
         onNewAnalysis={onNewAnalysis}
         onOpenTicker={onOpenTicker}
       />
+    </>
+  );
+}
+
+function DecisionSnapshotCard({
+  onNewAnalysis,
+  snapshot,
+  ticker,
+}: {
+  onNewAnalysis?: () => void;
+  snapshot: NonNullable<TickerDesk["decision_snapshot"]>;
+  ticker: string;
+}) {
+  const stanceClassName = decisionStanceClassName(snapshot.stance);
+
+  return (
+    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+            Decision Snapshot
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <h3 className="text-3xl font-semibold tracking-normal">
+              {snapshot.action_label}
+            </h3>
+            <span
+              className={`rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${stanceClassName}`}
+            >
+              {formatLabel(snapshot.stance)}
+            </span>
+          </div>
+          <p className="mt-3 max-w-4xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+            {snapshot.summary}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {onNewAnalysis ? (
+            <button type="button" onClick={onNewAnalysis} className={buttonClassName}>
+              Deep Research
+            </button>
+          ) : null}
+          {snapshot.action === "review_position" ? (
+            <Link href="/risk-centre" className={secondaryButtonClassName}>
+              Risk Centre
+            </Link>
+          ) : null}
+          <Link
+            href={`/news?ticker=${encodeURIComponent(ticker)}${
+              ticker.endsWith(".NG") ? "&market=NG" : "&market=US"
+            }`}
+            className={secondaryButtonClassName}
+          >
+            News
+          </Link>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricCard
+          label="Confidence"
+          value={snapshot.confidence_score ? `${score(snapshot.confidence_score)}%` : "-"}
+        />
+        <MetricCard
+          label="Composite"
+          value={snapshot.composite_score ? score(snapshot.composite_score) : "-"}
+        />
+        <MetricCard
+          label="Max weight"
+          value={snapshot.recommended_weight ? weight(snapshot.recommended_weight) : "-"}
+        />
+        <MetricCard
+          label="Context"
+          value={formatLabel(snapshot.position_context)}
+        />
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_1fr]">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Next Step
+          </p>
+          <p className="mt-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+            {snapshot.next_step}
+          </p>
+          {snapshot.source_generated_at ? (
+            <p className="mt-2 text-xs text-zinc-500">
+              Based on triage from {formatDateTime(snapshot.source_generated_at)}
+            </p>
+          ) : null}
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Blockers
+          </p>
+          <div className="mt-2 space-y-1.5">
+            {snapshot.blockers.length > 0 ? (
+              snapshot.blockers.map((blocker) => (
+                <p
+                  key={blocker}
+                  className="text-sm leading-6 text-zinc-700 dark:text-zinc-300"
+                >
+                  {blocker}
+                </p>
+              ))
+            ) : (
+              <p className="text-sm leading-6 text-zinc-500">
+                No immediate blocker in the saved desk state.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -2475,6 +2605,21 @@ function formatDateTime(value: string) {
     month: "short",
     year: "numeric",
   }).format(date);
+}
+
+function decisionStanceClassName(stance: string) {
+  switch (stance) {
+    case "constructive":
+      return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
+    case "negative":
+      return "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300";
+    case "risk":
+      return "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300";
+    case "pending":
+      return "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300";
+    default:
+      return "bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300";
+  }
 }
 
 function formatFeature(value: string) {

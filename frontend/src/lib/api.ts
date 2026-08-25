@@ -664,6 +664,19 @@ export type TickerDesk = {
     recommended_weight: string;
     next_action: string;
   } | null;
+  decision_snapshot: {
+    action: string;
+    action_label: string;
+    stance: string;
+    summary: string;
+    confidence_score: string | null;
+    composite_score: string | null;
+    recommended_weight: string | null;
+    source_generated_at: string | null;
+    position_context: "owned" | "not_owned" | string;
+    blockers: string[];
+    next_step: string;
+  } | null;
   memos: TickerMemoSummary[];
 };
 
@@ -2084,6 +2097,11 @@ export type MarketRadarIndustry = {
   name_count: number;
   flagged_count: number;
   heat: string;
+  status?: "quiet" | "isolated_names" | "industry_event" | "market_event";
+  median_change_pct?: string | null;
+  median_volume_ratio?: string | null;
+  declining_count?: number;
+  advancing_count?: number;
   names: MarketRadarName[];
 };
 

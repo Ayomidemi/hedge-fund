@@ -676,6 +676,13 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
         sector=_sector(context),
         industry=_industry(context),
     )
+    debt_to_equity = _debt_to_equity(context)
+    if debt_to_equity is None:
+        debt_to_equity = _valid_debt_to_equity(
+            fundamentals.debt_to_equity,
+            "SEC Companyfacts",
+            context,
+        )
     metrics = TickerMetricsInput(
         current_price=_latest_price(context),
         market_cap_billion=_market_cap_billion(context),
@@ -686,7 +693,7 @@ def _build_prefill_response(context: PrefillBuildContext) -> TickerPrefillRespon
         free_cash_flow_yield_pct=_free_cash_flow_yield(context)
         or fundamentals.free_cash_flow_yield_pct,
         net_margin_pct=_net_margin(context) or fundamentals.net_margin_pct,
-        debt_to_equity=_debt_to_equity(context) or fundamentals.debt_to_equity,
+        debt_to_equity=debt_to_equity,
         price_vs_200d_pct=_price_vs_200d(context.bars),
         relative_strength_6m_pct=_relative_strength(context.bars),
         volatility_30d_pct=_volatility_30d(context.bars),
@@ -1025,15 +1032,45 @@ def _net_margin(context: PrefillBuildContext) -> Decimal | None:
 
 
 def _debt_to_equity(context: PrefillBuildContext) -> Decimal | None:
-    return (
-        _decimal(context.ratios.get("debt_to_equity"))
-        or _decimal_from_keys(
-            context.fmp_ratios,
-            "debtEquityRatioTTM",
-            "debtEquityRatio",
+    candidates = [
+        ("Massive", _decimal(context.ratios.get("debt_to_equity"))),
+        (
+            "FMP",
+            _decimal_from_keys(
+                context.fmp_ratios,
+                "debtEquityRatioTTM",
+                "debtEquityRatio",
+            ),
+        ),
+        (
+            "NGN Market",
+            _decimal_from_keys(
+                context.ngn_company,
+                "debtToEquity",
+                "debt_to_equity",
+            ),
+        ),
+    ]
+    for source, value in candidates:
+        valid_value = _valid_debt_to_equity(value, source, context)
+        if valid_value is not None:
+            return valid_value
+    return None
+
+
+def _valid_debt_to_equity(
+    value: Decimal | None,
+    source: str,
+    context: PrefillBuildContext,
+) -> Decimal | None:
+    if value is None:
+        return None
+    if value < 0:
+        context.warnings.append(
+            f"{source} debt-to-equity was negative and was excluded because shareholder equity may be negative."
         )
-        or _decimal_from_keys(context.ngn_company, "debtToEquity", "debt_to_equity")
-    )
+        return None
+    return value
 
 
 def _price_vs_200d(bars: list[dict | list]) -> Decimal | None:

@@ -2,10 +2,12 @@ import asyncio
 from unittest import TestCase
 from unittest.mock import AsyncMock, patch
 
+from uuid import uuid4
+
 from app.main import app
 from app.core.config import Settings, settings
-from app.services.news import providers
-from app.services.news.providers import NewsFetchResult, normalize_ticker
+from app.services.news import centre, providers
+from app.services.news.providers import NewsFetchResult, ProviderNewsItem, normalize_ticker
 from app.services.realtime.events import news_poll_completed_event
 
 
@@ -180,6 +182,74 @@ class NewsProviderTests(TestCase):
         tiingo_news.assert_awaited_once_with(tickers=["SCGLY"])
         fmp_news.assert_not_called()
         self.assertFalse(any("fmp" in label for label in result.provider_plan))
+
+
+class NewsUpsertBatchTests(TestCase):
+    def test_prepare_provider_items_dedupes_and_drops_empty_titles(self) -> None:
+        items = [
+            ProviderNewsItem(
+                provider="tiingo",
+                provider_id="1",
+                title="  First ",
+                tickers=("AAPL",),
+            ),
+            ProviderNewsItem(
+                provider="tiingo",
+                provider_id="1",
+                title="Second",
+                tickers=("MSFT",),
+            ),
+            ProviderNewsItem(
+                provider="tiingo",
+                provider_id="2",
+                title="   ",
+                tickers=("TSLA",),
+            ),
+        ]
+
+        prepared = centre._prepare_provider_items(items)
+
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0].title, "Second")
+        self.assertEqual(prepared[0].tickers, ("MSFT",))
+
+    def test_news_item_values_clip_ids_and_urls(self) -> None:
+        item = ProviderNewsItem(
+            provider="tiingo",
+            provider_id="x" * 600,
+            title=" Clip me ",
+            url="https://example.com/" + ("a" * 3000),
+            source_name="S" * 300,
+            raw_payload={"id": 1},
+        )
+
+        values = centre._news_item_values(item, news_item_id=uuid4())
+
+        self.assertEqual(values["title"], "Clip me")
+        self.assertEqual(len(values["provider_id"]), 512)
+        self.assertEqual(len(values["url"]), 2048)
+        self.assertEqual(len(values["source_name"]), 255)
+        self.assertEqual(values["raw_payload"], {"id": 1})
+
+    def test_upsert_chunks_large_batches(self) -> None:
+        items = [
+            ProviderNewsItem(
+                provider="tiingo",
+                provider_id=str(index),
+                title=f"Story {index}",
+            )
+            for index in range(centre.NEWS_UPSERT_BATCH_SIZE + 5)
+        ]
+        chunk = AsyncMock(return_value=(2, 1))
+
+        with patch.object(centre, "_upsert_provider_item_chunk", new=chunk):
+            created, updated = asyncio.run(
+                centre._upsert_provider_items(AsyncMock(), items)
+            )
+
+        self.assertEqual(chunk.await_count, 2)
+        self.assertEqual(created, 4)
+        self.assertEqual(updated, 2)
 
 
 class NewsPollIntervalTests(TestCase):

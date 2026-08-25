@@ -16,6 +16,7 @@ from app.services.ticker_intelligence.market_data import (
     resolve_prefill_scope,
     resolve_ticker,
 )
+from app.services.ticker_intelligence.sec_fundamentals import SecFundamentals
 
 
 class MarketDataPrefillTests(TestCase):
@@ -119,6 +120,40 @@ class MarketDataPrefillTests(TestCase):
         self.assertEqual(response.metrics.market_cap_billion, Decimal("600.00"))
         self.assertEqual(response.metrics.pe_ratio, Decimal("24.1"))
         self.assertEqual(response.metrics.free_cash_flow_yield_pct, Decimal("3.90"))
+
+    def test_negative_debt_to_equity_is_excluded_with_warning(self) -> None:
+        response = _build_prefill_response(
+            PrefillBuildContext(
+                ticker="KNRX",
+                details={"name": "Kinetrix Holdings", "type": "CS"},
+                sec_fundamentals=SecFundamentals(
+                    debt_to_equity=Decimal("-0.64"),
+                ),
+                providers=["massive", "sec"],
+            )
+        )
+
+        self.assertIsNone(response.metrics.debt_to_equity)
+        self.assertIn(
+            "SEC Companyfacts debt-to-equity was negative and was excluded because shareholder equity may be negative.",
+            response.source_warnings,
+        )
+
+    def test_negative_provider_debt_to_equity_falls_back_to_valid_source(self) -> None:
+        response = _build_prefill_response(
+            PrefillBuildContext(
+                ticker="AAPL",
+                ratios={"debt_to_equity": Decimal("-0.64")},
+                fmp_ratios={"debtEquityRatioTTM": Decimal("1.24")},
+                providers=["massive", "fmp"],
+            )
+        )
+
+        self.assertEqual(response.metrics.debt_to_equity, Decimal("1.24"))
+        self.assertIn(
+            "Massive debt-to-equity was negative and was excluded because shareholder equity may be negative.",
+            response.source_warnings,
+        )
 
     def test_hides_provider_plan_warnings_when_fallback_data_prefills(self) -> None:
         response = _build_prefill_response(

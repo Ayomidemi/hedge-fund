@@ -11,9 +11,18 @@ from app.api.schemas.market_radar import (
     MarketRadarRunResponse,
     MarketRadarSessionResponse,
 )
-from app.core.market_constants import RADAR_POST_CLOSE_WINDOW_HOURS
+from app.core.market_constants import (
+    RADAR_POST_CLOSE_WINDOW_HOURS,
+    RADAR_PULSE_TICKERS,
+)
 from app.models import RadarRun, RadarSnapshot
 from app.services.market_data.sessions import ALL_JURISDICTIONS, session_for
+from app.services.market_radar.priority import (
+    IndustryContext,
+    build_industry_contexts,
+    heat_for_status,
+    industry_key,
+)
 from app.services.market_radar.watchlist_book import list_watchlist
 
 
@@ -57,8 +66,17 @@ async def build_radar_overview(
         watchlist = await list_watchlist(session, owner_user_id=owner_user_id)
         watchlist_items = watchlist.items
         watchlist_tickers = {item.ticker.upper() for item in watchlist_items}
-    industries = _group_industries(working, watchlist_tickers)
-    named_flagged = [_name_response(row, watchlist_tickers) for row in _sorted(flagged)]
+    contexts = build_industry_contexts(working)
+
+    def named(row: RadarSnapshot) -> MarketRadarNameResponse:
+        return _name_response(
+            row,
+            watchlist_tickers,
+            context=contexts.get(industry_key(row)),
+        )
+
+    industries = _group_industries(working, watchlist_tickers, contexts)
+    named_flagged = [named(row) for row in _sorted(flagged)]
     queue_candidates = [
         item
         for item in named_flagged
@@ -89,17 +107,12 @@ async def build_radar_overview(
         p2_count=_priority_count(flagged, "P2"),
         p3_count=_priority_count(flagged, "P3"),
         industries=industries,
-        working_set=[
-            _name_response(row, watchlist_tickers) for row in _sorted(working)
-        ],
+        working_set=[named(row) for row in _sorted(working)],
         flagged=named_flagged,
         queue_candidates=queue_candidates,
         desk_alerts=desk_alerts,
         watchlist=watchlist_items,
-        scan_changes=[
-            _name_response(row, watchlist_tickers)
-            for row in _sorted(_scan_changes(working))
-        ],
+        scan_changes=[named(row) for row in _sorted(_scan_changes(working))],
     )
 
 
@@ -140,13 +153,18 @@ def _run_response(run: RadarRun) -> MarketRadarRunResponse:
 
 
 def _name_response(
-    row: RadarSnapshot, watchlist_tickers: set[str] | None = None
+    row: RadarSnapshot,
+    watchlist_tickers: set[str] | None = None,
+    context: IndustryContext | None = None,
 ) -> MarketRadarNameResponse:
     evidence = dict(row.evidence or {})
     watchlist = bool(
         (watchlist_tickers and row.ticker.upper() in watchlist_tickers)
         or evidence.get("on_watchlist")
     )
+    if context is not None:
+        evidence["industry_status"] = context.status
+        evidence["move_scope"] = _live_move_scope(row, context)
     return MarketRadarNameResponse(
         ticker=row.ticker,
         name=row.name,
@@ -184,45 +202,66 @@ def _name_response(
     )
 
 
+def _live_move_scope(row: RadarSnapshot, context: IndustryContext) -> str:
+    ticker = (row.ticker or "").upper()
+    if ticker in RADAR_PULSE_TICKERS or not row.flags:
+        return "none"
+    if context.status == "market_event":
+        return "market"
+    if context.status == "industry_event":
+        return "industry"
+    return "isolated"
+
+
 def _group_industries(
-    rows: list[RadarSnapshot], watchlist_tickers: set[str] | None = None
+    rows: list[RadarSnapshot],
+    watchlist_tickers: set[str] | None,
+    contexts: dict[str, IndustryContext],
 ) -> list[MarketRadarIndustryResponse]:
     grouped: dict[str, list[RadarSnapshot]] = {}
     for row in rows:
-        key = row.industry or row.sector or "Unclassified"
-        grouped.setdefault(key, []).append(row)
+        grouped.setdefault(industry_key(row), []).append(row)
 
     industries: list[MarketRadarIndustryResponse] = []
-    for name, members in grouped.items():
-        flagged = [row for row in members if row.flags]
+    for key, members in grouped.items():
+        context = contexts.get(key)
+        status = context.status if context is not None else "quiet"
         industries.append(
             MarketRadarIndustryResponse(
-                name=name,
-                jurisdiction=members[0].jurisdiction if len({m.jurisdiction for m in members}) == 1 else "mixed",
+                name=(
+                    context.label
+                    if context is not None
+                    else (members[0].industry or members[0].sector or "Unclassified")
+                ),
+                jurisdiction=(
+                    context.jurisdiction
+                    if context is not None
+                    else members[0].jurisdiction
+                ),
                 name_count=len(members),
-                flagged_count=len(flagged),
-                heat=_heat(flagged, members),
+                flagged_count=(
+                    context.flagged_count
+                    if context is not None
+                    else len([row for row in members if row.flags])
+                ),
+                heat=heat_for_status(status),
+                status=status,
+                median_change_pct=(
+                    context.median_change_pct if context is not None else None
+                ),
+                median_volume_ratio=(
+                    context.median_volume_ratio if context is not None else None
+                ),
+                declining_count=context.declining_count if context is not None else 0,
+                advancing_count=context.advancing_count if context is not None else 0,
                 names=[
-                    _name_response(row, watchlist_tickers)
+                    _name_response(row, watchlist_tickers, context)
                     for row in _sorted(members)
                 ],
             )
         )
     industries.sort(key=lambda item: (item.flagged_count, item.name_count), reverse=True)
     return industries
-
-
-def _heat(flagged: list[RadarSnapshot], members: list[RadarSnapshot]) -> str:
-    if not members:
-        return "quiet"
-    ratio = len(flagged) / len(members)
-    if ratio >= 0.4 or len(flagged) >= 3:
-        return "unusual"
-    if ratio > 0 or any(
-        abs(float(row.change_pct or 0)) >= 2 for row in members
-    ):
-        return "heating"
-    return "quiet"
 
 
 _PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}

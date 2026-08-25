@@ -337,16 +337,28 @@ function IndustryCard({
   busyTickers: Set<string>;
   onWatchToggle: (name: MarketRadarName) => void;
 }) {
+  const status = industry.status ?? "quiet";
+  const median = industry.median_change_pct
+    ? `${Number(industry.median_change_pct) > 0 ? "+" : ""}${Number(industry.median_change_pct).toFixed(1)}% median`
+    : null;
+  const breadth = `${industry.flagged_count}/${industry.name_count} flagged`;
+  const direction =
+    industry.declining_count || industry.advancing_count
+      ? `${industry.declining_count ?? 0} down · ${industry.advancing_count ?? 0} up`
+      : null;
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold">{industry.name}</h3>
           <p className="mt-1 text-xs text-zinc-500">
-            {industry.name_count} names · {industry.jurisdiction}
+            {industry.jurisdiction}
+            {median ? ` · ${median}` : ""}
+            {` · ${breadth}`}
+            {direction ? ` · ${direction}` : ""}
           </p>
         </div>
-        <HeatBadge heat={industry.heat} />
+        <HeatBadge heat={industry.heat} label={industryStatusLabel(status)} />
       </div>
       <div className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
         {industry.names.map((name) => (
@@ -381,6 +393,7 @@ function NameRow({
   const volumeRatio = name.volume_ratio ?? evidenceText(name.evidence, "volume_ratio");
   const scanState = evidenceText(name.evidence, "scan_state");
   const scanDelta = evidenceText(name.evidence, "scan_delta_change_pct");
+  const moveScope = evidenceText(name.evidence, "move_scope");
   const href = name.on_watchlist
     ? `/watchlist/${encodeURIComponent(name.ticker)}`
     : `/ticker-analyst?ticker=${encodeURIComponent(name.ticker)}`;
@@ -404,6 +417,7 @@ function NameRow({
           {name.radar_priority ? (
             <Chip tone={priorityTone(name.radar_priority)}>{name.radar_priority}</Chip>
           ) : null}
+          <MoveScopeChip scope={moveScope} />
           {name.carried_forward ? <Chip tone="zinc">prior session</Chip> : null}
           <CareChip name={name} />
           {name.flags
@@ -451,7 +465,7 @@ function NameRow({
   );
 }
 
-function HeatBadge({ heat }: { heat: string }) {
+function HeatBadge({ heat, label }: { heat: string; label?: string }) {
   const tone =
     heat === "unusual"
       ? "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300"
@@ -459,10 +473,24 @@ function HeatBadge({ heat }: { heat: string }) {
         ? "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
         : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400";
   return (
-    <span className={`rounded-md px-2 py-1 text-xs font-medium capitalize ${tone}`}>
-      {heat}
+    <span className={`rounded-md px-2 py-1 text-xs font-medium ${tone}`}>
+      {label ?? heat}
     </span>
   );
+}
+
+function industryStatusLabel(status: string) {
+  if (status === "market_event") return "Market event";
+  if (status === "industry_event") return "Industry event";
+  if (status === "isolated_names") return "Isolated names";
+  return "Quiet";
+}
+
+function MoveScopeChip({ scope }: { scope: string | null }) {
+  if (scope === "isolated") return <Chip tone="amber">isolated</Chip>;
+  if (scope === "industry") return <Chip tone="rose">industry-wide</Chip>;
+  if (scope === "market") return <Chip tone="rose">market-wide</Chip>;
+  return null;
 }
 
 function changeClass(value: string | null) {

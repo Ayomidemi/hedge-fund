@@ -12,6 +12,7 @@ from app.api.schemas.operating_core import InstrumentResponse
 from app.api.schemas.ticker_intelligence import (
     TickerAnalysisCreate,
     TickerAnalysisResponse,
+    TickerDeskDecisionSnapshot,
     TickerDeskNews,
     TickerDeskOpportunity,
     TickerDeskPosition,
@@ -293,6 +294,17 @@ async def get_ticker_desk(
     )
 
     evidence = dict(snapshot.evidence or {}) if snapshot is not None else {}
+    decision_snapshot = _build_decision_snapshot(
+        latest_triage=latest_triage,
+        position=position,
+        opportunity=opportunity,
+        watchlist_id=watchlist,
+        radar_snapshot=snapshot,
+        radar_evidence=evidence,
+        pre_trade=pre_trade,
+        news=news,
+        memo_count=len(memos),
+    )
     return TickerDeskResponse(
         ticker=display_ticker,
         name=(
@@ -382,6 +394,7 @@ async def get_ticker_desk(
             if latest_triage is not None
             else None
         ),
+        decision_snapshot=decision_snapshot,
         memos=[_memo_summary(memo) for memo in memos],
     )
 
@@ -392,6 +405,172 @@ def ticker_variants(ticker: str) -> set[str]:
         return set()
     base = normalized.removesuffix(".NG")
     return {normalized, base, f"{base}.NG"}
+
+
+def _build_decision_snapshot(
+    *,
+    latest_triage: TickerTriageRun | None,
+    position: Position | None,
+    opportunity: Opportunity | None,
+    watchlist_id,
+    radar_snapshot: RadarSnapshot | None,
+    radar_evidence: dict,
+    pre_trade: PreTradeRiskCheck | None,
+    news: NewsItem | None,
+    memo_count: int,
+) -> TickerDeskDecisionSnapshot:
+    has_position = position is not None
+    position_context = "owned" if has_position else "not_owned"
+    blockers = _decision_blockers(
+        latest_triage=latest_triage,
+        has_position=has_position,
+        radar_snapshot=radar_snapshot,
+        radar_evidence=radar_evidence,
+        pre_trade=pre_trade,
+    )
+
+    if latest_triage is None:
+        return TickerDeskDecisionSnapshot(
+            action="run_triage",
+            action_label="Run Quick Triage",
+            stance="pending",
+            summary="No saved quick screen yet.",
+            position_context=position_context,
+            blockers=blockers or ["No persisted Quick Triage decision."],
+            next_step="Run Quick Triage before making a research or capital decision.",
+        )
+
+    action, action_label, stance = _decision_action(
+        latest_triage,
+        has_position=has_position,
+        blockers=blockers,
+    )
+    context_note = _decision_context_note(
+        has_position=has_position,
+        opportunity=opportunity,
+        watchlist_id=watchlist_id,
+        news=news,
+        memo_count=memo_count,
+    )
+    summary = f"{latest_triage.next_action} {context_note}".strip()
+
+    return TickerDeskDecisionSnapshot(
+        action=action,
+        action_label=action_label,
+        stance=stance,
+        summary=summary,
+        confidence_score=latest_triage.confidence_score,
+        composite_score=latest_triage.composite_score,
+        recommended_weight=latest_triage.recommended_weight,
+        source_generated_at=latest_triage.generated_at,
+        position_context=position_context,
+        blockers=blockers,
+        next_step=_decision_next_step(action, latest_triage, has_position=has_position),
+    )
+
+
+def _decision_action(
+    latest_triage: TickerTriageRun,
+    *,
+    has_position: bool,
+    blockers: list[str],
+) -> tuple[str, str, str]:
+    decision = latest_triage.triage_decision.strip().lower()
+    confidence = latest_triage.confidence_score
+    composite = latest_triage.composite_score
+    has_risk_blocker = any(_is_risk_blocker(blocker) for blocker in blockers)
+
+    if has_position:
+        if decision == "reject" or has_risk_blocker:
+            return "review_position", "Review Position", "risk"
+        return "hold", "Hold", "constructive" if composite >= Decimal("60") else "neutral"
+
+    if decision == "research" and confidence >= Decimal("50"):
+        return "buy_candidate", "Buy Candidate", "constructive"
+    if decision == "reject":
+        return "avoid", "Avoid", "negative"
+    return "watch", "Watch", "neutral"
+
+
+def _decision_blockers(
+    *,
+    latest_triage: TickerTriageRun | None,
+    has_position: bool,
+    radar_snapshot: RadarSnapshot | None,
+    radar_evidence: dict,
+    pre_trade: PreTradeRiskCheck | None,
+) -> list[str]:
+    blockers: list[str] = []
+    if latest_triage is not None and latest_triage.confidence_score < Decimal("45"):
+        blockers.append("Low triage confidence.")
+
+    if pre_trade is not None:
+        decision = pre_trade.decision.strip().lower()
+        risk_level = pre_trade.risk_level.strip().lower()
+        if decision in {"reject", "reduce_or_review"}:
+            blockers.append(f"Risk Centre pre-trade decision is {decision}.")
+        elif risk_level in {"halt", "reduce", "suspend", "defensive"}:
+            blockers.append(f"Risk Centre risk level is {risk_level}.")
+
+    change_pct = radar_snapshot.change_pct if radar_snapshot is not None else None
+    scan_state = str(radar_evidence.get("scan_state") or "").strip().lower()
+    if has_position and change_pct is not None and change_pct <= Decimal("-3"):
+        blockers.append(f"Position is down {change_pct}% on the latest radar print.")
+    elif has_position and scan_state in {"falling", "lurching_down", "selloff"}:
+        blockers.append(f"Market Radar state is {scan_state.replace('_', ' ')}.")
+
+    return list(dict.fromkeys(blockers))
+
+
+def _decision_context_note(
+    *,
+    has_position: bool,
+    opportunity: Opportunity | None,
+    watchlist_id,
+    news: NewsItem | None,
+    memo_count: int,
+) -> str:
+    if has_position:
+        return "Existing position context applies."
+    if opportunity is not None and opportunity.status not in CLOSED_OPPORTUNITY_STATUSES:
+        return f"Current queue status: {opportunity.status}."
+    if watchlist_id is not None:
+        return "Ticker is already on the radar watchlist."
+    if news is not None:
+        return "Latest stored news is available on the desk."
+    if memo_count > 0:
+        return "Past research memo exists."
+    return ""
+
+
+def _decision_next_step(
+    action: str,
+    latest_triage: TickerTriageRun,
+    *,
+    has_position: bool,
+) -> str:
+    if action == "buy_candidate":
+        return "Open deep research, then move to Opportunity Queue if the thesis survives."
+    if action == "hold":
+        return "Keep monitoring; refresh triage when price, news, or thesis changes."
+    if action == "watch":
+        return "Keep or add to watchlist; wait for stronger evidence."
+    if action == "avoid":
+        return "Do not spend more research time unless new evidence changes the setup."
+    if action == "review_position":
+        return "Open Risk Centre before adding, trimming, or exiting."
+    if has_position:
+        return "Review the position with Risk Centre context."
+    return latest_triage.next_action
+
+
+def _is_risk_blocker(blocker: str) -> bool:
+    normalized = blocker.strip().lower()
+    return (
+        "risk centre" in normalized
+        or "position is down" in normalized
+        or "market radar state" in normalized
+    )
 
 
 async def _load_desk_instrument(

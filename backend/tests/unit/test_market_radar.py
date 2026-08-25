@@ -21,10 +21,13 @@ from app.services.market_radar.scan import (
     run_radar_scan,
 )
 from app.services.market_radar.priority import (
+    assign_priorities,
     assign_priority,
     build_evidence_package,
+    build_industry_contexts,
     is_auto_promotable,
     queue_priority_for,
+    research_question_for,
     select_promotions,
     thesis_for,
 )
@@ -844,5 +847,97 @@ class RadarPriorityTests(TestCase):
         self.assertFalse(is_auto_promotable(candidate))
         package = build_evidence_package(candidate)
         self.assertEqual(package["context"]["care_tier"], "position")
+
+
+def _tape_name(
+    ticker: str,
+    industry: str,
+    *,
+    flagged: bool,
+    jurisdiction: str = "US",
+) -> RadarCandidate:
+    candidate = RadarCandidate(
+        ticker=ticker,
+        name=ticker,
+        jurisdiction=jurisdiction,
+        industry=industry,
+        sector=industry,
+        change_pct=Decimal("-5.4") if flagged else Decimal("0.2"),
+        volume=5_000_000 if flagged else 800_000,
+        avg_volume=1_200_000,
+        evidence=(
+            {
+                "price_return_zscore": "-2.4",
+                "volume_zscore": "2.2",
+                "avg_dollar_volume": "9000000",
+            }
+            if flagged
+            else {}
+        ),
+    )
+    score_candidate(candidate)
+    return candidate
+
+
+class MoveScopeTests(TestCase):
+    def test_single_flagged_name_is_isolated(self) -> None:
+        names = [
+            _tape_name("JPM", "Banks", flagged=True),
+            *[_tape_name(f"Q{index}", "Banks", flagged=False) for index in range(5)],
+        ]
+        assign_priorities(names)
+        self.assertEqual(names[0].evidence["move_scope"], "isolated")
+        contexts = build_industry_contexts(names)
+        status = next(iter(contexts.values())).status
+        self.assertEqual(status, "isolated_names")
+        self.assertIn("company-specific", research_question_for(names[0]))
+
+    def test_broad_industry_tape_is_industry_event(self) -> None:
+        names = [
+            *[_tape_name(f"B{index}", "Banks", flagged=True) for index in range(4)],
+            *[_tape_name(f"Q{index}", "Banks", flagged=False) for index in range(4)],
+        ]
+        assign_priorities(names)
+        self.assertEqual(names[0].evidence["move_scope"], "industry")
+        contexts = build_industry_contexts(names)
+        self.assertEqual(next(iter(contexts.values())).status, "industry_event")
+        self.assertIn("riding a Banks move", research_question_for(names[0]))
+
+    def test_several_hot_industries_are_a_market_event(self) -> None:
+        names = [
+            *[_tape_name(f"B{index}", "Banks", flagged=True) for index in range(4)],
+            *[_tape_name(f"BQ{index}", "Banks", flagged=False) for index in range(4)],
+            *[_tape_name(f"E{index}", "Energy", flagged=True) for index in range(4)],
+            *[_tape_name(f"EQ{index}", "Energy", flagged=False) for index in range(4)],
+        ]
+        assign_priorities(names)
+        self.assertEqual(names[0].evidence["move_scope"], "market")
+        statuses = {item.status for item in build_industry_contexts(names).values()}
+        self.assertEqual(statuses, {"market_event"})
+        self.assertIn("market-wide", research_question_for(names[0]))
+
+    def test_pulse_etf_does_not_create_an_industry_event(self) -> None:
+        names = [
+            RadarCandidate(
+                ticker="XLF",
+                name="Financials",
+                jurisdiction="US",
+                industry="Banks",
+                sector="Banks",
+                asset_class="etf",
+                always_watched=True,
+                change_pct=Decimal("-6.0"),
+                volume=20_000_000,
+                avg_volume=8_000_000,
+                evidence={"price_return_zscore": "-3.4", "volume_zscore": "2.8"},
+            ),
+            *[_tape_name(f"Q{index}", "Banks", flagged=False) for index in range(6)],
+        ]
+        score_candidate(names[0])
+        assign_priorities(names)
+        context = next(iter(build_industry_contexts(names).values()))
+        self.assertEqual(context.flagged_count, 0)
+        self.assertEqual(context.status, "quiet")
+        self.assertEqual(names[0].evidence["move_scope"], "none")
 
 

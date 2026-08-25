@@ -80,6 +80,11 @@ class MarketRadarIndustryResponse(BaseModel):
     name_count: int
     flagged_count: int
     heat: str
+    status: str = "quiet"
+    median_change_pct: Decimal | None = None
+    median_volume_ratio: Decimal | None = None
+    declining_count: int = 0
+    advancing_count: int = 0
     names: list[MarketRadarNameResponse]
 
 

@@ -493,6 +493,20 @@ class TickerDeskTriage(BaseModel):
     next_action: str
 
 
+class TickerDeskDecisionSnapshot(BaseModel):
+    action: str
+    action_label: str
+    stance: str
+    summary: str
+    confidence_score: Decimal | None = None
+    composite_score: Decimal | None = None
+    recommended_weight: Decimal | None = None
+    source_generated_at: datetime | None = None
+    position_context: str
+    blockers: list[str] = Field(default_factory=list)
+    next_step: str
+
+
 class TickerDeskResponse(BaseModel):
     ticker: str
     name: str
@@ -505,4 +519,5 @@ class TickerDeskResponse(BaseModel):
     pre_trade: TickerDeskPreTrade | None = None
     position: TickerDeskPosition | None = None
     latest_triage: TickerDeskTriage | None = None
+    decision_snapshot: TickerDeskDecisionSnapshot | None = None
     memos: list[TickerMemoSummaryResponse] = Field(default_factory=list)

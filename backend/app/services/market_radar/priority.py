@@ -16,7 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Sequence
 
 from app.core.market_constants import (
     RADAR_AUTO_PROMOTE_PRIORITIES,
@@ -28,6 +28,12 @@ from app.services.market_radar.scoring import RadarCandidate, care_tier, is_flag
 
 
 QUEUE_PRIORITY = {"P0": "urgent", "P1": "high", "P2": "medium", "P3": "low"}
+INDUSTRY_EVENT_RATIO = Decimal("0.40")
+INDUSTRY_EVENT_MIN_FLAGGED = 3
+MARKET_EVENT_INDUSTRY_SHARE = Decimal("0.45")
+MARKET_EVENT_MIN_INDUSTRY_EVENTS = 2
+MARKET_EVENT_NAME_RATIO = Decimal("0.30")
+MARKET_EVENT_MIN_FLAGGED = 8
 _WEIGHTS = {
     "price_anomaly": 0.28,
     "volume_anomaly": 0.22,
@@ -47,7 +53,11 @@ class IndustryContext:
     flagged_count: int
     flagged_ratio: Decimal
     median_change_pct: Decimal | None
-    related_tickers: tuple[str, ...]
+    median_volume_ratio: Decimal | None = None
+    declining_count: int = 0
+    advancing_count: int = 0
+    related_tickers: tuple[str, ...] = ()
+    status: str = "quiet"
 
 
 def assign_priorities(candidates: list[RadarCandidate]) -> None:
@@ -193,6 +203,22 @@ def research_question_for(candidate: RadarCandidate) -> str:
             f"Does the live {candidate.ticker} position still match the original thesis, "
             "or is this tape a risk event that should change size or exit?"
         )
+    scope = candidate.evidence.get("move_scope")
+    if scope == "industry":
+        return (
+            f"Is {candidate.ticker} just riding a {industry} move, "
+            "or is there a company-specific reason to open it?"
+        )
+    if scope == "market":
+        return (
+            f"Is {candidate.ticker} a market-wide tape print, "
+            "or a name that still deserves company-level work?"
+        )
+    if scope == "isolated":
+        return (
+            f"This looks company-specific versus {industry}. "
+            "Does it survive Ticker Analyst quality, valuation and risk checks?"
+        )
     return (
         f"Is {candidate.ticker}'s move company-specific or a {industry} event, "
         "and does it survive Ticker Analyst quality, valuation and risk checks?"
@@ -212,43 +238,85 @@ def next_action_for(candidate: RadarCandidate) -> str:
 
 
 def build_industry_contexts(
-    candidates: list[RadarCandidate],
+    members: Sequence[Any],
 ) -> dict[str, IndustryContext]:
-    grouped: dict[str, list[RadarCandidate]] = defaultdict(list)
-    for candidate in candidates:
-        grouped[_industry_key(candidate)].append(candidate)
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for member in members:
+        grouped[_industry_key(member)].append(member)
 
-    contexts: dict[str, IndustryContext] = {}
-    for key, members in grouped.items():
-        flagged = [item for item in members if is_flagged(item)]
+    draft: dict[str, IndustryContext] = {}
+    for key, group in grouped.items():
+        flagged = [item for item in group if _member_is_flagged(item)]
         changes = sorted(
             float(item.change_pct)
-            for item in members
-            if item.change_pct is not None
+            for item in group
+            if getattr(item, "change_pct", None) is not None
         )
-        median = _median_decimal(changes)
+        volumes = sorted(
+            float(item.volume_ratio)
+            for item in group
+            if getattr(item, "volume_ratio", None) is not None
+        )
         ratio = (
-            (Decimal(len(flagged)) / Decimal(len(members))).quantize(Decimal("0.01"))
-            if members
+            (Decimal(len(flagged)) / Decimal(len(group))).quantize(Decimal("0.01"))
+            if group
             else Decimal("0")
         )
-        sample = members[0]
-        contexts[key] = IndustryContext(
+        sample = group[0]
+        jurisdictions = {
+            str(getattr(item, "jurisdiction", "") or "") for item in group
+        }
+        draft[key] = IndustryContext(
             key=key,
-            label=sample.industry or sample.sector or "Unclassified",
-            jurisdiction=sample.jurisdiction,
-            member_count=len(members),
+            label=(
+                getattr(sample, "industry", None)
+                or getattr(sample, "sector", None)
+                or "Unclassified"
+            ),
+            jurisdiction=(
+                next(iter(jurisdictions))
+                if len(jurisdictions) == 1
+                else "mixed"
+            ),
+            member_count=len(group),
             flagged_count=len(flagged),
             flagged_ratio=ratio,
-            median_change_pct=median,
+            median_change_pct=_median_decimal(changes),
+            median_volume_ratio=_median_decimal(volumes),
+            declining_count=sum(
+                1
+                for item in group
+                if getattr(item, "change_pct", None) is not None
+                and item.change_pct < 0
+            ),
+            advancing_count=sum(
+                1
+                for item in group
+                if getattr(item, "change_pct", None) is not None
+                and item.change_pct > 0
+            ),
             related_tickers=tuple(
-                item.ticker
+                getattr(item, "ticker")
                 for item in sorted(
-                    flagged, key=lambda item: item.anomaly_score, reverse=True
+                    flagged,
+                    key=lambda item: float(getattr(item, "anomaly_score", 0) or 0),
+                    reverse=True,
                 )
             ),
+            status=_industry_status_without_market(len(flagged), len(group), ratio),
         )
-    return contexts
+
+    market_jurisdictions = _market_event_jurisdictions(draft, members)
+    return {
+        key: _with_status(
+            context,
+            "market_event"
+            if context.jurisdiction in market_jurisdictions
+            and _is_industry_event(context)
+            else context.status,
+        )
+        for key, context in draft.items()
+    }
 
 
 def dimension_scores(
@@ -335,15 +403,18 @@ def _write_industry_evidence(
     candidate: RadarCandidate, context: IndustryContext | None
 ) -> None:
     if context is None:
+        candidate.evidence["move_scope"] = "none"
         return
     candidate.evidence["industry_key"] = context.key
     candidate.evidence["industry_label"] = context.label
     candidate.evidence["industry_member_count"] = context.member_count
     candidate.evidence["industry_flagged_count"] = context.flagged_count
     candidate.evidence["industry_flagged_ratio"] = str(context.flagged_ratio)
+    candidate.evidence["industry_status"] = context.status
     if context.median_change_pct is not None:
         candidate.evidence["industry_median_change_pct"] = str(context.median_change_pct)
     candidate.evidence["related_tickers"] = list(candidate.related_tickers)
+    candidate.evidence["move_scope"] = _move_scope(candidate, context)
 
 
 def _write_priority_evidence(candidate: RadarCandidate) -> None:
@@ -466,6 +537,11 @@ def _facts(candidate: RadarCandidate) -> dict[str, Any]:
         "scan_delta_change_pct": candidate.evidence.get("scan_delta_change_pct"),
         "history_gap": candidate.evidence.get("history_gap"),
         "bar_count": candidate.evidence.get("bar_count"),
+        "industry_status": candidate.evidence.get("industry_status"),
+        "move_scope": candidate.evidence.get("move_scope"),
+        "industry_median_change_pct": candidate.evidence.get(
+            "industry_median_change_pct"
+        ),
         "avg_dollar_volume": candidate.evidence.get("avg_dollar_volume"),
         "source": candidate.source,
         "source_as_of": (
@@ -486,9 +562,127 @@ def _promotion_rule(candidate: RadarCandidate) -> str:
     return "Not flagged"
 
 
-def _industry_key(candidate: RadarCandidate) -> str:
-    label = (candidate.industry or candidate.sector or "unclassified").strip().lower()
-    return f"{candidate.jurisdiction}:{label}"
+def heat_for_status(status: str) -> str:
+    if status in {"industry_event", "market_event"}:
+        return "unusual"
+    if status == "isolated_names":
+        return "heating"
+    return "quiet"
+
+
+def industry_key(member: Any) -> str:
+    return _industry_key(member)
+
+
+def _industry_key(member: Any) -> str:
+    label = (
+        getattr(member, "industry", None)
+        or getattr(member, "sector", None)
+        or "unclassified"
+    )
+    jurisdiction = getattr(member, "jurisdiction", "") or "unknown"
+    return f"{jurisdiction}:{str(label).strip().lower()}"
+
+
+def _member_is_flagged(member: Any) -> bool:
+    ticker = str(getattr(member, "ticker", "") or "").upper()
+    if ticker in RADAR_PULSE_TICKERS:
+        return False
+    if isinstance(member, RadarCandidate):
+        return is_flagged(member)
+    return bool(getattr(member, "flags", None))
+
+
+def _industry_status_without_market(
+    flagged_count: int, member_count: int, ratio: Decimal
+) -> str:
+    if flagged_count <= 0:
+        return "quiet"
+    if (
+        ratio >= INDUSTRY_EVENT_RATIO
+        or (flagged_count >= INDUSTRY_EVENT_MIN_FLAGGED and member_count >= 4)
+    ):
+        return "industry_event"
+    return "isolated_names"
+
+
+def _is_industry_event(context: IndustryContext) -> bool:
+    return context.status == "industry_event"
+
+
+def _with_status(context: IndustryContext, status: str) -> IndustryContext:
+    if context.status == status:
+        return context
+    return IndustryContext(
+        key=context.key,
+        label=context.label,
+        jurisdiction=context.jurisdiction,
+        member_count=context.member_count,
+        flagged_count=context.flagged_count,
+        flagged_ratio=context.flagged_ratio,
+        median_change_pct=context.median_change_pct,
+        median_volume_ratio=context.median_volume_ratio,
+        declining_count=context.declining_count,
+        advancing_count=context.advancing_count,
+        related_tickers=context.related_tickers,
+        status=status,
+    )
+
+
+def _market_event_jurisdictions(
+    contexts: dict[str, IndustryContext], members: Sequence[Any]
+) -> set[str]:
+    by_jurisdiction: dict[str, list[IndustryContext]] = defaultdict(list)
+    for context in contexts.values():
+        if context.jurisdiction in {"", "mixed"}:
+            continue
+        by_jurisdiction[context.jurisdiction].append(context)
+
+    flagged_by_jurisdiction: dict[str, list[Any]] = defaultdict(list)
+    names_by_jurisdiction: dict[str, list[Any]] = defaultdict(list)
+    for member in members:
+        jurisdiction = str(getattr(member, "jurisdiction", "") or "")
+        if not jurisdiction:
+            continue
+        names_by_jurisdiction[jurisdiction].append(member)
+        if _member_is_flagged(member):
+            flagged_by_jurisdiction[jurisdiction].append(member)
+
+    market: set[str] = set()
+    for jurisdiction, industries in by_jurisdiction.items():
+        sizable = [item for item in industries if item.member_count >= 2]
+        if not sizable:
+            continue
+        industry_events = [item for item in sizable if _is_industry_event(item)]
+        industry_share = (
+            Decimal(len(industry_events)) / Decimal(len(sizable))
+        ).quantize(Decimal("0.01"))
+        names = names_by_jurisdiction.get(jurisdiction, [])
+        flagged = flagged_by_jurisdiction.get(jurisdiction, [])
+        name_share = (
+            (Decimal(len(flagged)) / Decimal(len(names))).quantize(Decimal("0.01"))
+            if names
+            else Decimal("0")
+        )
+        if (
+            len(industry_events) >= MARKET_EVENT_MIN_INDUSTRY_EVENTS
+            and industry_share >= MARKET_EVENT_INDUSTRY_SHARE
+        ) or (
+            len(flagged) >= MARKET_EVENT_MIN_FLAGGED
+            and name_share >= MARKET_EVENT_NAME_RATIO
+        ):
+            market.add(jurisdiction)
+    return market
+
+
+def _move_scope(candidate: RadarCandidate, context: IndustryContext) -> str:
+    if not is_flagged(candidate) or _is_pulse_instrument(candidate):
+        return "none"
+    if context.status == "market_event":
+        return "market"
+    if context.status == "industry_event":
+        return "industry"
+    return "isolated"
 
 
 def _price_z(candidate: RadarCandidate) -> Decimal | None:
