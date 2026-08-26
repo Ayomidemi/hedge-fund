@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WatchlistButton } from "@/components/radar/WatchlistButton";
 import { TickerPriceChart, chartRangeLabel } from "@/components/ticker/TickerPriceChart";
+import { useLiveQuote } from "@/components/providers/LiveDataProvider";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   buttonPrimaryClassName,
@@ -23,6 +24,12 @@ import { tickerMarketFromSymbol } from "@/lib/ticker-hub-path";
 
 const CHART_RANGES = ["1d", "1m", "3m", "1y", "5y"] as const;
 const NEWS_PAGE_SIZE = 5;
+/** Desk/price poll — DB + quote cache (vendor only when quote is stale). */
+const TICKER_SYNC_MS = 60_000;
+/** Vendor news pull — backend TTL is 30m; don't POST a skip-run every minute. */
+const NEWS_VENDOR_SYNC_MS = 15 * 60_000;
+/** 1d chart is radar film / stored bars — refresh slower than the desk. */
+const CHART_SYNC_MS = 5 * 60_000;
 const queueStatusLabels: Record<string, string> = {
   discovered: "Discovered",
   screening: "Screening",
@@ -43,6 +50,11 @@ const priceFormat = new Intl.NumberFormat("en-US", {
 const dateTime = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeStyle: "short",
+});
+const timeOnly = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
 });
 
 type TickerHubProps = {
@@ -68,16 +80,32 @@ export function TickerHub({
   const [refreshingNews, setRefreshingNews] = useState(false);
   const [runningTriage, setRunningTriage] = useState(false);
   const [newsPage, setNewsPage] = useState(0);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [syncing, setSyncing] = useState(false);
+  const syncingRef = useRef(false);
+  const rangeRef = useRef(range);
+  const lastNewsVendorAtRef = useRef(0);
+  const lastChartSyncAtRef = useRef(0);
   const market = tickerMarketFromSymbol(ticker);
+  const liveQuote = useLiveQuote(desk?.ticker ?? ticker);
 
   useEffect(() => {
+    rangeRef.current = range;
+  }, [range]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDesk(initialDesk);
     setChart(initialChart);
     setNewsPage(0);
+    lastNewsVendorAtRef.current = 0;
+    lastChartSyncAtRef.current = 0;
   }, [initialDesk, initialChart, ticker]);
 
   useEffect(() => {
     if (range === "1d" && initialChart?.range === "1d") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setChart(initialChart);
       return;
     }
@@ -98,6 +126,64 @@ export function TickerHub({
       setLoadingDesk(false);
     }
   }
+
+  async function syncImportant() {
+    if (unavailable || syncingRef.current) return;
+    syncingRef.current = true;
+    setSyncing(true);
+    const now = Date.now();
+    try {
+      // News vendors: infrequent. Desk reload still picks up headlines from DB
+      // (global poll + any prior ticker refresh).
+      if (now - lastNewsVendorAtRef.current >= NEWS_VENDOR_SYNC_MS) {
+        try {
+          await refreshTickerNews(ticker, { market });
+          lastNewsVendorAtRef.current = now;
+        } catch {
+          // Keep going — desk read is the important path.
+        }
+      }
+
+      const nextDesk = await getTickerDesk(ticker);
+      setDesk(nextDesk);
+
+      if (
+        rangeRef.current === "1d" &&
+        now - lastChartSyncAtRef.current >= CHART_SYNC_MS
+      ) {
+        try {
+          setChart(await getTickerChart(ticker, "1d"));
+          lastChartSyncAtRef.current = now;
+        } catch {
+          // Keep the last chart frame if the refresh fails.
+        }
+      }
+      setLastSyncedAt(new Date());
+    } catch {
+      // Silent poll — avoid toast spam while the page is open.
+    } finally {
+      syncingRef.current = false;
+      setSyncing(false);
+    }
+  }
+
+  useEffect(() => {
+    if (unavailable) return;
+
+    const runIfVisible = () => {
+      if (document.visibilityState === "hidden") return;
+      void syncImportant();
+    };
+
+    const intervalId = window.setInterval(runIfVisible, TICKER_SYNC_MS);
+    document.addEventListener("visibilitychange", runIfVisible);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", runIfVisible);
+    };
+    // Intentionally ticker/market/unavailable only — sync reads range from a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticker, market, unavailable]);
 
   async function handleWatchToggle() {
     setWatchlistBusy(true);
@@ -120,9 +206,10 @@ export function TickerHub({
   async function handleRefreshNews() {
     setRefreshingNews(true);
     try {
-      await refreshTickerNews(ticker, { market });
+      await refreshTickerNews(ticker, { market, force: true });
       await reloadDesk();
       setNewsPage(0);
+      setLastSyncedAt(new Date());
       toast.success("News refreshed.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "News refresh failed.");
@@ -178,6 +265,9 @@ export function TickerHub({
   }
 
   const radar = desk.radar;
+  const displayPrice = liveQuote?.price ?? radar?.price ?? null;
+  const displayChange = liveQuote?.change_pct ?? radar?.change_pct ?? null;
+  const displayAsOf = liveQuote?.as_of ?? radar?.as_of ?? null;
   const headlines = desk.recent_headlines?.length
     ? desk.recent_headlines
     : desk.news
@@ -214,16 +304,21 @@ export function TickerHub({
             </p>
             <div className="mt-3 flex flex-wrap items-baseline gap-3">
               <p className="text-2xl font-semibold tabular-nums">
-                {radar?.price ? priceFormat.format(Number(radar.price)) : "—"}
+                {displayPrice != null && Number.isFinite(Number(displayPrice))
+                  ? priceFormat.format(Number(displayPrice))
+                  : "—"}
               </p>
-              <p className={`text-sm font-medium tabular-nums ${changeClass(radar?.change_pct)}`}>
-                {formatPct(radar?.change_pct)}
+              <p className={`text-sm font-medium tabular-nums ${changeClass(displayChange)}`}>
+                {formatPct(displayChange)}
               </p>
-              {radar?.as_of ? (
-                <p className="text-xs text-zinc-500">as of {dateTime.format(new Date(radar.as_of))}</p>
+              {displayAsOf ? (
+                <p className="text-xs text-zinc-500">
+                  as of {dateTime.format(new Date(displayAsOf))}
+                  {liveQuote ? " · live" : ""}
+                </p>
               ) : null}
             </div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
               {desk.in_portfolio ? <StatusChip label="Position" tone="rose" /> : null}
               {desk.on_watchlist ? <StatusChip label="Watchlist" tone="amber" /> : null}
               {desk.opportunity ? (
@@ -238,6 +333,11 @@ export function TickerHub({
               {radar?.move_scope && radar.move_scope !== "none" ? (
                 <StatusChip label={formatScope(radar.move_scope)} tone="rose" />
               ) : null}
+              <p className="text-[11px] text-zinc-400">
+                {lastSyncedAt
+                    ? `Last synced ${timeOnly.format(lastSyncedAt)}`
+                    : ""}
+              </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -279,8 +379,8 @@ export function TickerHub({
         <div className="grid gap-px bg-zinc-200 sm:grid-cols-2 lg:grid-cols-4 dark:bg-zinc-800">
           <FactCard
             label="vs yesterday"
-            value={formatPct(radar?.change_pct)}
-            hint="Latest radar print."
+            value={formatPct(displayChange)}
+            hint="Latest live mark when available."
           />
           <FactCard
             label="vs sector"
@@ -320,8 +420,8 @@ export function TickerHub({
             </h3>
             <p className="mt-1 text-xs text-zinc-500">
               {range === "1d"
-                ? "Same-day radar film: each scan is a frame. Hover a point for its price."
-                : "Daily bars from stored history. Hover a point for its price."}
+                ? "Same-day radar film: each scan is a frame."
+                : "Daily bars from stored history."}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

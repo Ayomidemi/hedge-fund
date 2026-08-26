@@ -957,18 +957,52 @@ export type ResearchNoteInput = {
   experiment_id?: string | null;
 };
 
+export type ReportKind = "daily" | "weekly" | "monthly" | "quarterly" | "annual";
+export type ReportCenterView = "overview" | "attribution" | "research" | "archive";
+
+export type ReportQueryParams = {
+  kind?: ReportKind;
+  year?: number;
+  month?: number;
+  quarter?: number;
+  as_of?: string;
+};
+
+export type ReportMetric = {
+  label: string;
+  value: string;
+};
+
+export type ReportCompactSection = {
+  title: string;
+  items: ReportMetric[];
+  note: string | null;
+};
+
 export type MonthlyReport = {
+  report_kind: ReportKind;
+  report_title: string;
+  period_key: string;
+  period_label: string;
   month: string;
+  portfolio_id: string;
+  period_start: string;
+  period_end: string;
+  reporting_mode: string;
   generated_at: string;
   portfolio_name: string;
   nav: string;
   cash_balance: string;
   invested_value: string;
+  period_cash_flow: string;
+  period_trade_count: number;
+  period_memo_count: number;
   monthly_cash_flow: string;
   monthly_trade_count: number;
   monthly_memo_count: number;
   risk_warning_count: number;
-  metrics: { label: string; value: string }[];
+  cumulative_return_pct: string | null;
+  metrics: ReportMetric[];
   top_positions: {
     ticker: string;
     name: string;
@@ -985,8 +1019,57 @@ export type MonthlyReport = {
     composite_score: string | null;
   }[];
   risk_warnings: string[];
-  model_registry_summary: { label: string; value: string }[];
+  model_registry_summary: ReportMetric[];
+  research_summary: ReportMetric[];
+  attribution: {
+    net_pnl: string;
+    total_return_pct: string;
+    total_fees: string;
+    turnover_pct: string;
+    hit_rate_pct: string | null;
+    top_contributors: MonthlyReportAttributionRow[];
+    top_detractors: MonthlyReportAttributionRow[];
+    notes: string[];
+  } | null;
+  attribution_detail: AttributionReport | null;
+  benchmark_summary: {
+    benchmark_symbol: string;
+    benchmark_name: string;
+    period_return_pct: string | null;
+    cumulative_return_pct: string | null;
+    relative_return_pct: string | null;
+    status: string;
+    notes: string[];
+  } | null;
+  ai_overview?: ReportCompactSection;
+  portfolio_positioning: ReportCompactSection;
+  market_commentary: ReportCompactSection;
+  strategy_changes: ReportCompactSection;
+  research_pipeline: ReportCompactSection;
   commentary: string;
+};
+
+export type MonthlyReportAttributionRow = {
+  ticker: string;
+  name: string;
+  net_pnl: string;
+  contribution_pct_nav: string;
+  portfolio_weight_pct: string;
+};
+
+export type ReportSnapshot = {
+  id: string;
+  report_kind: ReportKind;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  title: string;
+  nav: string | null;
+  return_pct: string | null;
+  created_at: string;
+  updated_at: string;
+  payload_version: number;
+  payload: MonthlyReport | null;
 };
 
 export type AttributionSummary = {
@@ -1800,8 +1883,72 @@ export function trainPredictiveModel(
   );
 }
 
-export function getCurrentMonthlyReport(options?: ApiRequestOptions) {
-  return fetchApi<MonthlyReport>("/api/reports/monthly", options);
+export function getCurrentMonthlyReport(
+  params?: { year?: number; month?: number },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.year) search.set("year", String(params.year));
+  if (params?.month) search.set("month", String(params.month));
+  const query = search.toString();
+  return fetchApi<MonthlyReport>(
+    `/api/reports/monthly${query ? `?${query}` : ""}`,
+    options,
+  );
+}
+
+export function getReportOverview(
+  params?: ReportQueryParams,
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.kind) search.set("kind", params.kind);
+  if (params?.year) search.set("year", String(params.year));
+  if (params?.month) search.set("month", String(params.month));
+  if (params?.quarter) search.set("quarter", String(params.quarter));
+  if (params?.as_of) search.set("as_of", params.as_of);
+  const query = search.toString();
+  return fetchApi<MonthlyReport>(
+    `/api/reports/current${query ? `?${query}` : ""}`,
+    options,
+  );
+}
+
+export function getReportSnapshots(limit = 20, options?: ApiRequestOptions) {
+  return fetchApi<ReportSnapshot[]>(`/api/reports/snapshots?limit=${limit}`, options);
+}
+
+export function getReportSnapshot(snapshotId: string, options?: ApiRequestOptions) {
+  return fetchApi<ReportSnapshot>(
+    `/api/reports/snapshots/${encodeURIComponent(snapshotId)}`,
+    options,
+  );
+}
+
+export function saveReportSnapshot(
+  payload: ReportQueryParams,
+  options?: ApiRequestOptions,
+) {
+  return postApi<
+    ReportSnapshot,
+    Omit<ReportQueryParams, "kind"> & { report_kind?: ReportKind }
+  >("/api/reports/snapshots", { ...payload, report_kind: payload.kind }, options);
+}
+
+export function updateReportSnapshotTitle(
+  snapshotId: string,
+  title: string,
+  options?: ApiRequestOptions,
+) {
+  return patchApi<ReportSnapshot, { title: string }>(
+    `/api/reports/snapshots/${encodeURIComponent(snapshotId)}`,
+    { title },
+    options,
+  );
+}
+
+export function deleteReportSnapshot(snapshotId: string, options?: ApiRequestOptions) {
+  return deleteApi(`/api/reports/snapshots/${encodeURIComponent(snapshotId)}`, options);
 }
 
 export function getAttributionReport(options?: ApiRequestOptions) {
@@ -2022,8 +2169,6 @@ export type AdministrationOverview = {
   data_versions: AdministrationDataVersion[];
   portfolio_rules: AdministrationPortfolioRule[];
   risk_policies: AdministrationRiskPolicy[];
-  price_refresh_runs: PriceRefreshRun[];
-  latest_fx_rate: FxRateSnapshot | null;
 };
 
 export function getAdministrationOverview(

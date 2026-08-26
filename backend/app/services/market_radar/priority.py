@@ -101,6 +101,14 @@ def is_auto_promotable(candidate: RadarCandidate) -> bool:
         return False
     if _is_pulse_instrument(candidate):
         return False
+    # Market-wide tape floods the queue; keep those on Radar unless P0.
+    if (
+        candidate.radar_priority == "P1"
+        and candidate.evidence.get("move_scope") == "market"
+    ):
+        return False
+    if candidate.radar_priority == "P1" and not _has_strong_confirmation(candidate):
+        return False
     return is_flagged(candidate)
 
 
@@ -359,13 +367,21 @@ def _classify(
         return "P0", reasons
 
     watch_boost = candidate.on_watchlist or candidate.in_opportunity_queue
-    p1_bar = Decimal("50") if watch_boost else Decimal("62")
+    # Universe bar is intentionally high so only standout tape opens a queue row.
+    # Watched/queued names get a slightly lower bar, still above noise.
+    p1_bar = Decimal("58") if watch_boost else Decimal("68")
+    market_wide = (
+        (context is not None and context.status == "market_event")
+        or candidate.evidence.get("move_scope") == "market"
+    ) and not candidate.in_portfolio
     if (
-        not _is_pulse_instrument(candidate)
+        not market_wide
+        and not _is_pulse_instrument(candidate)
         and not illiquid
         and confirmed
+        and _has_strong_confirmation(candidate)
         and score >= p1_bar
-        and (price_dim >= 40 or candidate.anomaly_score >= Decimal("10"))
+        and (price_dim >= 50 or candidate.anomaly_score >= Decimal("12"))
     ):
         if watch_boost:
             reasons.append("Watched name with confirmed anomaly")
@@ -380,6 +396,10 @@ def _classify(
                 f"Industry breadth {context.flagged_count}/{context.member_count}"
             )
         return "P1", reasons
+
+    if market_wide and confirmed and score >= Decimal("50"):
+        reasons.append("Market-wide move — hold on Radar, do not auto-open the queue")
+        return "P2", reasons
 
     if illiquid and confirmed and score >= Decimal("50"):
         reasons.append("Would be P1 but dollar volume looks too thin to auto-open")
@@ -453,6 +473,31 @@ def _has_confirmation(candidate: RadarCandidate) -> bool:
         return True
     volume_z = _decimal(candidate.evidence.get("volume_zscore"))
     return volume_z is not None and volume_z >= Decimal("2")
+
+
+def _has_strong_confirmation(candidate: RadarCandidate) -> bool:
+    """P1 auto-promote needs a price signal plus volume or sector residual."""
+    z_score = _price_z(candidate)
+    price_ok = (
+        "price_anomaly" in candidate.flags
+        or (z_score is not None and abs(z_score) >= Decimal("2.5"))
+        or _abs_change(candidate) >= Decimal("4")
+    )
+    volume_z = _decimal(candidate.evidence.get("volume_zscore"))
+    volume_ok = (
+        "volume_anomaly" in candidate.flags
+        or "unusual_volume" in candidate.flags
+        or (
+            candidate.volume_ratio is not None
+            and candidate.volume_ratio >= Decimal("2")
+        )
+        or (volume_z is not None and volume_z >= Decimal("2"))
+    )
+    relative = _relative_pct(candidate)
+    relative_ok = "sector_relative_move" in candidate.flags or (
+        relative is not None and abs(relative) >= Decimal("3")
+    )
+    return price_ok and (volume_ok or relative_ok)
 
 
 def _is_illiquid(candidate: RadarCandidate) -> bool:

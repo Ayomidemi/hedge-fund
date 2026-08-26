@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -28,6 +28,7 @@ from app.models import (
     EvidenceSnapshot,
     EvidenceSourceType,
     Instrument,
+    InstrumentQuote,
     ModelRecommendation,
     ModelVersion,
     NewsItem,
@@ -42,6 +43,8 @@ from app.models import (
     TickerTriageRun,
 )
 from app.services.administration.system_log import record_system_log
+from app.services.market_data.ingestion import persist_quotes
+from app.services.market_data.quote_provider import LiveQuote, fetch_quotes
 from app.services.market_data.universe import quote_symbol_for
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.ml_training import (
@@ -295,6 +298,11 @@ async def get_ticker_desk(
     )
 
     evidence = dict(snapshot.evidence or {}) if snapshot is not None else {}
+    live_quote = await _ensure_desk_live_quote(
+        session,
+        ticker=display_ticker,
+        instrument=instrument,
+    )
     decision_snapshot = _build_decision_snapshot(
         latest_triage=latest_triage,
         position=position,
@@ -306,6 +314,7 @@ async def get_ticker_desk(
         news=news,
         memo_count=len(memos),
     )
+    radar = _desk_radar_payload(snapshot, evidence, live_quote, display_ticker)
     return TickerDeskResponse(
         ticker=display_ticker,
         name=(
@@ -334,35 +343,7 @@ async def get_ticker_desk(
         ),
         on_watchlist=watchlist is not None,
         in_portfolio=position is not None,
-        radar=(
-            TickerDeskRadar(
-                change_pct=snapshot.change_pct,
-                scan_state=(
-                    str(evidence["scan_state"]) if evidence.get("scan_state") else None
-                ),
-                scan_delta_change_pct=(
-                    str(evidence["scan_delta_change_pct"])
-                    if evidence.get("scan_delta_change_pct") is not None
-                    else None
-                ),
-                as_of=snapshot.source_as_of or snapshot.as_of,
-                price=snapshot.price,
-                jurisdiction=snapshot.jurisdiction,
-                sector=snapshot.sector,
-                industry=snapshot.industry,
-                flags=list(snapshot.flags or []),
-                radar_priority=snapshot.radar_priority or evidence.get("radar_priority"),
-                move_scope=_text(evidence.get("move_scope")),
-                industry_status=_text(evidence.get("industry_status")),
-                price_return_zscore=_text(evidence.get("price_return_zscore")),
-                sector_relative_return_pct=_text(
-                    evidence.get("sector_relative_return_pct")
-                ),
-                volume_ratio=snapshot.volume_ratio,
-            )
-            if snapshot is not None
-            else None
-        ),
+        radar=radar,
         opportunity=(
             TickerDeskOpportunity(
                 id=opportunity.id,
@@ -420,6 +401,139 @@ def ticker_variants(ticker: str) -> set[str]:
         return set()
     base = normalized.removesuffix(".NG")
     return {normalized, base, f"{base}.NG"}
+
+
+DESK_QUOTE_MAX_AGE = timedelta(seconds=90)
+
+
+async def _ensure_desk_live_quote(
+    session: AsyncSession,
+    *,
+    ticker: str,
+    instrument: Instrument | None,
+) -> LiveQuote | None:
+    """Return a fresh-enough live quote for the ticker hub, fetching if needed."""
+    variants = ticker_variants(ticker)
+    cached = await session.scalar(
+        select(InstrumentQuote)
+        .join(Instrument, Instrument.id == InstrumentQuote.instrument_id)
+        .where(Instrument.ticker.in_(variants))
+        .where(InstrumentQuote.is_stale.is_(False))
+        .order_by(InstrumentQuote.as_of.desc())
+        .limit(1)
+    )
+    now = datetime.now(timezone.utc)
+    if (
+        cached is not None
+        and cached.as_of is not None
+        and now - cached.as_of <= DESK_QUOTE_MAX_AGE
+    ):
+        return LiveQuote(
+            ticker=ticker,
+            price=cached.price,
+            source=cached.source,
+            as_of=cached.as_of,
+            previous_close=cached.previous_close,
+            change_pct=cached.change_pct,
+            day_open=cached.day_open,
+            day_high=cached.day_high,
+            day_low=cached.day_low,
+            volume=cached.volume,
+            currency=cached.currency,
+        )
+
+    try:
+        fetched = await fetch_quotes([ticker])
+    except Exception:  # noqa: BLE001
+        logger.exception("desk_live_quote_fetch_failed", extra={"ticker": ticker})
+        fetched = {}
+
+    live = fetched.get(ticker) or next(iter(fetched.values()), None)
+    if live is not None and instrument is not None:
+        try:
+            await persist_quotes(
+                session,
+                {live.ticker: [instrument.id]},
+                {live.ticker: live},
+                mark_missing_stale=False,
+            )
+            await session.flush()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "desk_live_quote_persist_failed",
+                extra={"ticker": live.ticker},
+            )
+
+    if live is not None:
+        return live
+    if cached is None:
+        return None
+    return LiveQuote(
+        ticker=ticker,
+        price=cached.price,
+        source=cached.source,
+        as_of=cached.as_of,
+        previous_close=cached.previous_close,
+        change_pct=cached.change_pct,
+        currency=cached.currency,
+    )
+
+
+def _desk_radar_payload(
+    snapshot: RadarSnapshot | None,
+    evidence: dict,
+    live_quote: LiveQuote | None,
+    display_ticker: str,
+) -> TickerDeskRadar | None:
+    if snapshot is None and live_quote is None:
+        return None
+    return TickerDeskRadar(
+        change_pct=(
+            live_quote.change_pct
+            if live_quote is not None and live_quote.change_pct is not None
+            else (snapshot.change_pct if snapshot is not None else None)
+        ),
+        scan_state=(
+            str(evidence["scan_state"]) if evidence.get("scan_state") else None
+        ),
+        scan_delta_change_pct=(
+            str(evidence["scan_delta_change_pct"])
+            if evidence.get("scan_delta_change_pct") is not None
+            else None
+        ),
+        as_of=(
+            live_quote.as_of
+            if live_quote is not None
+            else (
+                snapshot.source_as_of or snapshot.as_of
+                if snapshot is not None
+                else None
+            )
+        ),
+        price=(
+            live_quote.price
+            if live_quote is not None
+            else (snapshot.price if snapshot is not None else None)
+        ),
+        jurisdiction=(
+            snapshot.jurisdiction
+            if snapshot is not None
+            else ("NG" if display_ticker.endswith(".NG") else "US")
+        ),
+        sector=snapshot.sector if snapshot is not None else None,
+        industry=snapshot.industry if snapshot is not None else None,
+        flags=list(snapshot.flags or []) if snapshot is not None else [],
+        radar_priority=(
+            (snapshot.radar_priority or evidence.get("radar_priority"))
+            if snapshot is not None
+            else None
+        ),
+        move_scope=_text(evidence.get("move_scope")),
+        industry_status=_text(evidence.get("industry_status")),
+        price_return_zscore=_text(evidence.get("price_return_zscore")),
+        sector_relative_return_pct=_text(evidence.get("sector_relative_return_pct")),
+        volume_ratio=snapshot.volume_ratio if snapshot is not None else None,
+    )
 
 
 def _build_decision_snapshot(

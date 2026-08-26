@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser
@@ -62,6 +62,13 @@ def _system_log_filters(
     filters = [SystemLogEntry.owner_user_id == user.id]
     if category and category != "all":
         filters.append(SystemLogEntry.category == category)
+    else:
+        filters.append(
+            or_(
+                SystemLogEntry.category != "market_data",
+                SystemLogEntry.level.in_(("warning", "error")),
+            )
+        )
     return filters
 
 

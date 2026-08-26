@@ -21,6 +21,7 @@ from app.services.market_radar.scan import (
     run_radar_scan,
 )
 from app.services.market_radar.priority import (
+    IndustryContext,
     assign_priorities,
     assign_priority,
     build_evidence_package,
@@ -726,7 +727,7 @@ class RadarPriorityTests(TestCase):
             volume=90_000_000,
             avg_volume=30_000_000,
             evidence={
-                "price_return_zscore": "3.1",
+                "price_return_zscore": "3.5",
                 "volume_zscore": "2.6",
                 "sector_relative_return_pct": "3.8",
                 "sector_benchmark": "XLK",
@@ -737,6 +738,56 @@ class RadarPriorityTests(TestCase):
         assign_priority(candidate)
         self.assertEqual(candidate.radar_priority, "P1")
         self.assertTrue(is_auto_promotable(candidate))
+
+    def test_market_wide_move_is_not_auto_promoted(self) -> None:
+        candidate = RadarCandidate(
+            ticker="AAPL",
+            name="Apple",
+            jurisdiction="US",
+            sector="Technology",
+            change_pct=Decimal("4.2"),
+            volume=90_000_000,
+            avg_volume=30_000_000,
+            evidence={
+                "price_return_zscore": "3.5",
+                "volume_zscore": "2.6",
+                "sector_relative_return_pct": "3.8",
+                "sector_benchmark": "XLK",
+                "avg_dollar_volume": "4000000000",
+            },
+        )
+        score_candidate(candidate)
+        context = IndustryContext(
+            key="us:technology",
+            label="Technology",
+            jurisdiction="US",
+            member_count=10,
+            flagged_count=8,
+            flagged_ratio=Decimal("0.80"),
+            median_change_pct=Decimal("-3.0"),
+            status="market_event",
+        )
+        assign_priority(candidate, context)
+        self.assertEqual(candidate.radar_priority, "P2")
+        self.assertFalse(is_auto_promotable(candidate))
+
+    def test_price_only_flag_without_volume_or_relative_is_not_p1(self) -> None:
+        candidate = RadarCandidate(
+            ticker="SOLO",
+            name="Solo Move",
+            jurisdiction="US",
+            change_pct=Decimal("5.5"),
+            volume=1_100_000,
+            avg_volume=1_000_000,
+            evidence={
+                "price_return_zscore": "3.2",
+                "avg_dollar_volume": "800000000",
+            },
+        )
+        score_candidate(candidate)
+        assign_priority(candidate)
+        self.assertIn(candidate.radar_priority, {"P2", "P3"})
+        self.assertFalse(is_auto_promotable(candidate))
 
     def test_raw_five_percent_move_is_not_auto_promoted(self) -> None:
         candidate = RadarCandidate(
@@ -793,8 +844,8 @@ class RadarPriorityTests(TestCase):
                 volume=9_000_000,
                 avg_volume=2_000_000,
                 evidence={
-                    "price_return_zscore": "3.0",
-                    "volume_zscore": "2.5",
+                    "price_return_zscore": "3.5",
+                    "volume_zscore": "2.8",
                     "sector_relative_return_pct": "4.0",
                     "avg_dollar_volume": "250000000",
                 },
@@ -812,10 +863,10 @@ class RadarPriorityTests(TestCase):
         assign_priority(noise)
         names.append(noise)
 
-        selected = select_promotions(names, p1_limit=5)
+        selected = select_promotions(names, p1_limit=2)
         self.assertTrue(all(item.radar_priority in {"P0", "P1"} for item in selected))
         self.assertEqual(sum(1 for item in selected if item.radar_priority == "P0"), 3)
-        self.assertLessEqual(sum(1 for item in selected if item.radar_priority == "P1"), 5)
+        self.assertLessEqual(sum(1 for item in selected if item.radar_priority == "P1"), 2)
         self.assertNotIn("NOISE", {item.ticker for item in selected})
 
     def test_watchlist_sensitive_flag_is_not_auto_promoted(self) -> None:

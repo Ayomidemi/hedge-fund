@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { WatchlistButton } from "@/components/radar/WatchlistButton";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   buttonPrimaryClassName,
-  buttonSecondaryClassName,
+  inputControlClassName,
 } from "@/components/ui/form-styles";
 import {
   addRadarWatchlistItem,
@@ -25,6 +25,8 @@ type MarketRadarProps = {
   initialOverview: MarketRadarOverview | null;
   unavailable: boolean;
 };
+
+type FocusTab = "promote" | "desk" | "lurch";
 
 const dateTime = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
@@ -48,24 +50,42 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
   const [jurisdiction, setJurisdiction] = useState<"all" | "US" | "NG">("all");
   const [scanning, setScanning] = useState(false);
   const [busyTickers, setBusyTickers] = useState<Set<string>>(new Set());
+  const [focusTab, setFocusTab] = useState<FocusTab>("promote");
 
-  const sessions = overview?.sessions ?? [];
-  const openSessions = sessions.filter((session) => session.allows_discovery);
+  const openSessions = (overview?.sessions ?? []).filter(
+    (session) => session.allows_discovery,
+  );
 
-  const metrics = useMemo(() => {
-    if (!overview) return [];
-    return [
-      { label: "Working set", value: String(overview.working_set_count) },
-      { label: "Flagged", value: String(overview.flagged_count) },
-      { label: "P0 / P1", value: `${overview.p0_count ?? 0} / ${overview.p1_count ?? 0}` },
-      { label: "Held P2 / P3", value: `${overview.p2_count ?? 0} / ${overview.p3_count ?? 0}` },
-      { label: "Catalog", value: String(overview.latest_run?.catalog_count ?? 0) },
-      {
-        label: "Vendor calls (last scan)",
-        value: String(overview.latest_run?.vendor_calls ?? 0),
-      },
-    ];
+  const focusLists = useMemo(() => {
+    if (!overview) {
+      return { promote: [] as MarketRadarName[], desk: [], lurch: [] };
+    }
+    return {
+      promote: overview.queue_candidates ?? [],
+      desk: overview.desk_alerts ?? [],
+      lurch: (overview.scan_changes ?? []).slice(0, 8),
+    };
   }, [overview]);
+
+  const hasFocus =
+    focusLists.promote.length > 0 ||
+    focusLists.desk.length > 0 ||
+    focusLists.lurch.length > 0;
+
+  useEffect(() => {
+    if (focusLists[focusTab].length > 0) return;
+    if (focusLists.promote.length > 0) {
+      setFocusTab("promote");
+      return;
+    }
+    if (focusLists.desk.length > 0) {
+      setFocusTab("desk");
+      return;
+    }
+    if (focusLists.lurch.length > 0) setFocusTab("lurch");
+  }, [focusLists, focusTab]);
+
+  const activeFocus = focusLists[focusTab];
 
   async function reload(nextJurisdiction = jurisdiction) {
     const data = await getMarketRadarOverview(nextJurisdiction);
@@ -139,8 +159,7 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
   if (!overview) {
     return (
       <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="text-xl font-semibold">Market Radar</h2>
-        <p className="mt-2 text-sm text-zinc-500">
+        <p className="text-sm text-zinc-500">
           {unavailable
             ? "Sign in again or refresh this page."
             : "Radar data will appear after the first scan."}
@@ -149,183 +168,160 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
     );
   }
 
+  const run = overview.latest_run;
+  const sessionSummary = overview.sessions
+    .map((session) => {
+      const market = session.jurisdiction === "NG" ? "NGX" : "US";
+      return `${market} ${session.label.toLowerCase()}`;
+    })
+    .join(" · ");
+
   return (
-    <div className="mx-auto max-w-[1560px] space-y-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-              Discovery
+    <div className="mx-auto max-w-[1400px] space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm text-zinc-500">
+            {[
+              sessionSummary,
+              `${overview.flagged_count} flagged`,
+              overview.p0_count || overview.p1_count
+                ? `${overview.p0_count ?? 0} P0 · ${overview.p1_count ?? 0} P1`
+                : null,
+              run
+                ? `Last scan ${dateTime.format(new Date(run.started_at))}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+          {openSessions.length === 0 ? (
+            <p className="mt-1 text-xs text-zinc-500">
+              Markets closed — last working set stays on screen; scanning will not call
+              vendors.
             </p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight">Market Radar</h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              Industry-grouped unusual volume, price and risk. Holdings and watchlist
-              names flag earlier than the rest of the universe.
+          ) : null}
+          {run?.promoted_count ? (
+            <p className="mt-1 text-xs text-zinc-500">
+              Auto-promoted {run.promoted_count} P0/P1 name
+              {run.promoted_count === 1 ? "" : "s"} to the Opportunity Queue.
             </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/watchlist" className={buttonSecondaryClassName}>
-              Watchlist
-            </Link>
-            {(["all", "US", "NG"] as const).map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => void handleFilter(key)}
-                className={
-                  jurisdiction === key ? buttonPrimaryClassName : buttonSecondaryClassName
-                }
-              >
-                {key === "all" ? "All markets" : key === "US" ? "United States" : "Nigeria"}
-              </button>
-            ))}
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
+            <select
+              aria-label="Market filter"
+              value={jurisdiction}
+              onChange={(event) =>
+                void handleFilter(event.target.value as "all" | "US" | "NG")
+              }
+              className={`${inputControlClassName} w-auto min-w-[10.5rem] py-2.5`}
+            >
+              <option value="all">All markets</option>
+              <option value="US">United States</option>
+              <option value="NG">Nigeria</option>
+            </select>
             <button
               type="button"
               onClick={() => void handleScan()}
               disabled={scanning}
               className={buttonPrimaryClassName}
             >
-              {scanning ? "Scanning…" : "Scan open markets"}
+              {scanning ? "Scanning…" : "Scan"}
             </button>
           </div>
         </div>
+      </header>
 
-        <div className="grid gap-3 border-b border-zinc-200 px-5 py-4 sm:grid-cols-2 dark:border-zinc-800">
-          {overview.sessions.map((session) => (
-            <div
-              key={session.jurisdiction}
-              className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-900 dark:bg-zinc-900/50"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-medium">
-                  {session.jurisdiction === "NG" ? "Nigeria (NGX)" : "United States"}
-                </p>
-                <span className="text-xs text-zinc-500">{session.label}</span>
-              </div>
-              <p className="mt-1 text-xs text-zinc-500">
-                Vendors: {session.vendors.join(", ")}
-                {session.allows_discovery
-                  ? " · discovery allowed"
-                  : " · no API calls while closed"}
-              </p>
+      {hasFocus ? (
+        <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
+            <div>
+              <h3 className="text-sm font-semibold">Focus</h3>
+              <p className="mt-0.5 text-xs text-zinc-500">{focusHint(focusTab)}</p>
             </div>
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  {
+                    key: "promote" as const,
+                    label: "P0 / P1",
+                    count: focusLists.promote.length,
+                  },
+                  {
+                    key: "desk" as const,
+                    label: "Held & watched",
+                    count: focusLists.desk.length,
+                  },
+                  {
+                    key: "lurch" as const,
+                    label: "Since scan",
+                    count: focusLists.lurch.length,
+                  },
+                ] as const
+              )
+                .filter((tab) => tab.count > 0)
+                .map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setFocusTab(tab.key)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                      focusTab === tab.key
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                    }`}
+                  >
+                    {tab.label}
+                    <span className="ml-1.5 tabular-nums opacity-70">{tab.count}</span>
+                  </button>
+                ))}
+            </div>
+          </div>
+          <div className="divide-y divide-zinc-100 px-5 dark:divide-zinc-900">
+            {activeFocus.length ? (
+              activeFocus.map((name) => (
+                <NameRow
+                  key={`${focusTab}-${name.ticker}`}
+                  name={name}
+                  busy={busyTickers.has(name.ticker)}
+                  onWatchToggle={handleWatchToggle}
+                  compact
+                />
+              ))
+            ) : (
+              <p className="py-6 text-sm text-zinc-500">
+                Nothing in this focus list right now.
+              </p>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      <div>
+        <div className="mb-3 flex items-baseline justify-between gap-3">
+          <h3 className="text-sm font-semibold">By industry</h3>
+          <p className="text-xs text-zinc-500">
+            {overview.working_set_count} names · {overview.industries.length} groups
+          </p>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-2">
+          {overview.industries.map((industry) => (
+            <IndustryCard
+              key={`${industry.jurisdiction}-${industry.name}`}
+              industry={industry}
+              busyTickers={busyTickers}
+              onWatchToggle={handleWatchToggle}
+            />
           ))}
         </div>
-
-        <div className="grid divide-y divide-zinc-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0 lg:grid-cols-6 dark:divide-zinc-800">
-          {metrics.map((metric) => (
-            <div key={metric.label} className="px-5 py-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                {metric.label}
-              </p>
-              <p className="mt-2 text-xl font-semibold tabular-nums">{metric.value}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {overview.latest_run && (
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 text-sm dark:border-zinc-800 dark:bg-zinc-950">
-          <p className="font-medium">
-            Last scan {dateTime.format(new Date(overview.latest_run.started_at))}
-          </p>
-          <p className="mt-1 text-zinc-500">
-            Scanned {overview.latest_run.jurisdictions_scanned.join(", ") || "none"}.
-            {overview.latest_run.promoted_count > 0
-              ? ` Auto-promoted ${overview.latest_run.promoted_count} P0/P1 name(s) to the Opportunity Queue.`
-              : " No P0/P1 names were auto-promoted."}
-          </p>
-          {overview.latest_run.notes.map((note) => (
-            <p key={note} className="mt-1 text-zinc-500">
-              {note}
-            </p>
-          ))}
-        </section>
-      )}
-
-      {openSessions.length === 0 && (
-        <p className="text-sm text-zinc-500">
-          Both sessions are closed. The last working set stays on screen; scanning now
-          will not call US or NGX vendors.
-        </p>
-      )}
-
-      {(overview.queue_candidates?.length ?? 0) > 0 ? (
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-          <h3 className="text-sm font-semibold">Queue candidates</h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            P0 and P1 only. P2 and P3 stay on Radar and do not auto-enter the Opportunity
-            Queue.
-          </p>
-          <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-900">
-            {overview.queue_candidates?.map((name) => (
-              <NameRow
-                key={`queue-${name.ticker}`}
-                name={name}
-                busy={busyTickers.has(name.ticker)}
-                onWatchToggle={handleWatchToggle}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {(overview.desk_alerts?.length ?? 0) > 0 ? (
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-          <h3 className="text-sm font-semibold">Held & watched</h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            Positions, watchlist and open queue names that moved enough to matter on the
-            book, but not enough to auto-open a queue row.
-          </p>
-          <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-900">
-            {overview.desk_alerts?.map((name) => (
-              <NameRow
-                key={`desk-${name.ticker}`}
-                name={name}
-                busy={busyTickers.has(name.ticker)}
-                onWatchToggle={handleWatchToggle}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {overview.scan_changes && overview.scan_changes.length > 0 ? (
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-          <h3 className="text-sm font-semibold">Since last scan</h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            Names that lurched versus the previous radar print, not versus yesterday.
-          </p>
-          <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-900">
-            {overview.scan_changes.slice(0, 8).map((name) => (
-              <NameRow
-                key={`lurch-${name.ticker}`}
-                name={name}
-                busy={busyTickers.has(name.ticker)}
-                onWatchToggle={handleWatchToggle}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        {overview.industries.map((industry) => (
-          <IndustryCard
-            key={`${industry.jurisdiction}-${industry.name}`}
-            industry={industry}
-            busyTickers={busyTickers}
-            onWatchToggle={handleWatchToggle}
-          />
-        ))}
+        {overview.industries.length === 0 ? (
+          <section className="rounded-xl border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+            No radar snapshot yet. Scan while a market is open, or wait for the scheduled
+            job (every 30 minutes, closed markets skipped).
+          </section>
+        ) : null}
       </div>
-
-      {overview.industries.length === 0 && (
-        <section className="rounded-xl border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
-          No radar snapshot yet. Scan while a market is open, or wait for the scheduled
-          job (every 30 minutes, closed markets skipped).
-        </section>
-      )}
     </div>
   );
 }
@@ -341,28 +337,23 @@ function IndustryCard({
 }) {
   const status = industry.status ?? "quiet";
   const median = industry.median_change_pct
-    ? `${Number(industry.median_change_pct) > 0 ? "+" : ""}${Number(industry.median_change_pct).toFixed(1)}% median`
+    ? `${Number(industry.median_change_pct) > 0 ? "+" : ""}${Number(industry.median_change_pct).toFixed(1)}%`
     : null;
-  const breadth = `${industry.flagged_count}/${industry.name_count} flagged`;
-  const direction =
-    industry.declining_count || industry.advancing_count
-      ? `${industry.declining_count ?? 0} down · ${industry.advancing_count ?? 0} up`
-      : null;
+
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold">{industry.name}</h3>
-          <p className="mt-1 text-xs text-zinc-500">
+    <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-900">
+        <div className="min-w-0">
+          <h3 className="truncate text-sm font-semibold">{industry.name}</h3>
+          <p className="mt-0.5 text-xs text-zinc-500">
             {industry.jurisdiction}
-            {median ? ` · ${median}` : ""}
-            {` · ${breadth}`}
-            {direction ? ` · ${direction}` : ""}
+            {median ? ` · ${median} median` : ""}
+            {` · ${industry.flagged_count}/${industry.name_count} flagged`}
           </p>
         </div>
         <HeatBadge heat={industry.heat} label={industryStatusLabel(status)} />
       </div>
-      <div className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
+      <div className="divide-y divide-zinc-100 px-4 dark:divide-zinc-900">
         {industry.names.map((name) => (
           <NameRow
             key={name.ticker}
@@ -380,28 +371,33 @@ function NameRow({
   name,
   busy,
   onWatchToggle,
+  compact = false,
 }: {
   name: MarketRadarName;
   busy: boolean;
   onWatchToggle: (name: MarketRadarName) => void;
+  compact?: boolean;
 }) {
-  const price = name.price ? priceFormat.format(Number(name.price)) : "-";
-  const sourceDate = name.source_as_of
-    ? dateTime.format(new Date(name.source_as_of))
-    : dateTime.format(new Date(name.as_of));
-  const zScore = evidenceText(name.evidence, "price_return_zscore");
-  const relative = evidenceText(name.evidence, "sector_relative_return_pct");
-  const benchmark = evidenceText(name.evidence, "sector_benchmark");
-  const volumeRatio = name.volume_ratio ?? evidenceText(name.evidence, "volume_ratio");
+  const price =
+    name.price != null && name.price !== "" && Number.isFinite(Number(name.price))
+      ? priceFormat.format(Number(name.price))
+      : "—";
+  const moveScope = evidenceText(name.evidence, "move_scope");
   const scanState = evidenceText(name.evidence, "scan_state");
   const scanDelta = evidenceText(name.evidence, "scan_delta_change_pct");
-  const moveScope = evidenceText(name.evidence, "move_scope");
   const href = tickerHubPath(name.ticker);
+  const detail = secondaryDetail(name);
 
   return (
-    <div className="grid gap-3 py-3 sm:grid-cols-[minmax(190px,1fr)_120px_150px] sm:items-center">
+    <div
+      className={`grid gap-x-3 gap-y-1.5 py-2.5 sm:items-center ${
+        compact
+          ? "grid-cols-[minmax(0,1fr)_5.5rem]"
+          : "grid-cols-[minmax(0,1fr)_5.5rem] sm:grid-cols-[minmax(0,1fr)_5.5rem_5.5rem]"
+      }`}
+    >
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1">
           <WatchlistButton
             ticker={name.ticker}
             watched={Boolean(name.on_watchlist)}
@@ -411,58 +407,72 @@ function NameRow({
           <Link href={href} className="text-sm font-medium hover:underline">
             {name.ticker}
           </Link>
-        </div>
-        <p className="truncate pl-8 text-xs text-zinc-500">{name.name}</p>
-        <div className="mt-1 flex flex-wrap gap-1 pl-8">
           {name.radar_priority ? (
             <Chip tone={priorityTone(name.radar_priority)}>{name.radar_priority}</Chip>
           ) : null}
-          <MoveScopeChip scope={moveScope} />
-          {name.carried_forward ? <Chip tone="zinc">prior session</Chip> : null}
           <CareChip name={name} />
-          {name.flags
-            .filter((flag) => !CARE_FLAGS.has(flag))
-            .slice(0, 3)
-            .map((flag) => (
-              <Chip key={flag} tone={flagTone(flag)}>
-                {flag.replaceAll("_", " ")}
-              </Chip>
-            ))}
+          {moveScope && moveScope !== "none" ? <MoveScopeChip scope={moveScope} /> : null}
+          {scanState && scanState !== "steady" ? (
+            <Chip tone="amber">
+              {scanState.replaceAll("_", " ")}
+              {scanDelta ? ` ${formatNumber(scanDelta)}` : ""}
+            </Chip>
+          ) : null}
         </div>
+        <p className="truncate pl-8 text-xs text-zinc-500">
+          {name.name}
+          {detail ? ` · ${detail}` : ""}
+        </p>
       </div>
-      <Sparkline points={name.sparkline} changePct={name.change_pct} />
-      <div className="text-left text-sm tabular-nums sm:text-right">
-        <p className="font-medium">
-          {name.currency} {price}
+      {!compact ? (
+        <div className="hidden sm:block">
+          <Sparkline points={name.sparkline} changePct={name.change_pct} />
+        </div>
+      ) : null}
+      <div className="shrink-0 text-right tabular-nums">
+        <p className="text-sm font-medium">{price}</p>
+        <p className={`text-xs ${changeClass(name.change_pct)}`}>
+          {name.change_pct != null &&
+          name.change_pct !== "" &&
+          Number.isFinite(Number(name.change_pct))
+            ? `${Number(name.change_pct) > 0 ? "+" : ""}${Number(name.change_pct).toFixed(1)}%`
+            : "—"}
         </p>
-        <p className={changeClass(name.change_pct)}>
-          {name.change_pct ? `${Number(name.change_pct).toFixed(1)}%` : "-"}
-        </p>
-        <p className="text-xs text-zinc-500">
-          {name.volume ? compact.format(name.volume) : "-"} vol
-        </p>
-        <p className="mt-1 text-xs text-zinc-500">as of {sourceDate}</p>
-      </div>
-      <div className="flex flex-wrap gap-1 sm:col-span-3">
-        {zScore ? <Chip tone="zinc">z {zScore}</Chip> : null}
-        {relative ? (
-          <Chip tone="zinc">
-            vs {benchmark || "sector"} {formatNumber(relative)}%
-          </Chip>
-        ) : null}
-        {volumeRatio ? <Chip tone="zinc">vol {formatNumber(volumeRatio)}x</Chip> : null}
-        {scanState ? (
-          <Chip tone="amber">
-            {scanState.replaceAll("_", " ")}
-            {scanDelta ? ` ${formatNumber(scanDelta)} pts` : ""}
-          </Chip>
-        ) : null}
-        {name.stale_reason && !name.carried_forward ? (
-          <Chip tone="rose">{name.stale_reason}</Chip>
-        ) : null}
       </div>
     </div>
   );
+}
+
+function focusHint(tab: FocusTab) {
+  if (tab === "promote") {
+    return "Highest-priority movers that auto-enter (or should enter) the Opportunity Queue.";
+  }
+  if (tab === "desk") {
+    return "Names you already hold or watch that moved enough to notice, but not enough for auto-queue.";
+  }
+  return "Names that lurched versus the previous radar print — not versus yesterday.";
+}
+
+function secondaryDetail(name: MarketRadarName) {
+  const relative = evidenceText(name.evidence, "sector_relative_return_pct");
+  const volumeRatio = name.volume_ratio ?? evidenceText(name.evidence, "volume_ratio");
+  const parts: string[] = [];
+  if (relative) {
+    const numeric = Number(relative);
+    if (Number.isFinite(numeric)) {
+      parts.push(`vs sector ${numeric > 0 ? "+" : ""}${numeric.toFixed(1)}%`);
+    }
+  }
+  if (volumeRatio) {
+    const numeric = Number(volumeRatio);
+    if (Number.isFinite(numeric) && numeric >= 1.5) {
+      parts.push(`${numeric.toFixed(1)}x vol`);
+    }
+  } else if (name.volume) {
+    parts.push(`${compact.format(name.volume)} vol`);
+  }
+  if (name.carried_forward) parts.push("prior session");
+  return parts.slice(0, 2).join(" · ");
 }
 
 function HeatBadge({ heat, label }: { heat: string; label?: string }) {
@@ -473,7 +483,7 @@ function HeatBadge({ heat, label }: { heat: string; label?: string }) {
         ? "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
         : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400";
   return (
-    <span className={`rounded-md px-2 py-1 text-xs font-medium ${tone}`}>
+    <span className={`shrink-0 rounded-md px-2 py-1 text-xs font-medium ${tone}`}>
       {label ?? heat}
     </span>
   );
@@ -488,8 +498,8 @@ function industryStatusLabel(status: string) {
 
 function MoveScopeChip({ scope }: { scope: string | null }) {
   if (scope === "isolated") return <Chip tone="amber">isolated</Chip>;
-  if (scope === "industry") return <Chip tone="rose">industry-wide</Chip>;
-  if (scope === "market") return <Chip tone="rose">market-wide</Chip>;
+  if (scope === "industry") return <Chip tone="rose">industry</Chip>;
+  if (scope === "market") return <Chip tone="rose">market</Chip>;
   return null;
 }
 
@@ -512,7 +522,7 @@ function Sparkline({
     .map((point) => Number(point.close))
     .filter((value) => Number.isFinite(value) && value > 0);
   if (values.length < 2) {
-    return <div className="h-10 rounded-md bg-zinc-50 dark:bg-zinc-900" />;
+    return <div className="h-8 rounded-md bg-zinc-50 dark:bg-zinc-900" />;
   }
 
   const min = Math.min(...values);
@@ -520,8 +530,8 @@ function Sparkline({
   const range = max - min || 1;
   const path = values
     .map((value, index) => {
-      const x = (index / Math.max(values.length - 1, 1)) * 118 + 1;
-      const y = 37 - ((value - min) / range) * 34;
+      const x = (index / Math.max(values.length - 1, 1)) * 86 + 1;
+      const y = 30 - ((value - min) / range) * 26;
       return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
     })
     .join(" ");
@@ -534,11 +544,11 @@ function Sparkline({
   return (
     <svg
       aria-hidden="true"
-      viewBox="0 0 120 40"
-      className="h-10 w-full rounded-md bg-zinc-50 dark:bg-zinc-900"
+      viewBox="0 0 88 32"
+      className="h-8 w-full rounded-md bg-zinc-50 dark:bg-zinc-900"
       preserveAspectRatio="none"
     >
-      <path d={path} fill="none" className={stroke} strokeWidth="2.5" />
+      <path d={path} fill="none" className={stroke} strokeWidth="2" />
     </svg>
   );
 }
@@ -554,25 +564,17 @@ function CareChip({ name }: { name: MarketRadarName }) {
   const flagged = name.flags.length > 0 || Boolean(name.radar_priority);
   const tier = name.care_tier;
   if (tier === "position") {
-    return (
-      <Chip tone="rose">{flagged ? "position alert" : "held"}</Chip>
-    );
+    return <Chip tone="rose">{flagged ? "held alert" : "held"}</Chip>;
   }
   if (tier === "watchlist" || name.on_watchlist) {
-    return (
-      <Chip tone="emerald">{flagged && tier === "watchlist" ? "watchlist alert" : "watchlist"}</Chip>
-    );
+    if (!flagged || tier !== "watchlist") return null;
+    return <Chip tone="emerald">watched alert</Chip>;
   }
-  if (tier === "queue") {
-    return <Chip tone={flagged ? "amber" : "zinc"}>{flagged ? "queue alert" : "queue"}</Chip>;
-  }
-  if (name.always_watched) {
-    return <Chip tone="zinc">watched</Chip>;
+  if (tier === "queue" && flagged) {
+    return <Chip tone="amber">queue</Chip>;
   }
   return null;
 }
-
-const CARE_FLAGS = new Set(["position_risk", "position_move", "watched_move"]);
 
 function Chip({
   children,
@@ -594,13 +596,6 @@ function Chip({
       {children}
     </span>
   );
-}
-
-function flagTone(flag: string): "amber" | "emerald" | "rose" | "zinc" {
-  if (flag.includes("risk") || flag.includes("drop")) return "rose";
-  if (flag.includes("lurch") || flag.includes("volume") || flag.includes("volatility")) return "amber";
-  if (flag.includes("move") || flag.includes("anomaly")) return "emerald";
-  return "zinc";
 }
 
 function evidenceText(evidence: Record<string, unknown>, key: string) {

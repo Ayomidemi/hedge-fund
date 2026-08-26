@@ -4276,20 +4276,17 @@ The eventual Pease Capital application should contain the following major sectio
 * overrides;
 * execution quality.
 
-## Performance Attribution
+## Reports and Performance Attribution
 
+* daily report;
+* weekly review;
+* monthly investor letter;
+* quarterly strategy report;
 * returns by pod;
 * returns by ticker;
 * returns by factor;
 * returns by regime;
 * cost analysis.
-
-## Reports
-
-* daily report;
-* weekly review;
-* monthly investor letter;
-* quarterly strategy report.
 
 ## Administration
 

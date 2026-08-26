@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
@@ -65,11 +65,22 @@ class BucketAccumulator:
 async def build_attribution_report(
     session: AsyncSession,
     user: AuthenticatedUser,
+    period_start: date | None = None,
+    period_end: date | None = None,
 ) -> AttributionReportResponse:
     portfolio = await get_or_create_default_portfolio(session, user)
-    cash_entries = await _list_cash_entries(session, portfolio.id)
+    cash_entries = await _list_cash_entries(
+        session,
+        portfolio.id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     positions = await _list_positions(session, portfolio.id)
-    trades = await _list_trades(session, portfolio.id)
+    trades = await _list_trades(
+        session,
+        portfolio.id,
+        period_end=period_end,
+    )
 
     cash_balance = money(sum((entry.amount for entry in cash_entries), Decimal("0")))
     invested_value = money(
@@ -96,7 +107,10 @@ async def build_attribution_report(
         ],
     )
 
-    accumulators, realized_events, warnings = _accumulate_trade_attribution(trades)
+    accumulators, realized_events, warnings = _accumulate_trade_attribution(
+        trades,
+        period_start=period_start,
+    )
     for position in positions:
         accumulators.setdefault(
             position.instrument_id,
@@ -155,8 +169,14 @@ async def build_attribution_report(
         trade_count=trade_count,
         reconciliation_gap=reconciliation_gap,
         warnings=warnings,
+        period_scoped=period_start is not None or period_end is not None,
     )
-    period_dates = _period_dates(cash_entries, trades)
+    period_dates = _period_dates(
+        cash_entries,
+        trades,
+        period_start=period_start,
+        period_end=period_end,
+    )
 
     logger.info(
         "attribution_report_generated",
@@ -216,6 +236,8 @@ async def build_attribution_report(
 
 def _accumulate_trade_attribution(
     trades: list[Trade],
+    *,
+    period_start: date | None = None,
 ) -> tuple[
     dict[UUID, InstrumentAccumulator],
     list[AttributionRealizedEventResponse],
@@ -226,10 +248,12 @@ def _accumulate_trade_attribution(
     warnings: list[str] = []
 
     for trade in trades:
+        in_period = period_start is None or trade.trade_date.date() >= period_start
         if trade.status != FILLED_STATUS or trade.executed_price is None:
-            warnings.append(
-                f"{trade.instrument.ticker} trade {trade.id} skipped because it is not filled."
-            )
+            if in_period:
+                warnings.append(
+                    f"{trade.instrument.ticker} trade {trade.id} skipped because it is not filled."
+                )
             continue
 
         accumulator = accumulators.setdefault(
@@ -239,65 +263,70 @@ def _accumulate_trade_attribution(
         price = trade.executed_price
         quantity = trade.quantity
         notional = money(quantity * price)
-        accumulator.trade_count += 1
-        accumulator.fees = money(accumulator.fees + trade.fees)
+        if in_period:
+            accumulator.trade_count += 1
+            accumulator.fees = money(accumulator.fees + trade.fees)
 
         if trade.side == "buy":
-            accumulator.gross_buys = money(accumulator.gross_buys + notional)
+            if in_period:
+                accumulator.gross_buys = money(accumulator.gross_buys + notional)
             accumulator.remaining_cost += quantity * price
             accumulator.remaining_quantity += quantity
             continue
 
-        accumulator.gross_sells = money(accumulator.gross_sells + notional)
+        if in_period:
+            accumulator.gross_sells = money(accumulator.gross_sells + notional)
         if accumulator.remaining_quantity <= 0:
-            warnings.append(
-                f"{trade.instrument.ticker} has a sell without an available long position."
-            )
+            if in_period:
+                warnings.append(
+                    f"{trade.instrument.ticker} has a sell without an available long position."
+                )
             continue
 
         average_cost = accumulator.remaining_cost / accumulator.remaining_quantity
         attributable_quantity = min(quantity, accumulator.remaining_quantity)
-        if attributable_quantity < quantity:
+        if attributable_quantity < quantity and in_period:
             warnings.append(
                 f"{trade.instrument.ticker} sell exceeds the tracked long quantity."
             )
 
         gross_realized = money(attributable_quantity * (price - average_cost))
         net_realized = money(gross_realized - trade.fees)
-        accumulator.gross_realized_pnl = money(
-            accumulator.gross_realized_pnl + gross_realized
-        )
         accumulator.remaining_cost -= average_cost * attributable_quantity
         accumulator.remaining_quantity -= attributable_quantity
         if accumulator.remaining_quantity == 0:
             accumulator.remaining_cost = Decimal("0")
 
-        accumulator.closed_trade_count += 1
-        if gross_realized > 0:
-            accumulator.winning_trade_count += 1
-            accumulator.realized_profit = money(
-                accumulator.realized_profit + gross_realized
+        if in_period:
+            accumulator.gross_realized_pnl = money(
+                accumulator.gross_realized_pnl + gross_realized
             )
-        elif gross_realized < 0:
-            accumulator.losing_trade_count += 1
-            accumulator.realized_loss = money(
-                accumulator.realized_loss + abs(gross_realized)
-            )
+            accumulator.closed_trade_count += 1
+            if gross_realized > 0:
+                accumulator.winning_trade_count += 1
+                accumulator.realized_profit = money(
+                    accumulator.realized_profit + gross_realized
+                )
+            elif gross_realized < 0:
+                accumulator.losing_trade_count += 1
+                accumulator.realized_loss = money(
+                    accumulator.realized_loss + abs(gross_realized)
+                )
 
-        realized_events.append(
-            AttributionRealizedEventResponse(
-                trade_id=trade.id,
-                trade_date=trade.trade_date,
-                instrument=InstrumentResponse.model_validate(trade.instrument),
-                quantity=attributable_quantity,
-                exit_price=price,
-                average_cost=_quantize_price(average_cost),
-                gross_realized_pnl=gross_realized,
-                fees=trade.fees,
-                net_realized_pnl=net_realized,
-                return_pct=percent(price - average_cost, average_cost),
+            realized_events.append(
+                AttributionRealizedEventResponse(
+                    trade_id=trade.id,
+                    trade_date=trade.trade_date,
+                    instrument=InstrumentResponse.model_validate(trade.instrument),
+                    quantity=attributable_quantity,
+                    exit_price=price,
+                    average_cost=_quantize_price(average_cost),
+                    gross_realized_pnl=gross_realized,
+                    fees=trade.fees,
+                    net_realized_pnl=net_realized,
+                    return_pct=percent(price - average_cost, average_cost),
+                )
             )
-        )
 
     return accumulators, realized_events, warnings
 
@@ -333,7 +362,11 @@ def _build_rows(
         traded_capital = accumulator.gross_buys
         status = "open" if quantity > 0 else "closed"
         if accumulator.trade_count == 0 and quantity > 0:
-            status = "imported"
+            status = (
+                "carried_forward"
+                if accumulator.remaining_quantity > 0
+                else "imported"
+            )
 
         rows.append(
             AttributionRowResponse(
@@ -414,11 +447,17 @@ def _build_buckets(
 async def _list_cash_entries(
     session: AsyncSession,
     portfolio_id: UUID,
+    *,
+    period_start: date | None = None,
+    period_end: date | None = None,
 ) -> list[CashLedgerEntry]:
+    query = select(CashLedgerEntry).where(CashLedgerEntry.portfolio_id == portfolio_id)
+    if period_start is not None:
+        query = query.where(CashLedgerEntry.entry_date >= period_start)
+    if period_end is not None:
+        query = query.where(CashLedgerEntry.entry_date < period_end)
     result = await session.scalars(
-        select(CashLedgerEntry)
-        .where(CashLedgerEntry.portfolio_id == portfolio_id)
-        .order_by(CashLedgerEntry.entry_date.asc(), CashLedgerEntry.created_at.asc())
+        query.order_by(CashLedgerEntry.entry_date.asc(), CashLedgerEntry.created_at.asc())
     )
     return list(result)
 
@@ -433,12 +472,30 @@ async def _list_positions(session: AsyncSession, portfolio_id: UUID) -> list[Pos
     return list(result)
 
 
-async def _list_trades(session: AsyncSession, portfolio_id: UUID) -> list[Trade]:
-    result = await session.scalars(
+async def _list_trades(
+    session: AsyncSession,
+    portfolio_id: UUID,
+    *,
+    period_start: date | None = None,
+    period_end: date | None = None,
+) -> list[Trade]:
+    query = (
         select(Trade)
         .options(selectinload(Trade.instrument))
         .where(Trade.portfolio_id == portfolio_id)
-        .order_by(Trade.trade_date.asc(), Trade.created_at.asc())
+    )
+    if period_start is not None:
+        query = query.where(
+            Trade.trade_date
+            >= datetime.combine(period_start, datetime.min.time(), tzinfo=timezone.utc)
+        )
+    if period_end is not None:
+        query = query.where(
+            Trade.trade_date
+            < datetime.combine(period_end, datetime.min.time(), tzinfo=timezone.utc)
+        )
+    result = await session.scalars(
+        query.order_by(Trade.trade_date.asc(), Trade.created_at.asc())
     )
     return list(result)
 
@@ -452,7 +509,13 @@ def _external_cash_entry(entry: CashLedgerEntry) -> Decimal:
 def _period_dates(
     cash_entries: list[CashLedgerEntry],
     trades: list[Trade],
+    *,
+    period_start: date | None = None,
+    period_end: date | None = None,
 ) -> tuple[date | None, date]:
+    if period_start is not None or period_end is not None:
+        display_end = (period_end - timedelta(days=1)) if period_end else date.today()
+        return (period_start, display_end)
     dates = [entry.entry_date for entry in cash_entries]
     dates.extend(trade.trade_date.date() for trade in trades)
     return (min(dates) if dates else None, date.today())
@@ -494,12 +557,17 @@ def _build_notes(
     trade_count: int,
     reconciliation_gap: Decimal,
     warnings: list[str],
+    period_scoped: bool = False,
 ) -> list[str]:
     notes = [
         "Attribution uses filled trade journal entries, current position marks, and cash-ledger external flows.",
         "Gross realized P&L is separated from transaction costs; net P&L deducts all recorded trade fees.",
         "Unrealized P&L uses the latest position mark currently stored in the operating book.",
     ]
+    if period_scoped:
+        notes.append(
+            "This report filters cash and trades to the selected period; open-position marks still use the latest stored valuation."
+        )
     if trade_count == 0:
         notes.append(
             "No filled trades are available yet, so attribution is limited to cash and imported positions."

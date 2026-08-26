@@ -155,10 +155,49 @@ class Portfolio(Base, TimestampMixin):
     risk_snapshots: Mapped[list["PortfolioRiskSnapshot"]] = relationship(
         back_populates="portfolio"
     )
+    report_snapshots: Mapped[list["ReportSnapshot"]] = relationship(
+        back_populates="portfolio"
+    )
 
     __table_args__ = (
         Index("ix_portfolios_owner_user_id_unique", "owner_user_id", unique=True),
         Index("ix_portfolios_owner_name", "owner_user_id", "name", unique=True),
+    )
+
+
+class ReportSnapshot(Base, TimestampMixin):
+    __tablename__ = "report_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    report_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    period_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    nav: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    return_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    portfolio: Mapped["Portfolio"] = relationship(back_populates="report_snapshots")
+
+    __table_args__ = (
+        Index(
+            "ix_report_snapshots_owner_kind_period",
+            "owner_user_id",
+            "report_kind",
+            "period_start",
+        ),
+        Index(
+            "ix_report_snapshots_owner_created",
+            "owner_user_id",
+            "created_at",
+        ),
     )
 
 

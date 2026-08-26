@@ -122,7 +122,9 @@ RADAR_VENDOR_QUOTE_SOURCES = frozenset(
 # Opportunity Queue promotion. Flagged names stay on Radar; only P0/P1
 # auto-enter the queue, and pulse ETFs never do.
 RADAR_AUTO_PROMOTE_PRIORITIES = ("P0", "P1")
-RADAR_MAX_P1_PROMOTIONS_PER_OWNER = 5
+# Hard cap on how many P1 discoveries open a queue row per scan per owner.
+# P0 (position risk / extraordinary tape) is uncapped.
+RADAR_MAX_P1_PROMOTIONS_PER_OWNER = 2
 RADAR_ILLIQUID_USD_DOLLAR_VOLUME = 500_000
 RADAR_PULSE_TICKERS = frozenset(ticker for ticker, _sector, _asset in RADAR_SECTOR_ETFS)
 

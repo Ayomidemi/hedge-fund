@@ -422,7 +422,10 @@ async def read_ticker_desk(
     user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> TickerDeskResponse:
-    return await get_ticker_desk(session, ticker, user)
+    response = await get_ticker_desk(session, ticker, user)
+    # Persist any quote refresh performed during desk load.
+    await session.commit()
+    return response
 
 
 @router.get("/{ticker}/verdict", response_model=TickerVerdictResponse)
