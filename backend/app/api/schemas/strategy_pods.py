@@ -18,6 +18,8 @@ StrategyPodLifecycle = Literal[
     "suspended",
     "retired",
 ]
+StrategyPodCategory = Literal["alpha", "hedge", "treasury"]
+StrategyPodLiveScope = Literal["yes", "limited", "paper", "research"]
 
 
 class StrategyPodSignalResponse(BaseModel):
@@ -45,6 +47,8 @@ class StrategyPodResponse(BaseModel):
     id: UUID
     code: str
     name: str
+    pod_category: str
+    live_scope: str
     mandate: str
     status: str
     lifecycle_stage: str
@@ -72,9 +76,15 @@ class StrategyPodOverviewResponse(BaseModel):
     portfolio_name: str
     nav: Decimal
     risk_level: str
+    cash_pct: Decimal | None = None
     allocation_total_pct: Decimal
+    alpha_allocation_total_pct: Decimal
+    treasury_target_pct: Decimal
     risk_budget_total_pct: Decimal
     unallocated_pct: Decimal
+    alpha_pods: list[StrategyPodResponse]
+    hedge_pods: list[StrategyPodResponse]
+    treasury_pods: list[StrategyPodResponse]
     pods: list[StrategyPodResponse]
     warnings: list[str] = Field(default_factory=list)
 

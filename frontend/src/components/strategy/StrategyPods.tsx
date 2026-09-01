@@ -39,7 +39,16 @@ type PodFormState = {
   notes: string;
 };
 
+type PodBookFilter = "all" | "alpha" | "hedge" | "treasury";
+
 type SortKey = "allocation" | "signal" | "confidence" | "name";
+
+const bookFilterOptions: { key: PodBookFilter; label: string }[] = [
+  { key: "all", label: "All books" },
+  { key: "alpha", label: "Alpha pods" },
+  { key: "hedge", label: "Hedge engine" },
+  { key: "treasury", label: "Treasury" },
+];
 
 const detailTabs: { key: PodDetailTab; label: string }[] = [
   { key: "overview", label: "Overview" },
@@ -67,8 +76,11 @@ const currency = new Intl.NumberFormat("en-US", {
 
 export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps) {
   const [overview, setOverview] = useState<StrategyPodsOverview | null>(initialOverview);
-  const [selectedCode, setSelectedCode] = useState(initialOverview?.pods[0]?.code ?? "");
+  const [selectedCode, setSelectedCode] = useState(
+    initialOverview?.alpha_pods[0]?.code ?? initialOverview?.pods[0]?.code ?? "",
+  );
   const [detailTab, setDetailTab] = useState<PodDetailTab>("overview");
+  const [bookFilter, setBookFilter] = useState<PodBookFilter>("alpha");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortKey, setSortKey] = useState<SortKey>("allocation");
   const [loading, setLoading] = useState(false);
@@ -84,10 +96,16 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
 
   const filteredPods = useMemo(() => {
     if (!overview) return [];
+    const source =
+      bookFilter === "alpha"
+        ? overview.alpha_pods
+        : bookFilter === "hedge"
+          ? overview.hedge_pods
+          : bookFilter === "treasury"
+            ? overview.treasury_pods
+            : overview.pods;
     const pods =
-      statusFilter === "all"
-        ? overview.pods
-        : overview.pods.filter((pod) => pod.status === statusFilter);
+      statusFilter === "all" ? source : source.filter((pod) => pod.status === statusFilter);
 
     return [...pods].sort((left, right) => {
       if (sortKey === "name") return left.name.localeCompare(right.name);
@@ -99,7 +117,7 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
       }
       return compareScores(right.model_confidence, left.model_confidence);
     });
-  }, [overview, sortKey, statusFilter]);
+  }, [overview, bookFilter, sortKey, statusFilter]);
 
   useEffect(() => {
     if (detailTab !== "history" || !selectedPodCode) return;
@@ -208,8 +226,9 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
               {overview.portfolio_name}
             </p>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">Strategy Pods</h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              Capital book · {formatDateTime(overview.generated_at)}
+            <p className="mt-1 max-w-3xl text-sm text-zinc-500">
+              Alpha pods generate return. The hedge engine removes unintended risk. Treasury
+              holds active cash and liquidity. Capital book · {formatDateTime(overview.generated_at)}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -227,24 +246,50 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
 
         <div className="grid divide-y divide-zinc-200 sm:grid-cols-5 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
           <Metric label="NAV" value={money(overview.nav)} />
-          <Metric label="Allocated" value={pct(overview.allocation_total_pct)} />
-          <Metric label="Reserve" value={pct(overview.unallocated_pct)} />
-          <Metric label="Risk Budget" value={pct(overview.risk_budget_total_pct)} />
-          <Metric label="Pods" value={String(overview.pods.length)} />
+          <Metric label="Alpha Alloc" value={pct(overview.alpha_allocation_total_pct)} />
+          <Metric
+            label="Cash"
+            value={overview.cash_pct ? pct(overview.cash_pct) : "-"}
+          />
+          <Metric label="Treasury Target" value={pct(overview.treasury_target_pct)} />
+          <Metric label="Books" value={String(overview.pods.length)} />
         </div>
 
         <div className="border-t border-zinc-200 px-5 py-5 dark:border-zinc-800">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-              Capital stack
+              Alpha capital stack
             </p>
             <p className="text-xs text-zinc-500">Click a segment to inspect a pod</p>
           </div>
           <CapitalStack
-            pods={overview.pods}
+            pods={overview.alpha_pods}
             reservePct={overview.unallocated_pct}
             selectedCode={selectedCode}
             onSelect={setSelectedCode}
+          />
+        </div>
+
+        <div className="grid gap-4 border-t border-zinc-200 px-5 py-5 sm:grid-cols-2 dark:border-zinc-800">
+          <SupportBookCard
+            title="Hedge engine"
+            pods={overview.hedge_pods}
+            selectedCode={selectedCode}
+            onSelect={(code) => {
+              setSelectedCode(code);
+              setBookFilter("hedge");
+              setDetailTab("overview");
+            }}
+          />
+          <SupportBookCard
+            title="Treasury"
+            pods={overview.treasury_pods}
+            selectedCode={selectedCode}
+            onSelect={(code) => {
+              setSelectedCode(code);
+              setBookFilter("treasury");
+              setDetailTab("overview");
+            }}
           />
         </div>
 
@@ -262,6 +307,17 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
             <h3 className="mt-1 text-lg font-semibold">Comparison matrix</h3>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={bookFilter}
+              onChange={(event) => setBookFilter(event.target.value as PodBookFilter)}
+              className={`${inputClassName} mt-0 w-auto min-w-[140px]`}
+            >
+              {bookFilterOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
@@ -292,6 +348,8 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
             <thead className="border-b border-zinc-200 bg-zinc-50/80 text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50">
               <tr>
                 <th className="px-5 py-3 font-medium">Pod</th>
+                <th className="px-5 py-3 font-medium">Book</th>
+                <th className="px-5 py-3 font-medium">Live</th>
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium">Lifecycle</th>
                 <th className="px-5 py-3 font-medium">Alloc</th>
@@ -323,6 +381,18 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
                         <p className="font-medium">{pod.name}</p>
                         <p className="mt-0.5 line-clamp-1 text-xs text-zinc-500">{pod.mandate}</p>
                       </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <StatusBadge
+                        label={formatLabel(pod.pod_category)}
+                        tone={categoryTone(pod.pod_category)}
+                      />
+                    </td>
+                    <td className="px-5 py-4">
+                      <StatusBadge
+                        label={formatLabel(pod.live_scope)}
+                        tone={liveScopeTone(pod.live_scope)}
+                      />
                     </td>
                     <td className="px-5 py-4">
                       <StatusBadge label={formatLabel(pod.status)} tone={statusTone(pod.status)} />
@@ -362,7 +432,7 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-                Selected pod
+                {formatLabel(selectedPod.pod_category)} book
               </p>
               <h3 className="mt-1 text-lg font-semibold">{selectedPod.name}</h3>
               <p className="mt-1 text-sm text-zinc-500">{formatLabel(selectedPod.code)}</p>
@@ -406,6 +476,44 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
           )}
         </section>
       )}
+    </div>
+  );
+}
+
+function SupportBookCard({
+  title,
+  pods,
+  selectedCode,
+  onSelect,
+}: {
+  title: string;
+  pods: StrategyPod[];
+  selectedCode: string;
+  onSelect: (code: string) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">{title}</p>
+      <div className="mt-3 space-y-2">
+        {pods.map((pod) => (
+          <button
+            key={pod.code}
+            type="button"
+            onClick={() => onSelect(pod.code)}
+            className={`flex w-full items-start justify-between gap-3 rounded-md px-3 py-2 text-left transition ${
+              selectedCode === pod.code
+                ? "bg-zinc-100 dark:bg-zinc-900"
+                : "hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
+            }`}
+          >
+            <div>
+              <p className="text-sm font-medium">{pod.name}</p>
+              <p className="mt-1 text-xs text-zinc-500">{pod.allocation_recommendation}</p>
+            </div>
+            <StatusBadge label={formatLabel(pod.live_scope)} tone={liveScopeTone(pod.live_scope)} />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1121,6 +1229,20 @@ function formatDateTime(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function categoryTone(value: string) {
+  if (value === "alpha") return "good";
+  if (value === "hedge") return "warn";
+  if (value === "treasury") return "neutral";
+  return "neutral";
+}
+
+function liveScopeTone(value: string) {
+  if (value === "yes") return "good";
+  if (value === "limited") return "warn";
+  if (value === "paper") return "warn";
+  return "neutral";
 }
 
 function riskTone(value: string) {

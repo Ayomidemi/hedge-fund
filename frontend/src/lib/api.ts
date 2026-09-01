@@ -1483,6 +1483,8 @@ export type StrategyPod = {
   id: string;
   code: string;
   name: string;
+  pod_category: "alpha" | "hedge" | "treasury" | string;
+  live_scope: "yes" | "limited" | "paper" | "research" | string;
   mandate: string;
   status: string;
   lifecycle_stage: string;
@@ -1510,9 +1512,15 @@ export type StrategyPodsOverview = {
   portfolio_name: string;
   nav: string;
   risk_level: string;
+  cash_pct?: string | null;
   allocation_total_pct: string;
+  alpha_allocation_total_pct: string;
+  treasury_target_pct: string;
   risk_budget_total_pct: string;
   unallocated_pct: string;
+  alpha_pods: StrategyPod[];
+  hedge_pods: StrategyPod[];
+  treasury_pods: StrategyPod[];
   pods: StrategyPod[];
   warnings: string[];
 };

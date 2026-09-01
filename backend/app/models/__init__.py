@@ -413,6 +413,12 @@ class StrategyPod(Base, TimestampMixin):
     owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
+    pod_category: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="alpha", index=True
+    )
+    live_scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="research"
+    )
     mandate: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="research")
     lifecycle_stage: Mapped[str] = mapped_column(

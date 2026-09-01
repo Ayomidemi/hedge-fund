@@ -54,53 +54,83 @@ POD_STATUS_ORDER = [
     "retired",
 ]
 
+POD_CATEGORY_ORDER = ["alpha", "hedge", "treasury"]
+
+CANONICAL_SYNC_FIELDS = (
+    "name",
+    "pod_category",
+    "live_scope",
+    "mandate",
+    "approved_instruments",
+    "current_signals",
+    "evaluation",
+    "shutdown_criteria",
+    "notes",
+)
+
 DEFAULT_STRATEGY_POD_DEFINITIONS = [
     {
         "code": "macro_regime",
-        "name": "Macro Regime Pod",
-        "mandate": "Classify the market regime and set the strategic risk posture across asset classes.",
+        "name": "Regime-Aware Global Macro",
+        "pod_category": "alpha",
+        "live_scope": "yes",
+        "mandate": "Allocate capital according to changing macroeconomic and market regimes.",
         "status": "active",
         "lifecycle_stage": "paper_trading",
-        "capital_allocation_pct": Decimal("20.0000"),
-        "risk_budget_pct": Decimal("18.0000"),
+        "capital_allocation_pct": Decimal("25.0000"),
+        "risk_budget_pct": Decimal("22.0000"),
         "volatility_target_pct": Decimal("12.0000"),
         "max_drawdown_pct": Decimal("10.0000"),
         "turnover_ceiling_pct": Decimal("50.0000"),
         "approved_instruments": [
-            "broad-market ETFs",
-            "Treasury ETFs",
-            "gold ETFs",
-            "cash equivalents",
+            "SPY",
+            "QQQ",
+            "IWM",
+            "TLT",
+            "IEF",
+            "SHY",
+            "GLD",
+            "DBC",
+            "cash",
         ],
         "current_signals": {
             "primary_model": "HMM market regime model",
+            "regime_framework": "growth x inflation with volatility overlay",
             "required_inputs": [
-                "market breadth",
-                "volatility",
-                "rates",
-                "credit",
+                "economic growth",
+                "inflation",
+                "interest rates",
+                "yield curve",
+                "credit conditions",
+                "market volatility",
+                "USD strength",
                 "commodities",
+                "liquidity",
+                "market breadth",
             ],
         },
         "evaluation": {
-            "primary_question": "Which regime are we in, and should portfolio risk expand or contract?",
+            "primary_question": "What economic environment are we in, and which assets are likely to perform best under that environment?",
             "minimum_evidence": [
                 "regime probability",
                 "transition risk",
-                "risk-center agreement",
+                "macro bias recommendation",
+                "risk-centre agreement",
             ],
         },
-        "shutdown_criteria": "Suspend overlay if regime state is unstable, confidence collapses, or risk centre enters halt.",
-        "notes": "Phase-one version uses price and volatility until macro datasets are connected.",
+        "shutdown_criteria": "Suspend if regime state is unstable, confidence collapses, or risk centre enters halt.",
+        "notes": "Phase-one version uses price and volatility until full macro datasets are connected.",
     },
     {
         "code": "cross_asset_trend",
-        "name": "Cross-Asset Trend Pod",
-        "mandate": "Identify persistent directional trends across equities, bonds, gold, commodities, and cash proxies.",
+        "name": "Cross-Asset Trend Following",
+        "pod_category": "alpha",
+        "live_scope": "yes",
+        "mandate": "Capture persistent directional movements across liquid equity, bond, gold, and commodity markets.",
         "status": "watch",
         "lifecycle_stage": "research",
-        "capital_allocation_pct": Decimal("15.0000"),
-        "risk_budget_pct": Decimal("15.0000"),
+        "capital_allocation_pct": Decimal("20.0000"),
+        "risk_budget_pct": Decimal("18.0000"),
         "volatility_target_pct": Decimal("14.0000"),
         "max_drawdown_pct": Decimal("10.0000"),
         "turnover_ceiling_pct": Decimal("80.0000"),
@@ -116,27 +146,32 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
         ],
         "current_signals": {
             "primary_model": "multi-horizon trend strength",
+            "horizons": ["1M", "3M", "6M", "12M"],
             "required_inputs": [
-                "moving averages",
+                "moving-average trend",
                 "breakouts",
-                "realized volatility",
-                "asset-class momentum",
+                "relative strength",
+                "trend persistence",
+                "volatility-adjusted momentum",
             ],
         },
         "evaluation": {
-            "primary_question": "Which assets have persistent risk-adjusted direction?",
+            "primary_question": "Which markets are displaying statistically persistent trends?",
             "minimum_evidence": [
                 "multi-horizon agreement",
+                "volatility scaling",
                 "transaction-cost-aware backtest",
             ],
         },
         "shutdown_criteria": "Suspend if trend turnover overwhelms expected edge or correlations spike.",
-        "notes": "Ready to consume the existing price history store before a dedicated trend model is added.",
+        "notes": "Dedicated trend model is the next implementation step; price history is already available.",
     },
     {
         "code": "quant_equity",
-        "name": "Quantitative Equity Pod",
-        "mandate": "Rank equities by systematic factors and predictive relative-return models.",
+        "name": "Quantitative Equity Ranking",
+        "pod_category": "alpha",
+        "live_scope": "yes",
+        "mandate": "Systematically identify the strongest securities within the investable equity universe.",
         "status": "active",
         "lifecycle_stage": "paper_trading",
         "capital_allocation_pct": Decimal("25.0000"),
@@ -150,119 +185,196 @@ DEFAULT_STRATEGY_POD_DEFINITIONS = [
             "broad-market ETFs",
         ],
         "current_signals": {
-            "primary_model": "ridge/logistic relative-return model",
-            "required_inputs": [
-                "price features",
-                "forward labels",
-                "benchmark-relative outcomes",
+            "primary_model": "weighted factor + ridge/logistic relative-return model",
+            "factor_families": [
+                "quality",
+                "value",
+                "momentum",
+                "growth",
+                "revisions",
+                "sentiment",
+                "risk",
             ],
+            "deployment_mode": "long_only",
         },
         "evaluation": {
-            "primary_question": "Which securities are most likely to outperform comparable securities?",
+            "primary_question": "Which available companies are most attractive relative to the other companies we could own?",
             "minimum_evidence": [
                 "validation rows",
                 "directional accuracy",
+                "factor transparency",
                 "simple-model baseline comparison",
             ],
         },
         "shutdown_criteria": "Disable if validation accuracy decays or residual downside becomes unacceptable.",
-        "notes": "This is the current home of the predictive ticker model.",
+        "notes": "High-ranking names feed Ticker Analyst for deeper research before live deployment.",
     },
     {
         "code": "fundamental_equity",
-        "name": "Fundamental Equity Pod",
-        "mandate": "Maintain deep company research, thesis quality, scenario ranges, and watchlist discipline.",
+        "name": "Fundamental / Catalyst Equity",
+        "pod_category": "alpha",
+        "live_scope": "yes",
+        "mandate": "Identify securities where market expectations differ materially from underlying business reality.",
         "status": "active",
-        "lifecycle_stage": "candidate",
-        "capital_allocation_pct": Decimal("30.0000"),
-        "risk_budget_pct": Decimal("25.0000"),
+        "lifecycle_stage": "probationary_capital",
+        "capital_allocation_pct": Decimal("20.0000"),
+        "risk_budget_pct": Decimal("20.0000"),
         "volatility_target_pct": Decimal("18.0000"),
         "max_drawdown_pct": Decimal("15.0000"),
         "turnover_ceiling_pct": Decimal("35.0000"),
-        "approved_instruments": ["US-listed equities", "liquid ETFs"],
+        "approved_instruments": ["US-listed equities", "NGX equities", "liquid ETFs"],
         "current_signals": {
             "primary_model": "AI-assisted ticker analyst memo",
-            "required_inputs": [
-                "thesis",
-                "bull/base/bear cases",
-                "risk notes",
-                "valuation context",
+            "thesis_fields": [
+                "market expectation",
+                "our view",
+                "catalyst",
+                "base case",
+                "bull case",
+                "bear case",
+                "thesis breakers",
             ],
         },
         "evaluation": {
-            "primary_question": "Does the business quality and valuation justify research time or capital?",
-            "minimum_evidence": ["complete memo", "thesis breakers", "portfolio fit"],
+            "primary_question": "What does the market appear to believe, and where might that belief be wrong?",
+            "minimum_evidence": [
+                "complete memo",
+                "catalyst path",
+                "thesis breakers",
+                "portfolio fit",
+            ],
         },
         "shutdown_criteria": "Stop adding names if thesis quality weakens or downside cases are not explicit.",
-        "notes": "The ticker analyst feeds this pod directly.",
+        "notes": "First live alpha book. Ticker Analyst is the primary evidence source.",
     },
     {
         "code": "relative_value",
-        "name": "Relative-Value Pod",
-        "mandate": "Research mispricing between economically related instruments without relying only on market direction.",
+        "name": "Relative Value / Capital Rotation",
+        "pod_category": "alpha",
+        "live_scope": "limited",
+        "mandate": "Find opportunities when capital, relative strength, or economic value shifts from one asset, company, or industry toward another.",
         "status": "research",
         "lifecycle_stage": "research",
-        "capital_allocation_pct": Decimal("0.0000"),
-        "risk_budget_pct": Decimal("5.0000"),
-        "volatility_target_pct": Decimal("10.0000"),
-        "max_drawdown_pct": Decimal("6.0000"),
+        "capital_allocation_pct": Decimal("10.0000"),
+        "risk_budget_pct": Decimal("8.0000"),
+        "volatility_target_pct": Decimal("12.0000"),
+        "max_drawdown_pct": Decimal("8.0000"),
         "turnover_ceiling_pct": Decimal("120.0000"),
         "approved_instruments": [
             "pairs",
             "sector-relative baskets",
             "ETF relationships",
+            "Market Radar rotation candidates",
         ],
         "current_signals": {
-            "primary_model": "correlation and spread diagnostics",
-            "required_inputs": [
-                "correlation",
-                "cointegration",
-                "borrow/shorting constraints",
-                "transaction costs",
+            "primary_model": "relationship and capital-rotation diagnostics",
+            "relationship_types": [
+                "competitor",
+                "input-cost",
+                "sector rotation",
+                "FX",
+                "supply chain",
+                "macro",
             ],
         },
         "evaluation": {
-            "primary_question": "Is there a stable relative mispricing after costs and constraints?",
+            "primary_question": "If something is losing, who benefits?",
             "minimum_evidence": [
-                "spread stability",
-                "cost-aware backtest",
-                "execution feasibility",
+                "relationship evidence",
+                "historical pattern sample",
+                "current confirmation",
+                "research priority label",
             ],
         },
-        "shutdown_criteria": "No live allocation while leverage, shorting, or execution constraints are unresolved.",
-        "notes": "Kept research-only during phase one.",
+        "shutdown_criteria": "Limited live scope until shorting, borrow, and execution constraints are modeled.",
+        "notes": "Closely integrated with Market Radar. Research candidates only until constraints are resolved.",
     },
     {
-        "code": "experimental_research",
-        "name": "Experimental Research Pod",
-        "mandate": "Test unconventional models and data sources before they earn a place in a core pod.",
-        "status": "sandbox",
-        "lifecycle_stage": "research",
+        "code": "central_hedge_engine",
+        "name": "Central Hedge Engine",
+        "pod_category": "hedge",
+        "live_scope": "yes",
+        "mandate": "Remove unintended portfolio risks that are not part of the fund's investment thesis.",
+        "status": "active",
+        "lifecycle_stage": "core_strategy",
         "capital_allocation_pct": Decimal("0.0000"),
-        "risk_budget_pct": Decimal("2.0000"),
+        "risk_budget_pct": Decimal("15.0000"),
         "volatility_target_pct": None,
-        "max_drawdown_pct": Decimal("4.0000"),
-        "turnover_ceiling_pct": Decimal("150.0000"),
-        "approved_instruments": ["research-only datasets", "paper-trading candidates"],
+        "max_drawdown_pct": None,
+        "turnover_ceiling_pct": Decimal("60.0000"),
+        "approved_instruments": [
+            "cash",
+            "short-duration Treasuries",
+            "Treasury ETFs",
+            "GLD",
+            "dynamic exposure reduction",
+        ],
         "current_signals": {
-            "primary_model": "sandbox experiments",
-            "required_inputs": [
-                "hypothesis",
-                "data provenance",
-                "baseline comparison",
-                "failure criteria",
+            "hedge_strategies": [
+                "cash_treasury_reserve",
+                "diversifying_assets",
+                "dynamic_exposure_reduction",
+            ],
+            "research_only": [
+                "market_beta_hedge",
+                "sector_hedge",
+                "pair_relative_value_hedge",
+                "fx_hedge",
+                "volatility_tail_hedge",
+                "factor_hedge",
+            ],
+            "exposure_classes": ["intentional", "unintentional", "hedge"],
+        },
+        "evaluation": {
+            "primary_question": "Which risks are intentional and which risks are accidental?",
+            "minimum_evidence": [
+                "exposure classification",
+                "simplest effective hedge",
+                "stress test",
+            ],
+        },
+        "shutdown_criteria": "Never use a complicated hedge when reducing the underlying position is better.",
+        "notes": "Alpha generates return; hedging removes risks we never intended to take.",
+    },
+    {
+        "code": "treasury_reserve",
+        "name": "Treasury Reserve",
+        "pod_category": "treasury",
+        "live_scope": "yes",
+        "mandate": "Maintain active cash and short-duration Treasury liquidity as a portfolio risk dial.",
+        "status": "active",
+        "lifecycle_stage": "core_strategy",
+        "capital_allocation_pct": Decimal("15.0000"),
+        "risk_budget_pct": Decimal("5.0000"),
+        "volatility_target_pct": Decimal("2.0000"),
+        "max_drawdown_pct": Decimal("1.0000"),
+        "turnover_ceiling_pct": Decimal("25.0000"),
+        "approved_instruments": [
+            "cash",
+            "short-duration Treasuries",
+            "SHY",
+            "IEF",
+        ],
+        "current_signals": {
+            "primary_model": "active cash allocation",
+            "increase_cash_when": [
+                "opportunity quality falls",
+                "risk rises",
+                "correlations rise",
+                "volatility rises",
+                "model confidence falls",
             ],
         },
         "evaluation": {
-            "primary_question": "Is this idea robust enough to graduate into a production pod?",
+            "primary_question": "How much dry powder should the portfolio hold right now?",
             "minimum_evidence": [
-                "clear baseline improvement",
-                "robustness checks",
-                "risk review",
+                "cash versus target",
+                "opportunity set quality",
+                "portfolio risk level",
             ],
         },
-        "shutdown_criteria": "No live allocation until validation standards are met.",
-        "notes": "This protects the core portfolio from exciting but unproven ideas.",
+        "shutdown_criteria": "Treasury reserve is always active; only the target level changes.",
+        "notes": "Cash is an active allocation, not idle capital.",
     },
 ]
 
@@ -304,16 +416,31 @@ async def list_strategy_pods(
     responses = [
         _pod_response(pod, context, latest_snapshots.get(pod.id)) for pod in pods
     ]
+    alpha_pods = [item for item in responses if item.pod_category == "alpha"]
+    hedge_pods = [item for item in responses if item.pod_category == "hedge"]
+    treasury_pods = [item for item in responses if item.pod_category == "treasury"]
+    alpha_allocation_total = _decimal4(
+        sum((pod.capital_allocation_pct for pod in alpha_pods), Decimal("0"))
+    )
+    treasury_target = _decimal4(
+        sum((pod.capital_allocation_pct for pod in treasury_pods), Decimal("0"))
+    )
     allocation_total = _decimal4(
-        sum((pod.capital_allocation_pct for pod in pods), Decimal("0"))
+        sum((pod.capital_allocation_pct for pod in responses), Decimal("0"))
     )
     risk_budget_total = _decimal4(
-        sum((pod.risk_budget_pct for pod in pods), Decimal("0"))
+        sum((pod.risk_budget_pct for pod in responses), Decimal("0"))
     )
-    unallocated = _decimal4(max(Decimal("0"), Decimal("100") - allocation_total))
-    warnings: list[str] = []
-    if allocation_total > Decimal("100"):
-        warnings.append("Total pod allocation is above 100%; CIO review required.")
+    unallocated = _decimal4(max(Decimal("0"), Decimal("100") - alpha_allocation_total))
+    warnings: list[str] = list(context.warnings)
+    if alpha_allocation_total > Decimal("100"):
+        warnings.append(
+            "Alpha pod allocation is above 100%; CIO review required."
+        )
+    if allocation_total > Decimal("115"):
+        warnings.append(
+            "Total book targets including treasury exceed 115%; review capital stack."
+        )
 
     logger.info(
         "strategy_pods_loaded",
@@ -330,9 +457,15 @@ async def list_strategy_pods(
         portfolio_name=context.risk_overview.snapshot.portfolio_name,
         nav=context.risk_overview.snapshot.nav,
         risk_level=context.risk_overview.snapshot.risk_level,
+        cash_pct=context.risk_overview.snapshot.cash_pct,
         allocation_total_pct=allocation_total,
+        alpha_allocation_total_pct=alpha_allocation_total,
+        treasury_target_pct=treasury_target,
         risk_budget_total_pct=risk_budget_total,
         unallocated_pct=unallocated,
+        alpha_pods=alpha_pods,
+        hedge_pods=hedge_pods,
+        treasury_pods=treasury_pods,
         pods=responses,
         warnings=warnings,
     )
@@ -517,6 +650,8 @@ def strategy_pod_allocation_recommendation(
         return "Reduce new deployment until central risk warnings are resolved."
     if normalized_stage == "research" or normalized_status in {"research", "sandbox"}:
         return "Research-only; collect evidence before live allocation."
+    if normalized_code == "relative_value" and lifecycle_stage == "research":
+        return "Limited live scope; capital rotation ideas require Radar confirmation and research review."
 
     confidence = model_confidence or Decimal("0")
     score = current_signal_score or Decimal("0")
@@ -540,6 +675,11 @@ async def _get_or_seed_strategy_pods(
     )
     existing = {pod.code: pod for pod in result}
     created = False
+    synced = False
+    definitions_by_code = {
+        definition["code"]: definition for definition in DEFAULT_STRATEGY_POD_DEFINITIONS
+    }
+
     for definition in DEFAULT_STRATEGY_POD_DEFINITIONS:
         if definition["code"] in existing:
             continue
@@ -548,21 +688,56 @@ async def _get_or_seed_strategy_pods(
         existing[pod.code] = pod
         created = True
 
-    if created:
+    for code, definition in definitions_by_code.items():
+        pod = existing.get(code)
+        if pod is None:
+            continue
+        for field_name in CANONICAL_SYNC_FIELDS:
+            if field_name not in definition:
+                continue
+            setattr(pod, field_name, definition[field_name])
+            synced = True
+
+    if created or synced:
         await session.commit()
-        logger.info(
-            "strategy_pods_seeded",
-            extra={
-                "owner_user_id": user.id,
-                "pod_count": len(DEFAULT_STRATEGY_POD_DEFINITIONS),
-            },
-        )
+        if created:
+            logger.info(
+                "strategy_pods_seeded",
+                extra={
+                    "owner_user_id": user.id,
+                    "pod_count": len(DEFAULT_STRATEGY_POD_DEFINITIONS),
+                },
+            )
+        if synced:
+            logger.info(
+                "strategy_pods_synced",
+                extra={
+                    "owner_user_id": user.id,
+                    "canonical_pod_count": len(definitions_by_code),
+                },
+            )
 
     order = {
         definition["code"]: index
         for index, definition in enumerate(DEFAULT_STRATEGY_POD_DEFINITIONS)
     }
-    return sorted(existing.values(), key=lambda pod: order.get(pod.code, len(order)))
+
+    def sort_key(pod: StrategyPod) -> tuple[int, int, str]:
+        category_rank = (
+            POD_CATEGORY_ORDER.index(pod.pod_category)
+            if pod.pod_category in POD_CATEGORY_ORDER
+            else len(POD_CATEGORY_ORDER)
+        )
+        if pod.pod_category == "alpha":
+            return (category_rank, order.get(pod.code, len(order)), pod.code)
+        return (category_rank, 0, pod.code)
+
+    active_pods = [
+        pod
+        for pod in existing.values()
+        if pod.code in definitions_by_code or pod.status != "retired"
+    ]
+    return sorted(active_pods, key=sort_key)
 
 
 async def _load_latest_snapshots(
@@ -656,6 +831,8 @@ def _pod_response(
         id=pod.id,
         code=pod.code,
         name=pod.name,
+        pod_category=pod.pod_category,
+        live_scope=pod.live_scope,
         mandate=pod.mandate,
         status=pod.status,
         lifecycle_stage=pod.lifecycle_stage,
@@ -692,8 +869,12 @@ def _assess_pod(
     if pod.code == "fundamental_equity":
         return _assess_fundamental_equity(pod, context)
     if pod.code == "relative_value":
-        return _assess_relative_value(pod, context)
-    return _assess_experimental_research(pod, context)
+        return _assess_capital_rotation(pod, context)
+    if pod.code == "central_hedge_engine":
+        return _assess_hedge_engine(pod, context)
+    if pod.code == "treasury_reserve":
+        return _assess_treasury_reserve(pod, context)
+    return _assess_legacy_pod(pod, context)
 
 
 def _assess_macro_regime(
@@ -960,7 +1141,7 @@ def _assess_fundamental_equity(
     )
 
 
-def _assess_relative_value(
+def _assess_capital_rotation(
     pod: StrategyPod,
     context: StrategyPodRuntimeContext,
 ) -> StrategyPodAssessment:
@@ -979,9 +1160,9 @@ def _assess_relative_value(
         StrategyPodSignalResponse(
             key="execution_constraints",
             label="Execution Constraints",
-            value="Unresolved",
+            value="Limited live scope",
             status="warning",
-            detail="Shorting, borrow, leverage, and transaction-cost constraints are not yet modeled.",
+            detail="Pairs, shorts, and leverage remain research-only. Radar rotation ideas become research candidates.",
         ),
     ]
     recommendation = strategy_pod_allocation_recommendation(
@@ -1001,8 +1182,150 @@ def _assess_relative_value(
         evaluation_overlay={
             "correlation_pair_count": len(pairs),
             "top_pairs": [pair.model_dump(mode="json") for pair in pairs[:5]],
-            "live_capital_allowed": False,
+            "live_capital_allowed": pod.live_scope == "yes",
         },
+    )
+
+
+def _assess_hedge_engine(
+    pod: StrategyPod,
+    context: StrategyPodRuntimeContext,
+) -> StrategyPodAssessment:
+    snapshot = context.risk_overview.snapshot
+    failed_checks = [
+        measurement.message
+        for measurement in context.risk_overview.measurements
+        if not measurement.passed
+    ]
+    gross = snapshot.gross_exposure_pct
+    net = snapshot.net_exposure_pct
+    score = _pct(Decimal("55") - min(abs(net) / Decimal("2"), Decimal("20")))
+    confidence = _pct(Decimal("50") + Decimal(min(len(failed_checks) * 8, 30)))
+    signals = [
+        StrategyPodSignalResponse(
+            key="gross_exposure",
+            label="Gross Exposure",
+            value=f"{gross}%",
+            status="live",
+            detail="Monitor unintended market beta before adding explicit hedges.",
+            as_of_date=snapshot.as_of_date,
+        ),
+        StrategyPodSignalResponse(
+            key="net_exposure",
+            label="Net Exposure",
+            value=f"{net}%",
+            status="live",
+            detail="Net beta is the first hedge input when security selection is the thesis.",
+            as_of_date=snapshot.as_of_date,
+        ),
+        StrategyPodSignalResponse(
+            key="active_hedges",
+            label="Active Hedges",
+            value="Cash / Treasury / dynamic reduction",
+            status="live",
+            detail="Index shorts, sector shorts, FX, and tail hedges remain research-only.",
+            as_of_date=snapshot.as_of_date,
+        ),
+    ]
+    recommendation = (
+        "Increase cash or Treasuries until unintended exposures are classified."
+        if failed_checks
+        else "Hedge book active; prefer the simplest effective hedge before complex instruments."
+    )
+    return StrategyPodAssessment(
+        live_signals=signals,
+        current_signal_score=score,
+        model_confidence=confidence,
+        allocation_recommendation=recommendation,
+        evaluation_overlay={
+            "failed_risk_checks": len(failed_checks),
+            "gross_exposure_pct": str(gross),
+            "net_exposure_pct": str(net),
+            "research_only_hedges": [
+                "market_beta",
+                "sector",
+                "pair_relative_value",
+                "fx",
+                "volatility_tail",
+                "factor",
+            ],
+        },
+    )
+
+
+def _assess_treasury_reserve(
+    pod: StrategyPod,
+    context: StrategyPodRuntimeContext,
+) -> StrategyPodAssessment:
+    snapshot = context.risk_overview.snapshot
+    target = pod.capital_allocation_pct
+    actual = snapshot.cash_pct
+    gap = _decimal4(target - actual)
+    score = _pct(
+        Decimal("100")
+        - min(abs(gap) * Decimal("2"), Decimal("40"))
+    )
+    confidence = _pct(Decimal("70"))
+    if gap > 0:
+        recommendation = (
+            f"Raise cash toward the {target}% treasury target; current cash is {actual}%."
+        )
+    elif gap < 0:
+        recommendation = (
+            f"Cash is above the {target}% target; deploy only into approved alpha opportunities."
+        )
+    else:
+        recommendation = "Treasury reserve is on target."
+    signals = [
+        StrategyPodSignalResponse(
+            key="cash_target",
+            label="Cash Target",
+            value=f"{target}%",
+            status="live",
+            detail="Cash is an active allocation, not idle capital.",
+            as_of_date=snapshot.as_of_date,
+        ),
+        StrategyPodSignalResponse(
+            key="cash_actual",
+            label="Cash Actual",
+            value=f"{actual}%",
+            status="live" if abs(gap) <= Decimal("3") else "warning",
+            detail=f"Gap to target: {gap}%.",
+            as_of_date=snapshot.as_of_date,
+        ),
+    ]
+    return StrategyPodAssessment(
+        live_signals=signals,
+        current_signal_score=score,
+        model_confidence=confidence,
+        allocation_recommendation=recommendation,
+        evaluation_overlay={
+            "cash_target_pct": str(target),
+            "cash_actual_pct": str(actual),
+            "cash_gap_pct": str(gap),
+        },
+    )
+
+
+def _assess_legacy_pod(
+    pod: StrategyPod,
+    context: StrategyPodRuntimeContext,
+) -> StrategyPodAssessment:
+    signal = StrategyPodSignalResponse(
+        key="legacy_pod",
+        label="Legacy Pod",
+        value="Retired or unmapped",
+        status="research",
+        detail="This pod is outside the current Strategy & Hedging Scope.",
+        as_of_date=context.risk_overview.snapshot.as_of_date,
+    )
+    recommendation = "No live allocation; migrate ideas to Research Lab or an active alpha pod."
+    return StrategyPodAssessment(
+        live_signals=[signal],
+        current_signal_score=Decimal("0.0000"),
+        model_confidence=Decimal("0.0000"),
+        allocation_recommendation=recommendation,
+        evaluation_overlay={"live_capital_allowed": False},
     )
 
 
@@ -1010,33 +1333,7 @@ def _assess_experimental_research(
     pod: StrategyPod,
     context: StrategyPodRuntimeContext,
 ) -> StrategyPodAssessment:
-    signal = StrategyPodSignalResponse(
-        key="sandbox_governance",
-        label="Sandbox Governance",
-        value="Research-only",
-        status="research",
-        detail="Ideas must prove baseline improvement, robustness, and risk fit before graduating.",
-        as_of_date=context.risk_overview.snapshot.as_of_date,
-    )
-    recommendation = strategy_pod_allocation_recommendation(
-        code=pod.code,
-        status=pod.status,
-        lifecycle_stage=pod.lifecycle_stage,
-        risk_level=context.risk_overview.snapshot.risk_level,
-        capital_allocation_pct=pod.capital_allocation_pct,
-        current_signal_score=Decimal("20.0000"),
-        model_confidence=Decimal("20.0000"),
-    )
-    return StrategyPodAssessment(
-        live_signals=[signal],
-        current_signal_score=Decimal("20.0000"),
-        model_confidence=Decimal("20.0000"),
-        allocation_recommendation=recommendation,
-        evaluation_overlay={
-            "live_capital_allowed": False,
-            "graduation_gate": "candidate pod review",
-        },
-    )
+    return _assess_legacy_pod(pod, context)
 
 
 def _snapshot_to_response(
