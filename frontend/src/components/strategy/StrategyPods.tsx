@@ -24,8 +24,6 @@ type StrategyPodsProps = {
   unavailable: boolean;
 };
 
-type PodDetailTab = "overview" | "history" | "governance" | "controls";
-
 type PodFormState = {
   status: string;
   lifecycle_stage: string;
@@ -38,24 +36,6 @@ type PodFormState = {
   shutdown_criteria: string;
   notes: string;
 };
-
-type PodBookFilter = "all" | "alpha" | "hedge" | "treasury";
-
-type SortKey = "allocation" | "signal" | "confidence" | "name";
-
-const bookFilterOptions: { key: PodBookFilter; label: string }[] = [
-  { key: "all", label: "All books" },
-  { key: "alpha", label: "Alpha pods" },
-  { key: "hedge", label: "Hedge engine" },
-  { key: "treasury", label: "Treasury" },
-];
-
-const detailTabs: { key: PodDetailTab; label: string }[] = [
-  { key: "overview", label: "Overview" },
-  { key: "history", label: "History" },
-  { key: "governance", label: "Governance" },
-  { key: "controls", label: "Controls" },
-];
 
 const statusOptions = ["active", "watch", "research", "sandbox", "suspended", "retired"];
 const lifecycleOptions = [
@@ -76,54 +56,43 @@ const currency = new Intl.NumberFormat("en-US", {
 
 export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps) {
   const [overview, setOverview] = useState<StrategyPodsOverview | null>(initialOverview);
-  const [selectedCode, setSelectedCode] = useState(
-    initialOverview?.alpha_pods[0]?.code ?? initialOverview?.pods[0]?.code ?? "",
-  );
-  const [detailTab, setDetailTab] = useState<PodDetailTab>("overview");
-  const [bookFilter, setBookFilter] = useState<PodBookFilter>("alpha");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("allocation");
+  const [selectedCode, setSelectedCode] = useState(() => {
+    const alpha =
+      initialOverview?.alpha_pods ??
+      initialOverview?.pods.filter((pod) => pod.pod_category === "alpha") ??
+      [];
+    return alpha[0]?.code ?? initialOverview?.pods[0]?.code ?? "";
+  });
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const [showControls, setShowControls] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [snapshots, setSnapshots] = useState<StrategyPodSnapshot[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const selectedPod = useMemo(() => {
     return overview?.pods.find((pod) => pod.code === selectedCode) ?? overview?.pods[0] ?? null;
   }, [overview, selectedCode]);
-  const selectedPodCode = selectedPod?.code;
 
-  const filteredPods = useMemo(() => {
+  const podGroups = useMemo(() => {
     if (!overview) return [];
-    const source =
-      bookFilter === "alpha"
-        ? overview.alpha_pods
-        : bookFilter === "hedge"
-          ? overview.hedge_pods
-          : bookFilter === "treasury"
-            ? overview.treasury_pods
-            : overview.pods;
-    const pods =
-      statusFilter === "all" ? source : source.filter((pod) => pod.status === statusFilter);
-
-    return [...pods].sort((left, right) => {
-      if (sortKey === "name") return left.name.localeCompare(right.name);
-      if (sortKey === "allocation") {
-        return Number(right.capital_allocation_pct) - Number(left.capital_allocation_pct);
-      }
-      if (sortKey === "signal") {
-        return compareScores(right.current_signal_score, left.current_signal_score);
-      }
-      return compareScores(right.model_confidence, left.model_confidence);
-    });
-  }, [overview, bookFilter, sortKey, statusFilter]);
+    const alpha = overview.alpha_pods ?? overview.pods.filter((p) => p.pod_category === "alpha");
+    const hedge = overview.hedge_pods ?? overview.pods.filter((p) => p.pod_category === "hedge");
+    const treasury =
+      overview.treasury_pods ?? overview.pods.filter((p) => p.pod_category === "treasury");
+    return [
+      { label: "Alpha", pods: alpha },
+      { label: "Hedge", pods: hedge },
+      { label: "Treasury", pods: treasury },
+    ].filter((group) => group.pods.length > 0);
+  }, [overview]);
 
   useEffect(() => {
-    if (detailTab !== "history" || !selectedPodCode) return;
+    if (!showHistory || !selectedPod?.code) return;
 
     let cancelled = false;
-    const podCode = selectedPodCode;
+    const podCode = selectedPod.code;
 
     async function loadSnapshots() {
       setHistoryLoading(true);
@@ -141,11 +110,10 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
     }
 
     void loadSnapshots();
-
     return () => {
       cancelled = true;
     };
-  }, [detailTab, selectedPodCode]);
+  }, [showHistory, selectedPod?.code]);
 
   async function reloadOverview(options?: { notify?: boolean }) {
     setLoading(true);
@@ -153,32 +121,27 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
       const nextOverview = await getStrategyPods();
       setOverview(nextOverview);
       if (!nextOverview.pods.some((pod) => pod.code === selectedCode)) {
-        setSelectedCode(nextOverview.pods[0]?.code ?? "");
+        const nextAlpha =
+          nextOverview.alpha_pods ??
+          nextOverview.pods.filter((pod) => pod.pod_category === "alpha");
+        setSelectedCode(nextAlpha[0]?.code ?? nextOverview.pods[0]?.code ?? "");
       }
-      if (options?.notify) {
-        toast.success("Strategy pods refreshed.");
-      }
+      if (options?.notify) toast.success("Strategy pods refreshed.");
     } catch {
-      if (options?.notify) {
-        toast.error("Strategy pods could not be refreshed.");
-      }
+      if (options?.notify) toast.error("Strategy pods could not be refreshed.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function refreshOverview() {
-    await reloadOverview({ notify: true });
-  }
-
   async function handleSave(payload: StrategyPodUpdateInput) {
     if (!selectedPod) return;
-
     setSaving(true);
     try {
       await updateStrategyPod(selectedPod.code, payload);
       await reloadOverview();
-      toast.success(`${selectedPod.name} controls saved.`);
+      toast.success(`${selectedPod.name} updated.`);
+      setShowControls(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Strategy pod could not be saved.");
     } finally {
@@ -188,18 +151,14 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
 
   async function handleCaptureSnapshot() {
     if (!selectedPod) return;
-
     setCapturing(true);
     try {
       const snapshot = await captureStrategyPodSnapshot(selectedPod.code);
       await reloadOverview();
-      if (detailTab === "history") {
-        const items = await getStrategyPodSnapshots(selectedPod.code);
-        setSnapshots(items);
+      if (showHistory) {
+        setSnapshots(await getStrategyPodSnapshots(selectedPod.code));
       }
-      toast.success(
-        `Snapshot captured for ${formatLabel(snapshot.code)} on ${formatDate(snapshot.as_of_date)}.`,
-      );
+      toast.success(`Snapshot captured for ${formatDate(snapshot.as_of_date)}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Snapshot could not be captured.");
     } finally {
@@ -218,24 +177,23 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
   }
 
   return (
-    <div className="mx-auto flex max-w-[1560px] flex-col gap-5">
-      <section className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
+      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-              {overview.portfolio_name}
+              Investment book
             </p>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">Strategy Pods</h2>
-            <p className="mt-1 max-w-3xl text-sm text-zinc-500">
-              Alpha pods generate return. The hedge engine removes unintended risk. Treasury
-              holds active cash and liquidity. Capital book · {formatDateTime(overview.generated_at)}
+            <p className="mt-1 text-sm text-zinc-500">
+              Alpha generates return · Hedge removes unintended risk · Treasury holds liquidity
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             <StatusBadge label={formatLabel(overview.risk_level)} tone={riskTone(overview.risk_level)} />
             <button
               type="button"
-              onClick={refreshOverview}
+              onClick={() => void reloadOverview({ notify: true })}
               disabled={loading}
               className={buttonSecondaryClassName}
             >
@@ -244,591 +202,214 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
           </div>
         </div>
 
-        <div className="grid divide-y divide-zinc-200 sm:grid-cols-5 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
+        <div className="grid divide-y divide-zinc-200 sm:grid-cols-4 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
           <Metric label="NAV" value={money(overview.nav)} />
-          <Metric label="Alpha Alloc" value={pct(overview.alpha_allocation_total_pct)} />
-          <Metric
-            label="Cash"
-            value={overview.cash_pct ? pct(overview.cash_pct) : "-"}
-          />
-          <Metric label="Treasury Target" value={pct(overview.treasury_target_pct)} />
-          <Metric label="Books" value={String(overview.pods.length)} />
-        </div>
-
-        <div className="border-t border-zinc-200 px-5 py-5 dark:border-zinc-800">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-              Alpha capital stack
-            </p>
-            <p className="text-xs text-zinc-500">Click a segment to inspect a pod</p>
-          </div>
-          <CapitalStack
-            pods={overview.alpha_pods}
-            reservePct={overview.unallocated_pct}
-            selectedCode={selectedCode}
-            onSelect={setSelectedCode}
-          />
-        </div>
-
-        <div className="grid gap-4 border-t border-zinc-200 px-5 py-5 sm:grid-cols-2 dark:border-zinc-800">
-          <SupportBookCard
-            title="Hedge engine"
-            pods={overview.hedge_pods}
-            selectedCode={selectedCode}
-            onSelect={(code) => {
-              setSelectedCode(code);
-              setBookFilter("hedge");
-              setDetailTab("overview");
-            }}
-          />
-          <SupportBookCard
-            title="Treasury"
-            pods={overview.treasury_pods}
-            selectedCode={selectedCode}
-            onSelect={(code) => {
-              setSelectedCode(code);
-              setBookFilter("treasury");
-              setDetailTab("overview");
-            }}
-          />
+          <Metric label="Alpha allocation" value={pct(overview.alpha_allocation_total_pct)} />
+          <Metric label="Cash" value={overview.cash_pct ? pct(overview.cash_pct) : "—"} />
+          <Metric label="Treasury target" value={pct(overview.treasury_target_pct)} />
         </div>
 
         {overview.warnings.length > 0 && (
-          <BookAlerts warnings={overview.warnings} />
+          <div className="border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+            <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
+              {overview.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </div>
         )}
       </section>
 
-      <section className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-end justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-              Pod book
-            </p>
-            <h3 className="mt-1 text-lg font-semibold">Comparison matrix</h3>
+      <div className="grid gap-5 lg:grid-cols-[minmax(280px,340px)_1fr]">
+        <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+            <h3 className="text-sm font-semibold">Books</h3>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={bookFilter}
-              onChange={(event) => setBookFilter(event.target.value as PodBookFilter)}
-              className={`${inputClassName} mt-0 w-auto min-w-[140px]`}
-            >
-              {bookFilterOptions.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              className={`${inputClassName} mt-0 w-auto min-w-[140px]`}
-            >
-              <option value="all">All statuses</option>
-              {statusOptions.map((option) => (
-                <option key={option} value={option}>
-                  {formatLabel(option)}
-                </option>
-              ))}
-            </select>
-            <select
-              value={sortKey}
-              onChange={(event) => setSortKey(event.target.value as SortKey)}
-              className={`${inputClassName} mt-0 w-auto min-w-[140px]`}
-            >
-              <option value="allocation">Sort: allocation</option>
-              <option value="signal">Sort: signal</option>
-              <option value="confidence">Sort: confidence</option>
-              <option value="name">Sort: name</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-zinc-200 bg-zinc-50/80 text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50">
-              <tr>
-                <th className="px-5 py-3 font-medium">Pod</th>
-                <th className="px-5 py-3 font-medium">Book</th>
-                <th className="px-5 py-3 font-medium">Live</th>
-                <th className="px-5 py-3 font-medium">Status</th>
-                <th className="px-5 py-3 font-medium">Lifecycle</th>
-                <th className="px-5 py-3 font-medium">Alloc</th>
-                <th className="px-5 py-3 font-medium">Signal</th>
-                <th className="px-5 py-3 font-medium">Confidence</th>
-                <th className="px-5 py-3 font-medium">Recommendation</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
-              {filteredPods.map((pod) => {
-                const selected = selectedPod?.code === pod.code;
-                const attention = recommendationAttention(pod.allocation_recommendation);
-
-                return (
-                  <tr
-                    key={pod.code}
-                    className={`cursor-pointer transition ${
-                      selected
-                        ? "bg-zinc-50 dark:bg-zinc-900/70"
-                        : "hover:bg-zinc-50/70 dark:hover:bg-zinc-900/40"
-                    }`}
-                    onClick={() => {
-                      setSelectedCode(pod.code);
-                      setDetailTab("overview");
-                    }}
-                  >
-                    <td className="px-5 py-4">
-                      <div>
-                        <p className="font-medium">{pod.name}</p>
-                        <p className="mt-0.5 line-clamp-1 text-xs text-zinc-500">{pod.mandate}</p>
-                      </div>
-                    </td>
-                    <td className="px-5 py-4">
-                      <StatusBadge
-                        label={formatLabel(pod.pod_category)}
-                        tone={categoryTone(pod.pod_category)}
-                      />
-                    </td>
-                    <td className="px-5 py-4">
-                      <StatusBadge
-                        label={formatLabel(pod.live_scope)}
-                        tone={liveScopeTone(pod.live_scope)}
-                      />
-                    </td>
-                    <td className="px-5 py-4">
-                      <StatusBadge label={formatLabel(pod.status)} tone={statusTone(pod.status)} />
-                    </td>
-                    <td className="px-5 py-4 text-zinc-600 dark:text-zinc-300">
-                      {formatLabel(pod.lifecycle_stage)}
-                    </td>
-                    <td className="px-5 py-4 font-semibold tabular-nums">
-                      {pct(pod.capital_allocation_pct)}
-                    </td>
-                    <td className="px-5 py-4">
-                      <ScoreGauge value={pod.current_signal_score} compact />
-                    </td>
-                    <td className="px-5 py-4">
-                      <ScoreGauge value={pod.model_confidence} compact />
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex items-start gap-2">
-                        {attention === "action" && (
-                          <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
-                        )}
-                        <p className="line-clamp-2 max-w-xs text-zinc-600 dark:text-zinc-300">
-                          {pod.allocation_recommendation}
-                        </p>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {selectedPod && (
-        <section className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-                {formatLabel(selectedPod.pod_category)} book
-              </p>
-              <h3 className="mt-1 text-lg font-semibold">{selectedPod.name}</h3>
-              <p className="mt-1 text-sm text-zinc-500">{formatLabel(selectedPod.code)}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleCaptureSnapshot}
-                disabled={capturing}
-                className={buttonSecondaryClassName}
-              >
-                {capturing ? "Capturing" : "Capture snapshot"}
-              </button>
-            </div>
-          </div>
-
-          <nav className="flex gap-2 overflow-x-auto border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
-            {detailTabs.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setDetailTab(tab.key)}
-                className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
-                  detailTab === tab.key
-                    ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
-                    : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
-                }`}
-              >
-                {tab.label}
-              </button>
+          <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
+            {podGroups.map((group) => (
+              <div key={group.label}>
+                <p className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                  {group.label}
+                </p>
+                <ul>
+                  {group.pods.map((pod) => (
+                    <PodListItem
+                      key={pod.code}
+                      pod={pod}
+                      selected={selectedPod?.code === pod.code}
+                      onSelect={() => {
+                        setSelectedCode(pod.code);
+                        setShowControls(false);
+                        setShowHistory(false);
+                      }}
+                    />
+                  ))}
+                </ul>
+              </div>
             ))}
-          </nav>
-
-          {detailTab === "overview" && <OverviewPanel pod={selectedPod} />}
-          {detailTab === "history" && (
-            <HistoryPanel pod={selectedPod} snapshots={snapshots} loading={historyLoading} />
-          )}
-          {detailTab === "governance" && <GovernancePanel pod={selectedPod} />}
-          {detailTab === "controls" && (
-            <ControlsPanel key={selectedPod.code} pod={selectedPod} saving={saving} onSave={handleSave} />
-          )}
-        </section>
-      )}
-    </div>
-  );
-}
-
-function SupportBookCard({
-  title,
-  pods,
-  selectedCode,
-  onSelect,
-}: {
-  title: string;
-  pods: StrategyPod[];
-  selectedCode: string;
-  onSelect: (code: string) => void;
-}) {
-  return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">{title}</p>
-      <div className="mt-3 space-y-2">
-        {pods.map((pod) => (
-          <button
-            key={pod.code}
-            type="button"
-            onClick={() => onSelect(pod.code)}
-            className={`flex w-full items-start justify-between gap-3 rounded-md px-3 py-2 text-left transition ${
-              selectedCode === pod.code
-                ? "bg-zinc-100 dark:bg-zinc-900"
-                : "hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
-            }`}
-          >
-            <div>
-              <p className="text-sm font-medium">{pod.name}</p>
-              <p className="mt-1 text-xs text-zinc-500">{pod.allocation_recommendation}</p>
-            </div>
-            <StatusBadge label={formatLabel(pod.live_scope)} tone={liveScopeTone(pod.live_scope)} />
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function BookAlerts({ warnings }: { warnings: string[] }) {
-  return (
-    <div className="border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
-      <ul className="space-y-2">
-        {warnings.map((warning) => (
-          <li
-            key={warning}
-            className="text-sm leading-6 text-zinc-600 dark:text-zinc-400"
-          >
-            {warning}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function CapitalStack({
-  pods,
-  reservePct,
-  selectedCode,
-  onSelect,
-}: {
-  pods: StrategyPod[];
-  reservePct: string;
-  selectedCode: string;
-  onSelect: (code: string) => void;
-}) {
-  const reserve = Math.max(Number(reservePct), 0);
-
-  return (
-    <div className="mt-4 space-y-3">
-      <div className="flex h-4 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900">
-        {pods.map((pod) => {
-          const width = Math.max(Number(pod.capital_allocation_pct), 0);
-          if (width <= 0) return null;
-          const selected = selectedCode === pod.code;
-
-          return (
-            <button
-              key={pod.code}
-              type="button"
-              title={`${pod.name} · ${pct(pod.capital_allocation_pct)}`}
-              style={{ width: `${width}%` }}
-              onClick={() => onSelect(pod.code)}
-              className={`transition hover:opacity-90 ${
-                selected
-                  ? "bg-zinc-800 dark:bg-zinc-200"
-                  : "bg-zinc-500 dark:bg-zinc-500"
-              }`}
-            />
-          );
-        })}
-        {reserve > 0 && (
-          <div
-            style={{ width: `${reserve}%` }}
-            className="bg-zinc-200 dark:bg-zinc-700"
-            title={`Reserve · ${pct(reservePct)}`}
-          />
-        )}
-      </div>
-
-      <div className="flex flex-wrap gap-x-4 gap-y-2">
-        {pods.map((pod) => (
-          <button
-            key={pod.code}
-            type="button"
-            onClick={() => onSelect(pod.code)}
-            className={`text-xs ${
-              selectedCode === pod.code
-                ? "font-semibold text-zinc-950 dark:text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-            }`}
-          >
-            {pod.name} · {pct(pod.capital_allocation_pct)}
-          </button>
-        ))}
-        {reserve > 0 && (
-          <span className="text-xs text-zinc-500">
-            Reserve · {pct(reservePct)}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function OverviewPanel({ pod }: { pod: StrategyPod }) {
-  const currentSignals = pod.current_signals as {
-    primary_model?: unknown;
-    required_inputs?: unknown;
-  };
-  const evaluation = pod.evaluation as {
-    primary_question?: unknown;
-    minimum_evidence?: unknown;
-    live?: Record<string, unknown>;
-  };
-
-  return (
-    <div className="space-y-6 px-5 py-5">
-      <LifecycleStepper stage={pod.lifecycle_stage} />
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Allocation" value={pct(pod.capital_allocation_pct)} />
-        <MetricCard label="Risk budget" value={pct(pod.risk_budget_pct)} />
-        <MetricCard label="Signal">
-          <ScoreGauge value={pod.current_signal_score} />
-        </MetricCard>
-        <MetricCard label="Confidence">
-          <ScoreGauge value={pod.model_confidence} />
-        </MetricCard>
-      </div>
-
-      <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Mandate</p>
-        <p className="mt-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">{pod.mandate}</p>
-      </div>
-
-      <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Allocation recommendation
-            </p>
-            <p className="mt-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
-              {pod.allocation_recommendation}
-            </p>
           </div>
-          <StatusBadge label={formatLabel(pod.risk_level)} tone={riskTone(pod.risk_level)} />
-        </div>
-        <p className="mt-3 text-xs text-zinc-500">
-          Current allocation: {pct(pod.capital_allocation_pct)} · Risk budget: {pct(pod.risk_budget_pct)}
-        </p>
-      </div>
+        </section>
 
-      <div>
-        <p className="text-sm font-semibold">Live evidence</p>
-        <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-900">
-          {pod.live_signals.map((signal) => (
-            <div key={signal.key} className="py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium">{signal.label}</p>
-                  <p className="mt-1 text-xs text-zinc-500">{signal.detail ?? "No detail available."}</p>
+        {selectedPod ? (
+          <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge
+                      label={formatLabel(selectedPod.pod_category)}
+                      tone={categoryTone(selectedPod.pod_category)}
+                    />
+                    <StatusBadge
+                      label={formatLabel(selectedPod.live_scope)}
+                      tone={liveScopeTone(selectedPod.live_scope)}
+                    />
+                    <StatusBadge
+                      label={formatLabel(selectedPod.lifecycle_stage)}
+                      tone={statusTone(selectedPod.status)}
+                    />
+                  </div>
+                  <h3 className="mt-2 text-lg font-semibold">{selectedPod.name}</h3>
+                  <p className="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+                    {selectedPod.mandate}
+                  </p>
                 </div>
-                <StatusBadge label={signal.value} tone={signalTone(signal.status)} />
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCaptureSnapshot()}
+                    disabled={capturing}
+                    className={buttonSecondaryClassName}
+                  >
+                    {capturing ? "Saving…" : "Snapshot"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowControls((current) => !current)}
+                    className={buttonSecondaryClassName}
+                  >
+                    {showControls ? "Close" : "Edit"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <MiniStat label="Allocation" value={pct(selectedPod.capital_allocation_pct)} />
+                <MiniStat label="Signal" value={scoreText(selectedPod.current_signal_score)} />
+                <MiniStat label="Confidence" value={scoreText(selectedPod.model_confidence)} />
+              </div>
+
+              <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50/80 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Recommendation
+                </p>
+                <p className="mt-1 text-sm leading-6 text-zinc-800 dark:text-zinc-200">
+                  {selectedPod.allocation_recommendation}
+                </p>
               </div>
             </div>
-          ))}
-        </div>
-      </div>
 
-      <div>
-        <p className="text-sm font-semibold">Model and gates</p>
-        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-          <KeyValue label="Primary model" value={stringValue(currentSignals.primary_model)} />
-          <KeyValue label="Primary question" value={stringValue(evaluation.primary_question)} />
-          <KeyValue label="Required inputs" value={listValue(currentSignals.required_inputs)} />
-          <KeyValue label="Minimum evidence" value={listValue(evaluation.minimum_evidence)} />
-        </dl>
-      </div>
+            <div className="px-5 py-4">
+              <p className="text-sm font-semibold">Live evidence</p>
+              <div className="mt-3 space-y-3">
+                {selectedPod.live_signals.length === 0 ? (
+                  <p className="text-sm text-zinc-500">No live signals yet.</p>
+                ) : (
+                  selectedPod.live_signals.map((signal) => (
+                    <div
+                      key={signal.key}
+                      className="flex items-start justify-between gap-3 border-b border-zinc-100 pb-3 last:border-0 last:pb-0 dark:border-zinc-900"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{signal.label}</p>
+                        {signal.detail ? (
+                          <p className="mt-0.5 text-xs leading-5 text-zinc-500">{signal.detail}</p>
+                        ) : null}
+                      </div>
+                      <StatusBadge label={signal.value} tone={signalTone(signal.status)} />
+                    </div>
+                  ))
+                )}
+              </div>
 
-      {evaluation.live && (
-        <div>
-          <p className="text-sm font-semibold">Current readout</p>
-          <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-            {Object.entries(evaluation.live).slice(0, 8).map(([key, value]) => (
-              <KeyValue key={key} label={formatLabel(key)} value={compactValue(value)} />
-            ))}
-          </dl>
-        </div>
-      )}
+              {selectedPod.open_risk_warnings.length > 0 && (
+                <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950/40">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-200">
+                    Risk warnings
+                  </p>
+                  <ul className="mt-2 space-y-1 text-sm text-amber-900 dark:text-amber-100">
+                    {selectedPod.open_risk_warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {showControls && (
+                <div className="mt-5 border-t border-zinc-200 pt-5 dark:border-zinc-800">
+                  <ControlsForm pod={selectedPod} saving={saving} onSave={handleSave} />
+                </div>
+              )}
+
+              <div className="mt-5 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowHistory((current) => !current)}
+                  className="text-sm font-medium text-zinc-700 hover:text-zinc-950 dark:text-zinc-300 dark:hover:text-zinc-100"
+                >
+                  {showHistory ? "Hide snapshot history" : "Show snapshot history"}
+                </button>
+                {showHistory && (
+                  <SnapshotHistory snapshots={snapshots} loading={historyLoading} />
+                )}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <section className="flex items-center justify-center rounded-xl border border-dashed border-zinc-300 px-5 py-16 text-sm text-zinc-500 dark:border-zinc-700">
+            Select a pod to inspect signals and controls.
+          </section>
+        )}
+      </div>
     </div>
   );
 }
 
-function HistoryPanel({
+function PodListItem({
   pod,
-  snapshots,
-  loading,
+  selected,
+  onSelect,
 }: {
   pod: StrategyPod;
-  snapshots: StrategyPodSnapshot[];
-  loading: boolean;
+  selected: boolean;
+  onSelect: () => void;
 }) {
-  if (loading) {
-    return (
-      <div className="px-5 py-8 text-sm text-zinc-500">Loading snapshot history…</div>
-    );
-  }
-
-  if (snapshots.length === 0) {
-    return (
-      <div className="px-5 py-8">
-        <p className="text-sm text-zinc-600 dark:text-zinc-300">
-          No snapshots captured for {pod.name} yet.
-        </p>
-        <p className="mt-2 text-sm text-zinc-500">
-          Use Capture snapshot to start an audit trail of signal, confidence, and allocation posture.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
-        <thead className="border-b border-zinc-200 bg-zinc-50/80 text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/50">
-          <tr>
-            <th className="px-5 py-3 font-medium">Captured</th>
-            <th className="px-5 py-3 font-medium">As of</th>
-            <th className="px-5 py-3 font-medium">Lifecycle</th>
-            <th className="px-5 py-3 font-medium">Alloc</th>
-            <th className="px-5 py-3 font-medium">Signal</th>
-            <th className="px-5 py-3 font-medium">Confidence</th>
-            <th className="px-5 py-3 font-medium">Risk</th>
-            <th className="px-5 py-3 font-medium">Recommendation</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
-          {snapshots.map((snapshot) => (
-            <tr key={snapshot.snapshot_id}>
-              <td className="px-5 py-4 whitespace-nowrap">
-                {formatDate(snapshot.as_of_date)} · {formatTime(snapshot.captured_at)}
-              </td>
-              <td className="px-5 py-4">{formatDate(snapshot.as_of_date)}</td>
-              <td className="px-5 py-4">{formatLabel(snapshot.lifecycle_stage)}</td>
-              <td className="px-5 py-4 tabular-nums">{pct(snapshot.capital_allocation_pct)}</td>
-              <td className="px-5 py-4">{scoreText(snapshot.current_signal_score)}</td>
-              <td className="px-5 py-4">{scoreText(snapshot.model_confidence)}</td>
-              <td className="px-5 py-4">
-                <StatusBadge label={formatLabel(snapshot.risk_level)} tone={riskTone(snapshot.risk_level)} />
-              </td>
-              <td className="px-5 py-4 max-w-sm">
-                <p className="line-clamp-2 text-zinc-600 dark:text-zinc-300">
-                  {snapshot.allocation_recommendation}
-                </p>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <li>
+      <button
+        type="button"
+        onClick={onSelect}
+        className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition ${
+          selected
+            ? "bg-zinc-100 dark:bg-zinc-900"
+            : "hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
+        }`}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{pod.name}</p>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            {pct(pod.capital_allocation_pct)} · {formatLabel(pod.status)}
+          </p>
+        </div>
+        <span className="shrink-0 text-xs font-semibold tabular-nums text-zinc-600 dark:text-zinc-400">
+          {scoreText(pod.current_signal_score)}
+        </span>
+      </button>
+    </li>
   );
 }
 
-function GovernancePanel({ pod }: { pod: StrategyPod }) {
-  return (
-    <div className="space-y-6 px-5 py-5">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-          Approved instruments
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {pod.approved_instruments.length > 0 ? (
-            pod.approved_instruments.map((instrument) => (
-              <span
-                key={instrument}
-                className="rounded-md border border-zinc-200 px-2.5 py-1 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-300"
-              >
-                {instrument}
-              </span>
-            ))
-          ) : (
-            <p className="text-sm text-zinc-500">No approved instruments recorded.</p>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-          Shutdown criteria
-        </p>
-        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
-          {pod.shutdown_criteria ?? "No shutdown criteria recorded."}
-        </p>
-      </div>
-
-      {pod.open_risk_warnings.length > 0 && (
-        <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
-          <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Risk warnings</p>
-          <ul className="mt-2 space-y-1.5 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            {pod.open_risk_warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-          Latest snapshot
-        </p>
-        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
-          {pod.latest_snapshot
-            ? `${formatDate(pod.latest_snapshot.as_of_date)} at ${formatTime(pod.latest_snapshot.captured_at)}`
-            : "No pod snapshot captured yet."}
-        </p>
-      </div>
-
-      {pod.notes && (
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Notes</p>
-          <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{pod.notes}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ControlsPanel({
+function ControlsForm({
   pod,
   saving,
   onSave,
@@ -845,202 +426,112 @@ function ControlsPanel({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 px-5 py-5">
-      <p className="text-sm text-zinc-500">
-        Update pod controls deliberately. Monitoring lives on Overview; governance constraints are read-only on the Governance tab.
-      </p>
-
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-semibold">Status and lifecycle</legend>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Status">
-            <select
-              name="status"
-              value={formState.status}
-              onChange={(event) => setFormStateValue(setFormState, "status", event.target.value)}
-              className={inputClassName}
-            >
-              {statusOptions.map((option) => (
-                <option key={option} value={option}>
-                  {formatLabel(option)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Lifecycle">
-            <select
-              name="lifecycle_stage"
-              value={formState.lifecycle_stage}
-              onChange={(event) =>
-                setFormStateValue(setFormState, "lifecycle_stage", event.target.value)
-              }
-              className={inputClassName}
-            >
-              {lifecycleOptions.map((option) => (
-                <option key={option} value={option}>
-                  {formatLabel(option)}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-      </fieldset>
-
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-semibold">Capital and risk limits</legend>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Capital Allocation %">
-            <input
-              name="capital_allocation_pct"
-              value={formState.capital_allocation_pct}
-              onChange={(event) =>
-                setFormStateValue(setFormState, "capital_allocation_pct", event.target.value)
-              }
-              className={inputClassName}
-              inputMode="decimal"
-            />
-          </Field>
-          <Field label="Risk Budget %">
-            <input
-              name="risk_budget_pct"
-              value={formState.risk_budget_pct}
-              onChange={(event) =>
-                setFormStateValue(setFormState, "risk_budget_pct", event.target.value)
-              }
-              className={inputClassName}
-              inputMode="decimal"
-            />
-          </Field>
-          <Field label="Volatility Target %">
-            <input
-              name="volatility_target_pct"
-              value={formState.volatility_target_pct}
-              onChange={(event) =>
-                setFormStateValue(setFormState, "volatility_target_pct", event.target.value)
-              }
-              className={inputClassName}
-              inputMode="decimal"
-            />
-          </Field>
-          <Field label="Max Drawdown %">
-            <input
-              name="max_drawdown_pct"
-              value={formState.max_drawdown_pct}
-              onChange={(event) =>
-                setFormStateValue(setFormState, "max_drawdown_pct", event.target.value)
-              }
-              className={inputClassName}
-              inputMode="decimal"
-            />
-          </Field>
-          <Field label="Turnover Ceiling %">
-            <input
-              name="turnover_ceiling_pct"
-              value={formState.turnover_ceiling_pct}
-              onChange={(event) =>
-                setFormStateValue(setFormState, "turnover_ceiling_pct", event.target.value)
-              }
-              className={inputClassName}
-              inputMode="decimal"
-            />
-          </Field>
-        </div>
-      </fieldset>
-
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-semibold">Mandate constraints</legend>
-        <Field label="Approved Instruments">
-          <textarea
-            name="approved_instruments"
-            value={formState.approved_instruments}
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <p className="text-sm font-semibold">Pod controls</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Status">
+          <select
+            value={formState.status}
+            onChange={(event) => setFormStateValue(setFormState, "status", event.target.value)}
+            className={inputClassName}
+          >
+            {statusOptions.map((option) => (
+              <option key={option} value={option}>
+                {formatLabel(option)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Lifecycle">
+          <select
+            value={formState.lifecycle_stage}
             onChange={(event) =>
-              setFormStateValue(setFormState, "approved_instruments", event.target.value)
+              setFormStateValue(setFormState, "lifecycle_stage", event.target.value)
             }
-            className={`${inputClassName} min-h-24 resize-y`}
-            placeholder="Comma-separated list"
-          />
+            className={inputClassName}
+          >
+            {lifecycleOptions.map((option) => (
+              <option key={option} value={option}>
+                {formatLabel(option)}
+              </option>
+            ))}
+          </select>
         </Field>
-        <Field label="Shutdown Criteria">
-          <textarea
-            name="shutdown_criteria"
-            value={formState.shutdown_criteria}
+        <Field label="Capital allocation %">
+          <input
+            value={formState.capital_allocation_pct}
             onChange={(event) =>
-              setFormStateValue(setFormState, "shutdown_criteria", event.target.value)
+              setFormStateValue(setFormState, "capital_allocation_pct", event.target.value)
             }
-            className={`${inputClassName} min-h-24 resize-y`}
+            className={inputClassName}
+            inputMode="decimal"
           />
         </Field>
-        <Field label="Notes">
-          <textarea
-            name="notes"
-            value={formState.notes}
-            onChange={(event) => setFormStateValue(setFormState, "notes", event.target.value)}
-            className={`${inputClassName} min-h-20 resize-y`}
+        <Field label="Risk budget %">
+          <input
+            value={formState.risk_budget_pct}
+            onChange={(event) =>
+              setFormStateValue(setFormState, "risk_budget_pct", event.target.value)
+            }
+            className={inputClassName}
+            inputMode="decimal"
           />
         </Field>
-      </fieldset>
-
+      </div>
+      <Field label="Notes">
+        <textarea
+          value={formState.notes}
+          onChange={(event) => setFormStateValue(setFormState, "notes", event.target.value)}
+          className={`${inputClassName} min-h-20 resize-y`}
+        />
+      </Field>
       <div className="flex justify-end">
         <button type="submit" disabled={saving} className={buttonPrimaryClassName}>
-          {saving ? "Saving" : "Save controls"}
+          {saving ? "Saving" : "Save changes"}
         </button>
       </div>
     </form>
   );
 }
 
-function LifecycleStepper({ stage }: { stage: string }) {
-  const currentIndex = lifecycleOptions.indexOf(stage);
-
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Lifecycle</p>
-      <div className="mt-3 flex flex-wrap gap-1">
-        {lifecycleOptions.map((option, index) => {
-          const active = option === stage;
-          const complete = currentIndex >= 0 && index < currentIndex;
-
-          return (
-            <div
-              key={option}
-              className={`rounded-md px-2 py-1 text-[11px] font-medium ${
-                active
-                  ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950"
-                  : complete
-                    ? "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
-                    : "border border-zinc-200 text-zinc-400 dark:border-zinc-800"
-              }`}
-            >
-              {formatLabel(option)}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ScoreGauge({ value, compact = false }: { value: string | null; compact?: boolean }) {
-  const score = parseScore(value);
-
-  if (score === null) {
-    return <span className="text-sm text-zinc-500">Pending</span>;
+function SnapshotHistory({
+  snapshots,
+  loading,
+}: {
+  snapshots: StrategyPodSnapshot[];
+  loading: boolean;
+}) {
+  if (loading) {
+    return <p className="mt-3 text-sm text-zinc-500">Loading history…</p>;
+  }
+  if (snapshots.length === 0) {
+    return <p className="mt-3 text-sm text-zinc-500">No snapshots captured yet.</p>;
   }
 
-  const width = Math.min(Math.max(score, 0), 100);
-
   return (
-    <div className={compact ? "min-w-[88px]" : ""}>
-      <div className="flex items-center gap-2">
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-          <div
-            className="h-full rounded-full bg-zinc-600 dark:bg-zinc-400"
-            style={{ width: `${width}%` }}
-          />
-        </div>
-        {!compact && <span className="text-sm font-semibold tabular-nums">{score}/100</span>}
-      </div>
-      {compact && <p className="mt-1 text-xs font-semibold tabular-nums">{score}/100</p>}
+    <div className="mt-3 overflow-x-auto">
+      <table className="w-full min-w-[520px] text-left text-sm">
+        <thead>
+          <tr className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
+            <th className="py-2 pr-3 font-medium">Date</th>
+            <th className="py-2 pr-3 font-medium">Alloc</th>
+            <th className="py-2 pr-3 font-medium">Signal</th>
+            <th className="py-2 font-medium">Recommendation</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
+          {snapshots.map((snapshot) => (
+            <tr key={snapshot.snapshot_id}>
+              <td className="py-2.5 pr-3 whitespace-nowrap">{formatDate(snapshot.as_of_date)}</td>
+              <td className="py-2.5 pr-3 tabular-nums">{pct(snapshot.capital_allocation_pct)}</td>
+              <td className="py-2.5 pr-3 tabular-nums">{scoreText(snapshot.current_signal_score)}</td>
+              <td className="py-2.5 line-clamp-2 text-zinc-600 dark:text-zinc-400">
+                {snapshot.allocation_recommendation}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1054,15 +545,11 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function MetricCard({ label, value, children }: { label: string; value?: string; children?: ReactNode }) {
+function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
-      {value ? (
-        <p className="mt-2 text-lg font-semibold tabular-nums">{value}</p>
-      ) : (
-        <div className="mt-2">{children}</div>
-      )}
+    <div className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="mt-1 text-sm font-semibold tabular-nums">{value}</p>
     </div>
   );
 }
@@ -1070,18 +557,9 @@ function MetricCard({ label, value, children }: { label: string; value?: string;
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-      {label}
+      <span className="mb-1.5 block">{label}</span>
       {children}
     </label>
-  );
-}
-
-function KeyValue({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</dt>
-      <dd className="mt-1 text-sm leading-6 text-zinc-700 dark:text-zinc-300">{value}</dd>
-    </div>
   );
 }
 
@@ -1096,7 +574,7 @@ function StatusBadge({ label, tone = "neutral" }: { label: string; tone?: string
           : "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300";
 
   return (
-    <span className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-medium ${className}`}>
+    <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-medium ${className}`}>
       {label}
     </span>
   );
@@ -1110,18 +588,18 @@ function setFormStateValue(
   setFormState((current) => ({ ...current, [key]: value }));
 }
 
-function buildFormState(pod: StrategyPod | null): PodFormState {
+function buildFormState(pod: StrategyPod): PodFormState {
   return {
-    status: pod?.status ?? "research",
-    lifecycle_stage: pod?.lifecycle_stage ?? "research",
-    capital_allocation_pct: cleanNumber(pod?.capital_allocation_pct),
-    risk_budget_pct: cleanNumber(pod?.risk_budget_pct),
-    volatility_target_pct: cleanNumber(pod?.volatility_target_pct),
-    max_drawdown_pct: cleanNumber(pod?.max_drawdown_pct),
-    turnover_ceiling_pct: cleanNumber(pod?.turnover_ceiling_pct),
-    approved_instruments: pod?.approved_instruments.join(", ") ?? "",
-    shutdown_criteria: pod?.shutdown_criteria ?? "",
-    notes: pod?.notes ?? "",
+    status: pod.status,
+    lifecycle_stage: pod.lifecycle_stage,
+    capital_allocation_pct: cleanNumber(pod.capital_allocation_pct),
+    risk_budget_pct: cleanNumber(pod.risk_budget_pct),
+    volatility_target_pct: cleanNumber(pod.volatility_target_pct),
+    max_drawdown_pct: cleanNumber(pod.max_drawdown_pct),
+    turnover_ceiling_pct: cleanNumber(pod.turnover_ceiling_pct),
+    approved_instruments: pod.approved_instruments.join(", "),
+    shutdown_criteria: pod.shutdown_criteria ?? "",
+    notes: pod.notes ?? "",
   };
 }
 
@@ -1131,58 +609,19 @@ function buildUpdatePayload(formState: PodFormState): StrategyPodUpdateInput {
     lifecycle_stage: formState.lifecycle_stage,
     capital_allocation_pct: numberOrZero(formState.capital_allocation_pct),
     risk_budget_pct: numberOrZero(formState.risk_budget_pct),
-    volatility_target_pct: nullableNumber(formState.volatility_target_pct),
-    max_drawdown_pct: nullableNumber(formState.max_drawdown_pct),
-    turnover_ceiling_pct: nullableNumber(formState.turnover_ceiling_pct),
-    approved_instruments: formState.approved_instruments
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
-    shutdown_criteria: formState.shutdown_criteria.trim() || null,
     notes: formState.notes.trim() || null,
   };
-}
-
-function recommendationAttention(recommendation: string): "action" | "hold" | "neutral" {
-  const lower = recommendation.toLowerCase();
-  if (
-    lower.includes("halt") ||
-    lower.includes("suspend") ||
-    lower.includes("reduce") ||
-    lower.includes("governance")
-  ) {
-    return "action";
-  }
-  if (lower.includes("hold") || lower.includes("maintain")) {
-    return "hold";
-  }
-  return "neutral";
-}
-
-function parseScore(value: string | null) {
-  if (value === null) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function compareScores(left: string | null, right: string | null) {
-  return (parseScore(left) ?? -1) - (parseScore(right) ?? -1);
 }
 
 function cleanNumber(value: string | null | undefined) {
   if (!value) return "";
   const number = Number(value);
-  if (!Number.isFinite(number)) return "";
-  return String(Number(number.toFixed(4)));
+  return Number.isFinite(number) ? String(Number(number.toFixed(4))) : "";
 }
 
 function numberOrZero(value: string) {
-  return nullableNumber(value) ?? "0";
-}
-
-function nullableNumber(value: string) {
   const trimmed = value.trim();
-  return trimmed ? trimmed : null;
+  return trimmed || "0";
 }
 
 function money(value: string) {
@@ -1190,13 +629,13 @@ function money(value: string) {
 }
 
 function pct(value: string | null) {
-  if (value === null) return "Pending";
+  if (value === null) return "—";
   return `${Number(value).toFixed(1)}%`;
 }
 
 function scoreText(value: string | null) {
-  if (value === null) return "Pending";
-  return `${Number(value).toFixed(0)}/100`;
+  if (value === null) return "—";
+  return `${Number(value).toFixed(0)}`;
 }
 
 function formatLabel(value: string) {
@@ -1214,34 +653,15 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 function categoryTone(value: string) {
   if (value === "alpha") return "good";
   if (value === "hedge") return "warn";
-  if (value === "treasury") return "neutral";
   return "neutral";
 }
 
 function liveScopeTone(value: string) {
   if (value === "yes") return "good";
-  if (value === "limited") return "warn";
-  if (value === "paper") return "warn";
+  if (value === "limited" || value === "paper") return "warn";
   return "neutral";
 }
 
@@ -1254,30 +674,12 @@ function riskTone(value: string) {
 function statusTone(value: string) {
   if (["active", "core_strategy"].includes(value)) return "good";
   if (["suspended", "retired"].includes(value)) return "bad";
-  if (["watch", "candidate", "paper_trading"].includes(value)) return "warn";
+  if (["watch", "candidate", "paper_trading", "probationary_capital"].includes(value)) return "warn";
   return "neutral";
 }
 
 function signalTone(value: string) {
   if (value === "live") return "good";
-  if (["warning", "pending"].includes(value)) return "warn";
+  if (value === "warning" || value === "pending") return "warn";
   return "neutral";
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" && value ? value : "Pending";
-}
-
-function listValue(value: unknown) {
-  if (!Array.isArray(value) || value.length === 0) return "Pending";
-  return value.map((item) => String(item)).join(", ");
-}
-
-function compactValue(value: unknown) {
-  if (value === null || value === undefined || value === "") return "Pending";
-  if (Array.isArray(value)) return value.map((item) => String(item)).join(", ") || "Pending";
-  if (typeof value === "object") {
-    return `${Object.keys(value).length} item${Object.keys(value).length === 1 ? "" : "s"}`;
-  }
-  return String(value);
 }
