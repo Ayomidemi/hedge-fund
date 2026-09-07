@@ -101,9 +101,39 @@ class OpportunityQueueTests(TestCase):
             notes=None,
             links=OpportunityLinks(),
             source_memo_id=None,
+            discovery_evidence={
+                "entry_plan": {
+                    "confirmed": True,
+                    "entry_zone": "10-11",
+                    "invalidation": "Break 9",
+                    "max_loss_pct_nav": "1",
+                }
+            },
         )
         self.assertIsNotNone(error)
         self.assertIn("pre-trade", error.lower())
+
+    def test_approved_requires_confirmed_entry_plan(self) -> None:
+        error = status_gate_error(
+            "approved",
+            thesis="A thesis",
+            research_question="Why?",
+            target_weight="3",
+            notes=None,
+            links=OpportunityLinks(
+                pre_trade=OpportunityRiskLink(
+                    id=uuid4(),
+                    decision="approve",
+                    risk_level="low",
+                    checked_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+                    linked=True,
+                )
+            ),
+            source_memo_id=None,
+            discovery_evidence={},
+        )
+        self.assertIsNotNone(error)
+        self.assertIn("entry", error.lower())
 
     def test_approved_requires_linked_pre_trade(self) -> None:
         error = status_gate_error(
@@ -122,6 +152,14 @@ class OpportunityQueueTests(TestCase):
                 )
             ),
             source_memo_id=None,
+            discovery_evidence={
+                "entry_plan": {
+                    "confirmed": True,
+                    "entry_zone": "10-11",
+                    "invalidation": "Break 9",
+                    "max_loss_pct_nav": "1",
+                }
+            },
         )
         self.assertIsNotNone(error)
         self.assertIn("link", error.lower())
@@ -135,6 +173,14 @@ class OpportunityQueueTests(TestCase):
             notes=None,
             links=OpportunityLinks(),
             source_memo_id="memo",
+            discovery_evidence={
+                "entry_plan": {
+                    "confirmed": True,
+                    "entry_zone": "10-11",
+                    "invalidation": "Break 9",
+                    "max_loss_pct_nav": "1",
+                }
+            },
         )
         self.assertIsNotNone(error)
         self.assertIn("target weight", error.lower())

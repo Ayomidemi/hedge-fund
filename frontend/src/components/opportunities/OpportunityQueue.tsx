@@ -242,6 +242,11 @@ export function OpportunityQueue({
       review_by: textValue(formData, "review_by") || undefined,
       notes: textValue(formData, "notes"),
       override_reason: textValue(formData, "override_reason") || undefined,
+      entry_zone: textValue(formData, "entry_zone") || undefined,
+      invalidation: textValue(formData, "invalidation") || undefined,
+      max_loss_pct_nav: textValue(formData, "max_loss_pct_nav") || undefined,
+      time_stop_sessions: numberValue(formData, "time_stop_sessions"),
+      thesis_breaker: textValue(formData, "thesis_breaker") || undefined,
     };
     const preTradeInput = textValue(formData, "pre_trade_check_id");
     if (preTradeInput || selectedOpportunity.pre_trade_risk_check_id) {
@@ -943,6 +948,50 @@ function OpportunityDetail({
                 />
               </Field>
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Entry zone">
+                <input
+                  name="entry_zone"
+                  defaultValue={entryPlanValue(opportunity, "entry_zone")}
+                  className={inputClassName}
+                  placeholder="Required for Candidate / Approved"
+                />
+              </Field>
+              <Field label="Invalidation / stop">
+                <input
+                  name="invalidation"
+                  defaultValue={entryPlanValue(opportunity, "invalidation")}
+                  className={inputClassName}
+                  placeholder="Required for Candidate / Approved"
+                />
+              </Field>
+              <Field label="Max loss % NAV">
+                <input
+                  name="max_loss_pct_nav"
+                  defaultValue={entryPlanValue(opportunity, "max_loss_pct_nav")}
+                  className={inputClassName}
+                  inputMode="decimal"
+                />
+              </Field>
+              <Field label="Time stop (sessions)">
+                <input
+                  name="time_stop_sessions"
+                  type="number"
+                  min={1}
+                  max={90}
+                  defaultValue={entryPlanValue(opportunity, "time_stop_sessions")}
+                  className={inputClassName}
+                />
+              </Field>
+            </div>
+            <Field label="Thesis breaker">
+              <input
+                name="thesis_breaker"
+                defaultValue={entryPlanValue(opportunity, "thesis_breaker")}
+                className={inputClassName}
+                placeholder="What kills the idea regardless of price?"
+              />
+            </Field>
             <Field label="Thesis">
               <textarea
                 name="thesis"
@@ -1070,6 +1119,21 @@ function textValue(formData: FormData, key: string) {
   const value = formData.get(key);
   if (typeof value !== "string") return "";
   return value.trim();
+}
+
+function numberValue(formData: FormData, key: string): number | undefined {
+  const raw = textValue(formData, key);
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function entryPlanValue(opportunity: Opportunity, key: string): string {
+  const evidence = opportunity.discovery_evidence || {};
+  const plan = evidence.entry_plan;
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return "";
+  const value = (plan as Record<string, unknown>)[key];
+  return value == null ? "" : String(value);
 }
 
 function formatDate(value: string) {

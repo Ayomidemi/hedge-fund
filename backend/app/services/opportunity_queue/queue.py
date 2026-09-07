@@ -232,7 +232,7 @@ async def create_opportunity(
         user,
         instrument=instrument,
         strategy_pod_code=payload.strategy_pod_code,
-        discovery_evidence={},
+        discovery_evidence=dict(payload.discovery_evidence or {}),
         source="memo" if source_memo is not None else "manual",
     )
     opportunity = Opportunity(
@@ -261,6 +261,7 @@ async def create_opportunity(
         review_by=payload.review_by,
         closed_at=now if status in CLOSED_STATUSES else None,
         notes=payload.notes,
+        discovery_evidence=dict(payload.discovery_evidence or {}),
         status_history=[_status_event(status, "Opportunity created.")],
     )
     session.add(opportunity)
@@ -278,6 +279,7 @@ async def create_opportunity(
         notes=opportunity.notes,
         links=links.get(opportunity.id) or OpportunityLinks(),
         source_memo_id=opportunity.source_memo_id,
+        discovery_evidence=opportunity.discovery_evidence,
     )
     if error:
         raise OpportunityValidationError(error)
@@ -326,6 +328,11 @@ async def update_opportunity(
     override_reason = updates.pop("override_reason", None)
     strategy_pod_code = updates.pop("strategy_pod_code", None)
     pre_trade_check_id = updates.pop("pre_trade_check_id", _UNSET)
+    entry_zone = updates.pop("entry_zone", _UNSET)
+    invalidation = updates.pop("invalidation", _UNSET)
+    max_loss_pct_nav = updates.pop("max_loss_pct_nav", _UNSET)
+    time_stop_sessions = updates.pop("time_stop_sessions", _UNSET)
+    thesis_breaker = updates.pop("thesis_breaker", _UNSET)
     previous_status = opportunity.status
     proposed_status = updates.get("status", previous_status)
 
@@ -349,6 +356,36 @@ async def update_opportunity(
             )
             opportunity.pre_trade_risk_check_id = pre_trade_check_id
 
+    if any(
+        value is not _UNSET
+        for value in (
+            entry_zone,
+            invalidation,
+            max_loss_pct_nav,
+            time_stop_sessions,
+            thesis_breaker,
+        )
+    ):
+        evidence = dict(opportunity.discovery_evidence or {})
+        plan = dict(evidence.get("entry_plan") or {})
+        if entry_zone is not _UNSET:
+            plan["entry_zone"] = entry_zone
+        if invalidation is not _UNSET:
+            plan["invalidation"] = invalidation
+        if max_loss_pct_nav is not _UNSET:
+            plan["max_loss_pct_nav"] = (
+                str(max_loss_pct_nav) if max_loss_pct_nav is not None else None
+            )
+        if time_stop_sessions is not _UNSET:
+            plan["time_stop_sessions"] = time_stop_sessions
+        if thesis_breaker is not _UNSET:
+            plan["thesis_breaker"] = thesis_breaker
+        if _entry_plan_is_complete(plan):
+            plan["confirmed"] = True
+            plan["status"] = "confirmed"
+        evidence["entry_plan"] = plan
+        opportunity.discovery_evidence = evidence
+
     for field_name, value in updates.items():
         if field_name == "thesis" and value is None:
             raise OpportunityValidationError("Opportunity thesis is required.")
@@ -363,6 +400,7 @@ async def update_opportunity(
         notes=opportunity.notes,
         links=links.get(opportunity.id) or OpportunityLinks(),
         source_memo_id=opportunity.source_memo_id,
+        discovery_evidence=opportunity.discovery_evidence,
     )
     if error and not override_reason:
         raise OpportunityValidationError(error)
@@ -527,6 +565,7 @@ def _opportunity_response(
         notes=opportunity.notes,
         links=resolved,
         source_memo_id=opportunity.source_memo_id,
+        discovery_evidence=opportunity.discovery_evidence,
         for_next=True,
     )
     return OpportunityResponse(
@@ -1067,6 +1106,7 @@ def status_gate_error(
     notes: str | None,
     links: OpportunityLinks,
     source_memo_id,
+    discovery_evidence: dict | None = None,
 ) -> str | None:
     blockers = status_blockers(
         status,
@@ -1076,6 +1116,7 @@ def status_gate_error(
         notes=notes,
         links=links,
         source_memo_id=source_memo_id,
+        discovery_evidence=discovery_evidence,
         for_next=False,
     )
     return blockers[0] if blockers else None
@@ -1091,6 +1132,7 @@ def status_blockers(
     links: OpportunityLinks,
     source_memo_id,
     for_next: bool,
+    discovery_evidence: dict | None = None,
 ) -> list[str]:
     status = NEXT_STATUS.get(status_or_current, status_or_current) if for_next else status_or_current
     blockers: list[str] = []
@@ -1104,7 +1146,15 @@ def status_blockers(
             blockers.append("Candidate requires a research question.")
         if target_weight is None:
             blockers.append("Candidate requires a target weight.")
+        if not _entry_plan_is_complete((discovery_evidence or {}).get("entry_plan")):
+            blockers.append(
+                "Candidate requires a confirmed entry zone, invalidation, and max loss."
+            )
     if status == "approved":
+        if not _entry_plan_is_complete((discovery_evidence or {}).get("entry_plan")):
+            blockers.append(
+                "Approved requires a confirmed entry zone, invalidation, and max loss."
+            )
         if links.pre_trade is None:
             blockers.append("Run a pre-trade risk check in Risk Centre before Approved.")
         elif not links.pre_trade.linked:
@@ -1120,6 +1170,23 @@ def status_blockers(
     if status == "post_mortem" and not (notes or "").strip():
         blockers.append("Write a close note before Post-Mortem.")
     return blockers
+
+
+def _entry_plan_is_complete(plan: object) -> bool:
+    if not isinstance(plan, dict):
+        return False
+    entry_zone = str(plan.get("entry_zone") or "").strip()
+    invalidation = str(plan.get("invalidation") or "").strip()
+    max_loss = plan.get("max_loss_pct_nav")
+    confirmed = bool(plan.get("confirmed"))
+    if not entry_zone or not invalidation or max_loss in (None, ""):
+        return False
+    try:
+        if Decimal(str(max_loss)) <= 0:
+            return False
+    except (InvalidOperation, ValueError):
+        return False
+    return confirmed
 
 
 def _decimal(value: object) -> Decimal | None:

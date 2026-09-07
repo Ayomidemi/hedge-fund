@@ -128,12 +128,32 @@ class TickerVerdictContextResponse(BaseModel):
 class TickerTriageEntryPlan(BaseModel):
     status: str
     capital_blocked: bool = False
+    confirmed: bool = False
     entry_zone: str | None = None
     invalidation: str | None = None
     max_loss_pct_nav: Decimal | None = None
     time_stop_sessions: int | None = None
+    thesis_breaker: str | None = None
     chase_note: str | None = None
     notes: list[str] = Field(default_factory=list)
+    confirmed_at: datetime | None = None
+
+
+class TickerTriageEntryPlanConfirm(BaseModel):
+    entry_zone: str = Field(min_length=1, max_length=255)
+    invalidation: str = Field(min_length=1, max_length=512)
+    max_loss_pct_nav: Decimal = Field(gt=0, le=Decimal("10"))
+    time_stop_sessions: int = Field(default=10, ge=1, le=90)
+    thesis_breaker: str | None = Field(default=None, max_length=512)
+    chase_note: str | None = Field(default=None, max_length=512)
+
+    @field_validator("entry_zone", "invalidation", "thesis_breaker", "chase_note")
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class TickerVerdictResponse(BaseModel):

@@ -394,12 +394,18 @@ export type OpportunityCreateInput = {
   target_weight?: string;
   review_by?: string;
   notes?: string;
+  discovery_evidence?: Record<string, unknown>;
 };
 
 export type OpportunityUpdateInput = Partial<
-  Omit<OpportunityCreateInput, "source_memo_id" | "instrument">
+  Omit<OpportunityCreateInput, "source_memo_id" | "instrument" | "discovery_evidence">
 > & {
   override_reason?: string;
+  entry_zone?: string;
+  invalidation?: string;
+  max_loss_pct_nav?: string;
+  time_stop_sessions?: number;
+  thesis_breaker?: string;
 };
 
 export type RiskLimit = {
@@ -735,12 +741,24 @@ export type TickerDesk = {
 export type TickerTriageEntryPlan = {
   status: string;
   capital_blocked: boolean;
+  confirmed?: boolean;
   entry_zone: string | null;
   invalidation: string | null;
   max_loss_pct_nav: string | null;
   time_stop_sessions: number | null;
+  thesis_breaker?: string | null;
   chase_note: string | null;
   notes: string[];
+  confirmed_at?: string | null;
+};
+
+export type TickerTriageEntryPlanConfirmInput = {
+  entry_zone: string;
+  invalidation: string;
+  max_loss_pct_nav: string;
+  time_stop_sessions?: number;
+  thesis_breaker?: string;
+  chase_note?: string;
 };
 
 export type TickerVerdict = {
@@ -1730,6 +1748,19 @@ export function createTickerTriage(
       query ? `?${query}` : ""
     }`,
     {},
+    options,
+  );
+}
+
+export function confirmTickerTriageEntryPlan(
+  ticker: string,
+  triageRunId: string,
+  payload: TickerTriageEntryPlanConfirmInput,
+  options?: ApiRequestOptions,
+) {
+  return postApi<TickerVerdict, TickerTriageEntryPlanConfirmInput>(
+    `/api/ticker-intelligence/${encodeURIComponent(ticker)}/triage/${encodeURIComponent(triageRunId)}/entry-plan`,
+    payload,
     options,
   );
 }

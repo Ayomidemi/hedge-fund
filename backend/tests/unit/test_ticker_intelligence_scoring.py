@@ -415,6 +415,82 @@ class TickerTriageTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.entry_plan.status if response.entry_plan else None, "invalid_chase")
 
 
+class TriageDecisionDiscriminationTests(TestCase):
+    def test_news_alone_does_not_force_research_on_mediocre_capital(self) -> None:
+        from app.api.schemas.ticker_intelligence import TickerVerdictContextResponse
+        from app.services.ticker_intelligence.verdict import _entry_plan, _triage_decision
+
+        scorecard = score_ticker(
+            TickerMetricsInput(
+                pe_ratio=Decimal("28"),
+                forward_pe=Decimal("26"),
+                revenue_growth_pct=Decimal("2"),
+                earnings_growth_pct=Decimal("1"),
+                free_cash_flow_yield_pct=Decimal("1"),
+                net_margin_pct=Decimal("4"),
+                debt_to_equity=Decimal("1.8"),
+                price_vs_200d_pct=Decimal("-5"),
+                relative_strength_6m_pct=Decimal("-3"),
+                volatility_30d_pct=Decimal("28"),
+            ),
+            asset_class="equity",
+        )
+        context = TickerVerdictContextResponse(latest_news_title="Company in the news")
+        plan = _entry_plan(scorecard, None, context)
+        self.assertEqual(_triage_decision(scorecard, context, plan), "watch")
+
+    def test_material_dislocation_with_solid_capital_is_research(self) -> None:
+        from app.api.schemas.ticker_intelligence import TickerVerdictContextResponse
+        from app.services.ticker_intelligence.verdict import _entry_plan, _triage_decision
+
+        scorecard = score_ticker(
+            TickerMetricsInput(
+                current_price=Decimal("10"),
+                pe_ratio=Decimal("14"),
+                forward_pe=Decimal("12"),
+                revenue_growth_pct=Decimal("10"),
+                earnings_growth_pct=Decimal("12"),
+                free_cash_flow_yield_pct=Decimal("5"),
+                net_margin_pct=Decimal("18"),
+                debt_to_equity=Decimal("0.5"),
+                price_vs_200d_pct=Decimal("-33"),
+                relative_strength_6m_pct=Decimal("-28"),
+                volatility_30d_pct=Decimal("70"),
+            ),
+            asset_class="equity",
+        )
+        context = TickerVerdictContextResponse(
+            radar_state="falling",
+            radar_change_pct=Decimal("-33"),
+        )
+        plan = _entry_plan(scorecard, Decimal("10"), context)
+        self.assertEqual(_triage_decision(scorecard, context, plan), "research")
+
+    def test_hostile_timing_without_dislocation_stays_watch(self) -> None:
+        from app.api.schemas.ticker_intelligence import TickerVerdictContextResponse
+        from app.services.ticker_intelligence.verdict import _entry_plan, _triage_decision
+
+        scorecard = score_ticker(
+            TickerMetricsInput(
+                current_price=Decimal("10"),
+                pe_ratio=Decimal("14"),
+                forward_pe=Decimal("12"),
+                revenue_growth_pct=Decimal("10"),
+                earnings_growth_pct=Decimal("12"),
+                free_cash_flow_yield_pct=Decimal("5"),
+                net_margin_pct=Decimal("18"),
+                debt_to_equity=Decimal("0.5"),
+                price_vs_200d_pct=Decimal("-33"),
+                relative_strength_6m_pct=Decimal("-28"),
+                volatility_30d_pct=Decimal("70"),
+            ),
+            asset_class="equity",
+        )
+        context = TickerVerdictContextResponse()
+        plan = _entry_plan(scorecard, Decimal("10"), context)
+        self.assertEqual(_triage_decision(scorecard, context, plan), "watch")
+
+
 class FakeTriageSession:
     def __init__(self) -> None:
         self.added = []

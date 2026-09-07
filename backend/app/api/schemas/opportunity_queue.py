@@ -38,6 +38,7 @@ class OpportunityCreate(BaseModel):
     target_weight: Decimal | None = Field(default=None, ge=0, le=100)
     review_by: date | None = None
     notes: str | None = None
+    discovery_evidence: dict = Field(default_factory=dict)
 
     @field_validator("thesis", "research_question", "next_action", "notes", "strategy_pod_code")
     @classmethod
@@ -63,6 +64,11 @@ class OpportunityUpdate(BaseModel):
     review_by: date | None = None
     notes: str | None = None
     override_reason: str | None = None
+    entry_zone: str | None = None
+    invalidation: str | None = None
+    max_loss_pct_nav: Decimal | None = Field(default=None, gt=0, le=Decimal("10"))
+    time_stop_sessions: int | None = Field(default=None, ge=1, le=90)
+    thesis_breaker: str | None = None
 
     @field_validator(
         "thesis",
@@ -71,6 +77,9 @@ class OpportunityUpdate(BaseModel):
         "notes",
         "override_reason",
         "strategy_pod_code",
+        "entry_zone",
+        "invalidation",
+        "thesis_breaker",
     )
     @classmethod
     def empty_text_to_none(cls, value: str | None) -> str | None:

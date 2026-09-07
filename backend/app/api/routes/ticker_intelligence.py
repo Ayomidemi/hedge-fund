@@ -31,6 +31,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerMemoSummaryResponse,
     TickerPrefillResponse,
     TickerSuggestionResponse,
+    TickerTriageEntryPlanConfirm,
     TickerVerdictResponse,
     TrainingLabelGenerateCreate,
     TrainingLabelResponse,
@@ -62,6 +63,7 @@ from app.services.ticker_intelligence.market_data import (
 )
 from app.services.ticker_intelligence.verdict import (
     build_ticker_verdict,
+    confirm_ticker_triage_entry_plan,
     create_ticker_triage,
 )
 from app.services.ticker_intelligence.ml_training import (
@@ -460,6 +462,37 @@ async def create_ticker_triage_run(
     except MarketDataUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/{ticker}/triage/{triage_run_id}/entry-plan",
+    response_model=TickerVerdictResponse,
+)
+async def confirm_ticker_triage_entry_plan_run(
+    ticker: str,
+    triage_run_id: UUID,
+    payload: TickerTriageEntryPlanConfirm,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+    session: AsyncSession = Depends(get_session),
+) -> TickerVerdictResponse:
+    try:
+        return await confirm_ticker_triage_entry_plan(
+            session,
+            ticker,
+            triage_run_id,
+            payload,
+            user=user,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
 

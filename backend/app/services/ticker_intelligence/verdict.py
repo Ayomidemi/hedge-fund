@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.schemas.ticker_intelligence import (
     TickerScoreResponse,
     TickerTriageEntryPlan,
+    TickerTriageEntryPlanConfirm,
     TickerVerdictContextResponse,
     TickerVerdictResponse,
 )
@@ -26,9 +30,19 @@ from app.services.ticker_intelligence.scoring import TickerScore, TickerScorecar
 CHASE_UP_PCT = Decimal("15")
 HOSTILE_TIMING = Decimal("35")
 WEAK_CAPITAL = Decimal("35")
-STRONG_CAPITAL = Decimal("70")
-RESEARCH_CAPITAL = Decimal("55")
+# Middling capital stays Watch unless a material dislocation justifies dig-in.
+WATCH_CAPITAL_CEILING = Decimal("55")
+RESEARCH_CAPITAL = Decimal("65")
+STRONG_CAPITAL = Decimal("75")
 MIN_CAPITAL_COVERAGE = Decimal("40")
+MATERIAL_MOVE_PCT = Decimal("8")
+DISLOCATION_STATES = {
+    "falling",
+    "lurching_down",
+    "selloff",
+    "spiking",
+    "lurching_up",
+}
 
 
 async def build_ticker_verdict(
@@ -137,6 +151,179 @@ async def create_ticker_triage(
     await session.commit()
 
     return response.model_copy(update={"triage_run_id": triage_id})
+
+
+async def confirm_ticker_triage_entry_plan(
+    session: AsyncSession,
+    ticker: str,
+    triage_run_id: UUID,
+    payload: TickerTriageEntryPlanConfirm,
+    *,
+    user: AuthenticatedUser,
+) -> TickerVerdictResponse:
+    triage = await session.scalar(
+        select(TickerTriageRun)
+        .options(selectinload(TickerTriageRun.instrument))
+        .where(TickerTriageRun.id == triage_run_id)
+        .where(TickerTriageRun.owner_user_id == user.id)
+    )
+    if triage is None:
+        raise LookupError("Triage run was not found.")
+    if triage.instrument.ticker.upper() != ticker.strip().upper():
+        raise LookupError("Triage run does not match this ticker.")
+
+    context = dict(triage.context or {})
+    existing_raw = context.get("entry_plan")
+    existing = (
+        TickerTriageEntryPlan.model_validate(existing_raw)
+        if isinstance(existing_raw, dict)
+        else TickerTriageEntryPlan(status="suggested")
+    )
+
+    if triage.triage_decision in {"hard_pass", "setup_invalid", "reject"}:
+        raise ValueError(
+            "Hard pass and chase setups cannot confirm an entry plan for capital work."
+        )
+
+    confirmed = TickerTriageEntryPlan(
+        status="confirmed",
+        capital_blocked=False,
+        confirmed=True,
+        entry_zone=payload.entry_zone,
+        invalidation=payload.invalidation,
+        max_loss_pct_nav=payload.max_loss_pct_nav,
+        time_stop_sessions=payload.time_stop_sessions,
+        thesis_breaker=payload.thesis_breaker,
+        chase_note=payload.chase_note or existing.chase_note,
+        notes=list(
+            dict.fromkeys(
+                [
+                    *existing.notes,
+                    "Entry/exit plan confirmed by PM.",
+                ]
+            )
+        ),
+        confirmed_at=datetime.now(timezone.utc),
+    )
+    context["entry_plan"] = confirmed.model_dump(mode="json")
+    context["capital_blocked"] = False
+    context["setup_status"] = "confirmed"
+    triage.context = context
+    triage.next_action = (
+        "Entry/exit confirmed. Deep research or queue with size still gated by thesis quality."
+    )
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="research",
+        event="ticker_triage_entry_plan_confirmed",
+        message=f"{triage.instrument.ticker} triage entry/exit plan confirmed.",
+        context={
+            "ticker": triage.instrument.ticker,
+            "triage_run_id": str(triage.id),
+            "entry_zone": confirmed.entry_zone,
+            "invalidation": confirmed.invalidation,
+            "max_loss_pct_nav": str(confirmed.max_loss_pct_nav),
+        },
+    )
+    await session.commit()
+    return _verdict_from_persisted_triage(triage)
+
+
+def _verdict_from_persisted_triage(triage: TickerTriageRun) -> TickerVerdictResponse:
+    from app.api.schemas.operating_core import InstrumentCreate
+    from app.api.schemas.ticker_intelligence import TickerMetricsInput
+
+    context_raw = triage.context if isinstance(triage.context, dict) else {}
+    entry_raw = context_raw.get("entry_plan")
+    entry_plan = (
+        TickerTriageEntryPlan.model_validate(entry_raw)
+        if isinstance(entry_raw, dict)
+        else None
+    )
+    desk_context = {
+        key: context_raw.get(key)
+        for key in (
+            "on_watchlist",
+            "has_position",
+            "opportunity_status",
+            "opportunity_priority",
+            "radar_change_pct",
+            "radar_state",
+            "latest_news_title",
+            "pre_trade_decision",
+            "pre_trade_risk_level",
+            "memo_count",
+        )
+    }
+    metrics = TickerMetricsInput.model_validate(triage.metrics or {})
+    instrument = InstrumentCreate(
+        ticker=triage.instrument.ticker,
+        name=triage.instrument.name,
+        asset_class=triage.instrument.asset_class,
+        exchange=triage.instrument.exchange,
+        currency=triage.instrument.currency,
+        sector=triage.instrument.sector,
+        industry=triage.instrument.industry,
+    )
+    capital_score = _optional_decimal(context_raw.get("capital_score"))
+    timing_score = _optional_decimal(context_raw.get("timing_score"))
+    hard_blockers = context_raw.get("hard_blockers")
+    if not isinstance(hard_blockers, list):
+        hard_blockers = []
+
+    return TickerVerdictResponse(
+        triage_run_id=triage.id,
+        ticker=triage.instrument.ticker,
+        name=triage.instrument.name,
+        instrument=instrument,
+        metrics=metrics,
+        market=triage.market,
+        generated_at=triage.generated_at,
+        research_priority=triage.research_priority,
+        initial_view=triage.initial_view,
+        triage_decision=triage.triage_decision,
+        action_label=triage.action_label,
+        confidence_score=triage.confidence_score,
+        conviction_score=triage.conviction_score,
+        composite_score=triage.composite_score,
+        capital_score=capital_score,
+        timing_score=timing_score,
+        capital_coverage=_optional_decimal(context_raw.get("capital_coverage"))
+        or Decimal("0.00"),
+        timing_coverage=_optional_decimal(context_raw.get("timing_coverage"))
+        or Decimal("0.00"),
+        hard_blockers=[str(item) for item in hard_blockers],
+        setup_status=str(context_raw.get("setup_status") or (entry_plan.status if entry_plan else None)),
+        capital_blocked=bool(context_raw.get("capital_blocked")),
+        entry_plan=entry_plan,
+        recommended_weight=triage.recommended_weight,
+        top_drivers=list(triage.top_drivers or []),
+        top_blockers=list(triage.top_blockers or []),
+        why_now=triage.why_now,
+        next_action=triage.next_action,
+        warnings=list(triage.warnings or []),
+        source_reference=triage.source_reference,
+        provider=triage.provider,
+        data_timestamp=triage.data_timestamp,
+        context=TickerVerdictContextResponse.model_validate(
+            {key: value for key, value in desk_context.items() if value is not None}
+        ),
+        scorecard=[
+            TickerScoreResponse.model_validate(item)
+            for item in (triage.scorecard or [])
+            if isinstance(item, dict)
+        ],
+    )
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
 
 
 async def _compose_ticker_verdict(
@@ -268,28 +455,39 @@ def _triage_decision(
     capital = scorecard.capital_score
     coverage = scorecard.capital_coverage
     timing = scorecard.timing_score
-    research_signal = _has_research_signal(context)
+    dislocation = _material_dislocation(context)
+    timing_ok = timing is None or timing >= Decimal("45")
+    timing_hostile = timing is not None and timing < HOSTILE_TIMING
 
+    # Thin capital data: only dig in on a real dislocation; otherwise Watch.
     if coverage < MIN_CAPITAL_COVERAGE or capital is None:
-        if research_signal:
-            return "research"
-        return "watch"
+        return "research" if dislocation else "watch"
 
     if capital < WEAK_CAPITAL:
         return "hard_pass"
 
-    if timing is not None and timing < HOSTILE_TIMING and research_signal:
-        # Dislocation: worth research, not a capital green light.
-        return "research"
+    # Known-but-mediocre capital is Watch even if news exists.
+    if capital < WATCH_CAPITAL_CEILING:
+        return "watch"
 
-    if capital >= STRONG_CAPITAL and (
-        timing is None or timing >= Decimal("45")
-    ):
+    # Strong capital + clean-enough timing → candidate.
+    if capital >= STRONG_CAPITAL and timing_ok:
         return "candidate"
 
-    if capital >= RESEARCH_CAPITAL or research_signal:
+    # Research is earned: solid capital with workable timing, or solid capital
+    # on a material dislocation (hostile tape alone is not enough).
+    if capital >= RESEARCH_CAPITAL:
+        if timing_ok:
+            return "research"
+        if dislocation:
+            return "research"
+        if timing_hostile:
+            return "watch"
         return "research"
 
+    # 55–65 capital: only research on dislocation; else Watch.
+    if dislocation:
+        return "research"
     return "watch"
 
 
@@ -388,7 +586,7 @@ def _research_priority(
         return "high"
     if triage_decision in {"candidate", "research"}:
         return "medium"
-    if _has_research_signal(context):
+    if _material_dislocation(context) and triage_decision != "watch":
         return "medium"
     return "low"
 
@@ -507,15 +705,10 @@ def _warnings(
     return list(dict.fromkeys(warnings))
 
 
-def _has_research_signal(context: TickerVerdictContextResponse) -> bool:
-    if context.radar_state:
+def _material_dislocation(context: TickerVerdictContextResponse) -> bool:
+    """True only for a real anomaly — not 'any news' or 'any radar row'."""
+    change = context.radar_change_pct
+    if change is not None and abs(change) >= MATERIAL_MOVE_PCT:
         return True
-    if context.latest_news_title:
-        return True
-    if context.has_position:
-        return True
-    if context.radar_change_pct is not None and abs(context.radar_change_pct) >= Decimal(
-        "5"
-    ):
-        return True
-    return False
+    state = (context.radar_state or "").strip().lower()
+    return state in DISLOCATION_STATES

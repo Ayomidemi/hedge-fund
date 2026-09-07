@@ -13,6 +13,7 @@ import {
   createTickerAIDraft,
   createTickerAnalysis,
   createTickerTriage,
+  confirmTickerTriageEntryPlan,
   getTickerDesk,
   getTickerMemo,
   getTickerMLReport,
@@ -876,6 +877,7 @@ function QuickTriageHome({
         desk={desk}
         verdict={verdict}
         onDeskChange={setDesk}
+        onVerdictChange={setVerdict}
         onNewAnalysis={onNewAnalysis}
         onOpenTicker={onOpenTicker}
       />
@@ -1067,6 +1069,7 @@ function QuickTriageSection({
         desk={desk}
         verdict={verdict}
         onDeskChange={onDeskChange}
+        onVerdictChange={setVerdict}
         onNewAnalysis={onNewAnalysis}
       />
     </section>
@@ -1077,12 +1080,14 @@ function QuickTriageResult({
   desk,
   verdict,
   onDeskChange,
+  onVerdictChange,
   onNewAnalysis,
   onOpenTicker,
 }: {
   desk: TickerDesk | null;
   verdict: TickerVerdict | null;
   onDeskChange?: (desk: TickerDesk) => void;
+  onVerdictChange?: (verdict: TickerVerdict) => void;
   onNewAnalysis: (prefill: TickerPrefill) => void;
   onOpenTicker?: (ticker: string) => void;
 }) {
@@ -1147,7 +1152,30 @@ function QuickTriageResult({
         />
       </div>
 
-      {entryPlan ? <EntryPlanCard plan={entryPlan} /> : null}
+      {entryPlan && verdict?.triage_run_id && onVerdictChange ? (
+        <EntryPlanEditor
+          plan={entryPlan}
+          ticker={verdict.ticker}
+          triageRunId={verdict.triage_run_id}
+          confirmBlocked={
+            verdict.triage_decision === "hard_pass" ||
+            verdict.triage_decision === "setup_invalid" ||
+            verdict.triage_decision === "reject"
+          }
+          onConfirmed={async (next) => {
+            onVerdictChange(next);
+            if (onDeskChange) {
+              try {
+                onDeskChange(await getTickerDesk(next.ticker));
+              } catch {
+                // Desk refresh is best-effort after confirm.
+              }
+            }
+          }}
+        />
+      ) : entryPlan ? (
+        <EntryPlanReadonly plan={entryPlan} />
+      ) : null}
 
       {verdict ? (
         <>
@@ -1199,7 +1227,7 @@ function QuickTriageResult({
   );
 }
 
-function EntryPlanCard({ plan }: { plan: NonNullable<TickerVerdict["entry_plan"]> }) {
+function EntryPlanReadonly({ plan }: { plan: NonNullable<TickerVerdict["entry_plan"]> }) {
   return (
     <section className="mt-5 rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
       <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -1214,19 +1242,151 @@ function EntryPlanCard({ plan }: { plan: NonNullable<TickerVerdict["entry_plan"]
           value={plan.max_loss_pct_nav ? `${plan.max_loss_pct_nav}% NAV` : "—"}
         />
       </div>
-      {plan.chase_note ? (
-        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{plan.chase_note}</p>
-      ) : null}
-      {plan.notes.length > 0 ? (
-        <div className="mt-2 space-y-1">
-          {plan.notes.map((note) => (
-            <p key={note} className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              {note}
-            </p>
-          ))}
-        </div>
-      ) : null}
+      {plan.confirmed ? (
+        <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">Confirmed</p>
+      ) : (
+        <p className="mt-3 text-sm text-zinc-500">Suggested only — confirm after a fresh triage run.</p>
+      )}
     </section>
+  );
+}
+
+function EntryPlanEditor({
+  plan,
+  ticker,
+  triageRunId,
+  confirmBlocked,
+  onConfirmed,
+}: {
+  plan: NonNullable<TickerVerdict["entry_plan"]>;
+  ticker: string;
+  triageRunId: string;
+  confirmBlocked: boolean;
+  onConfirmed: (verdict: TickerVerdict) => void | Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const confirmed = Boolean(plan.confirmed);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (confirmBlocked) {
+      toast.error("Hard pass / chase setups cannot confirm an entry plan.");
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const entryZone = String(form.get("entry_zone") || "").trim();
+    const invalidation = String(form.get("invalidation") || "").trim();
+    const maxLoss = String(form.get("max_loss_pct_nav") || "").trim();
+    const timeStop = Number(form.get("time_stop_sessions") || "10");
+    const thesisBreaker = String(form.get("thesis_breaker") || "").trim();
+    if (!entryZone || !invalidation || !maxLoss) {
+      toast.error("Entry zone, invalidation, and max loss are required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const next = await confirmTickerTriageEntryPlan(ticker, triageRunId, {
+        entry_zone: entryZone,
+        invalidation,
+        max_loss_pct_nav: maxLoss,
+        time_stop_sessions: Number.isFinite(timeStop) ? timeStop : 10,
+        thesis_breaker: thesisBreaker || undefined,
+        chase_note: plan.chase_note || undefined,
+      });
+      await onConfirmed(next);
+      toast.success("Entry/exit plan confirmed.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not confirm entry plan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(event) => void handleSubmit(event)}
+      className="mt-5 space-y-3 rounded-lg border border-zinc-100 p-4 dark:border-zinc-900"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Entry / Exit Plan
+        </p>
+        <span className="text-xs text-zinc-500">
+          {confirmed ? "Confirmed" : "Suggested — edit and confirm before queue"}
+        </span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block text-sm">
+          <span className="text-xs uppercase tracking-wide text-zinc-500">Entry zone</span>
+          <input
+            name="entry_zone"
+            required
+            defaultValue={plan.entry_zone ?? ""}
+            className={`${inputClassName} mt-1`}
+            disabled={confirmBlocked}
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-xs uppercase tracking-wide text-zinc-500">Invalidation / stop</span>
+          <input
+            name="invalidation"
+            required
+            defaultValue={plan.invalidation ?? ""}
+            className={`${inputClassName} mt-1`}
+            disabled={confirmBlocked}
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-xs uppercase tracking-wide text-zinc-500">Max loss % NAV</span>
+          <input
+            name="max_loss_pct_nav"
+            required
+            inputMode="decimal"
+            defaultValue={plan.max_loss_pct_nav ?? "1"}
+            className={`${inputClassName} mt-1`}
+            disabled={confirmBlocked}
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-xs uppercase tracking-wide text-zinc-500">Time stop (sessions)</span>
+          <input
+            name="time_stop_sessions"
+            type="number"
+            min={1}
+            max={90}
+            defaultValue={plan.time_stop_sessions ?? 10}
+            className={`${inputClassName} mt-1`}
+            disabled={confirmBlocked}
+          />
+        </label>
+      </div>
+      <label className="block text-sm">
+        <span className="text-xs uppercase tracking-wide text-zinc-500">Thesis breaker</span>
+        <input
+          name="thesis_breaker"
+          defaultValue={plan.thesis_breaker ?? ""}
+          placeholder="What kills the idea regardless of price?"
+          className={`${inputClassName} mt-1`}
+          disabled={confirmBlocked}
+        />
+      </label>
+      {plan.chase_note ? (
+        <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">{plan.chase_note}</p>
+      ) : null}
+      <button
+        type="submit"
+        disabled={saving || confirmBlocked}
+        className={buttonClassName}
+      >
+        {confirmBlocked
+          ? "Confirm blocked"
+          : saving
+            ? "Saving…"
+            : confirmed
+              ? "Update confirmed plan"
+              : "Confirm entry/exit plan"}
+      </button>
+    </form>
   );
 }
 
@@ -1247,10 +1407,12 @@ function TriageActions({
   const queued = Boolean(desk?.opportunity);
   const watched = Boolean(desk?.on_watchlist);
   const capitalBlocked = verdict.capital_blocked;
+  const planConfirmed = Boolean(verdict.entry_plan?.confirmed);
   const queueBlocked =
     verdict.triage_decision === "hard_pass" ||
     verdict.triage_decision === "setup_invalid" ||
-    verdict.triage_decision === "reject";
+    verdict.triage_decision === "reject" ||
+    !planConfirmed;
 
   async function refreshDesk() {
     if (!onDeskChange) return;
@@ -1280,7 +1442,11 @@ function TriageActions({
 
   async function handleOpportunity() {
     if (queueBlocked) {
-      toast.error("Hard pass / chase setups cannot move to the queue.");
+      toast.error(
+        planConfirmed
+          ? "Hard pass / chase setups cannot move to the queue."
+          : "Confirm entry zone, invalidation, and max loss before queueing.",
+      );
       return;
     }
     setPending("opportunity");
@@ -1318,20 +1484,24 @@ function TriageActions({
         disabled={queued || queueBlocked || pending !== null}
         className={secondaryButtonClassName}
         title={
-          queueBlocked
-            ? "Hard pass and chase setups stay out of the queue."
-            : capitalBlocked
-              ? "You can queue for research, but size stays blocked until entry rules are clear."
-              : undefined
+          !planConfirmed
+            ? "Confirm the entry/exit plan before moving to the queue."
+            : queueBlocked
+              ? "Hard pass and chase setups stay out of the queue."
+              : capitalBlocked
+                ? "You can queue for research, but size stays blocked until entry rules are clear."
+                : undefined
         }
       >
         {queued
           ? "In Queue"
-          : queueBlocked
-            ? "Queue blocked"
-            : pending === "opportunity"
-              ? "Saving..."
-              : "Move to Queue"}
+          : !planConfirmed
+            ? "Confirm plan first"
+            : queueBlocked
+              ? "Queue blocked"
+              : pending === "opportunity"
+                ? "Saving..."
+                : "Move to Queue"}
       </button>
       {onOpenTicker ? (
         <button
@@ -2478,6 +2648,22 @@ function buildOpportunityFromVerdict(verdict: TickerVerdict): OpportunityCreateI
     time_horizon: "6-18 months",
     conviction_score: verdict.conviction_score,
     target_weight: verdict.capital_blocked ? "0" : verdict.recommended_weight,
+    discovery_evidence: plan
+      ? {
+          source: "quick_triage",
+          triage_run_id: verdict.triage_run_id,
+          entry_plan: {
+            status: plan.status,
+            confirmed: Boolean(plan.confirmed),
+            entry_zone: plan.entry_zone,
+            invalidation: plan.invalidation,
+            max_loss_pct_nav: plan.max_loss_pct_nav,
+            time_stop_sessions: plan.time_stop_sessions,
+            thesis_breaker: plan.thesis_breaker ?? null,
+            chase_note: plan.chase_note,
+          },
+        }
+      : { source: "quick_triage", triage_run_id: verdict.triage_run_id },
     notes: [
       `Quick Triage: ${formatLabel(verdict.triage_decision)}`,
       `Capital: ${verdict.capital_score ?? "n/a"} · Timing: ${verdict.timing_score ?? "n/a"}`,
@@ -2485,6 +2671,7 @@ function buildOpportunityFromVerdict(verdict: TickerVerdict): OpportunityCreateI
       plan?.entry_zone ? `Entry zone: ${plan.entry_zone}` : null,
       plan?.invalidation ? `Invalidation: ${plan.invalidation}` : null,
       plan?.max_loss_pct_nav ? `Max loss: ${plan.max_loss_pct_nav}% NAV` : null,
+      plan?.thesis_breaker ? `Thesis breaker: ${plan.thesis_breaker}` : null,
       plan?.chase_note ?? null,
       `Provider: ${verdict.provider}`,
       `Data timestamp: ${formatDateTime(verdict.data_timestamp)}`,
