@@ -11,7 +11,7 @@ OpportunityStatus = Literal[
     "discovered",
     "screening",
     "research",
-    "watchlist",
+    "parked",
     "candidate",
     "approved",
     "active_position",
@@ -25,6 +25,8 @@ OpportunityPriority = Literal["low", "medium", "high", "urgent"]
 class OpportunityCreate(BaseModel):
     source_memo_id: UUID | None = None
     instrument: InstrumentCreate | None = None
+    pre_trade_check_id: UUID | None = None
+    strategy_pod_code: str | None = None
     status: OpportunityStatus = "discovered"
     priority: OpportunityPriority = "medium"
     thesis: str | None = None
@@ -37,7 +39,7 @@ class OpportunityCreate(BaseModel):
     review_by: date | None = None
     notes: str | None = None
 
-    @field_validator("thesis", "research_question", "next_action", "notes")
+    @field_validator("thesis", "research_question", "next_action", "notes", "strategy_pod_code")
     @classmethod
     def empty_text_to_none(cls, value: str | None) -> str | None:
         if value is None:
@@ -47,8 +49,10 @@ class OpportunityCreate(BaseModel):
 
 
 class OpportunityUpdate(BaseModel):
+    pre_trade_check_id: UUID | None = None
     status: OpportunityStatus | None = None
     priority: OpportunityPriority | None = None
+    strategy_pod_code: str | None = None
     thesis: str | None = None
     research_question: str | None = None
     next_action: str | None = None
@@ -61,7 +65,12 @@ class OpportunityUpdate(BaseModel):
     override_reason: str | None = None
 
     @field_validator(
-        "thesis", "research_question", "next_action", "notes", "override_reason"
+        "thesis",
+        "research_question",
+        "next_action",
+        "notes",
+        "override_reason",
+        "strategy_pod_code",
     )
     @classmethod
     def empty_text_to_none(cls, value: str | None) -> str | None:
@@ -94,6 +103,7 @@ class OpportunityRiskLink(BaseModel):
     decision: str
     risk_level: str
     checked_at: datetime
+    linked: bool = True
 
 
 class OpportunityPositionLink(BaseModel):
@@ -122,11 +132,21 @@ class OpportunityLinks(BaseModel):
     blockers: list[str] = Field(default_factory=list)
 
 
+class OpportunityStrategyPodLink(BaseModel):
+    id: UUID
+    code: str
+    name: str
+    pod_category: str
+
+
 class OpportunityResponse(BaseModel):
     id: UUID
     instrument: InstrumentResponse
     source_memo_id: UUID | None
     source_recommendation_id: UUID | None
+    strategy_pod_id: UUID | None = None
+    pre_trade_risk_check_id: UUID | None = None
+    strategy_pod: OpportunityStrategyPodLink | None = None
     discovered_at: datetime
     status: str
     priority: str
@@ -162,6 +182,7 @@ class OpportunityCandidateResponse(BaseModel):
     action: str | None
     composite_score: Decimal | None
     confidence_score: Decimal | None
+    suggested_strategy_pod_code: str = "fundamental_equity"
 
 
 class OpportunityQueueSummaryResponse(BaseModel):
@@ -180,6 +201,7 @@ class OpportunityQueueResponse(BaseModel):
     opportunities: list[OpportunityResponse]
     candidates: list[OpportunityCandidateResponse]
     status_order: list[str]
+    strategy_pods: list[OpportunityStrategyPodLink] = Field(default_factory=list)
     page: int = 1
     page_size: int = 20
     total: int = 0

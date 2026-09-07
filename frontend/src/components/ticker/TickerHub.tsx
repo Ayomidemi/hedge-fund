@@ -35,6 +35,7 @@ const queueStatusLabels: Record<string, string> = {
   screening: "Screening",
   research: "Research",
   watchlist: "Hold in queue",
+  parked: "Parked",
   candidate: "Candidate",
   approved: "Approved",
   active_position: "Active Position",

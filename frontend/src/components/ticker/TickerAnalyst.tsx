@@ -52,6 +52,7 @@ const queueStatusLabels: Record<string, string> = {
   screening: "Screening",
   research: "Research",
   watchlist: "Hold in queue",
+  parked: "Parked",
   candidate: "Candidate",
   approved: "Approved",
   active_position: "Active Position",
@@ -822,8 +823,11 @@ function QuickTriageHome({
               Quick Triage
             </p>
             <h3 className="mt-1 text-2xl font-semibold tracking-normal">
-              First-pass ticker decision
+              Capital vs timing screen
             </h3>
+            <p className="mt-1 max-w-2xl text-sm text-zinc-500">
+              Hard pass only on known capital blockers or chase risk — not because the tape is ugly.
+            </p>
           </div>
           <button
             type="button"
@@ -934,18 +938,31 @@ function DecisionSnapshotCard({
           value={snapshot.confidence_score ? `${score(snapshot.confidence_score)}%` : "-"}
         />
         <MetricCard
-          label="Composite"
-          value={snapshot.composite_score ? score(snapshot.composite_score) : "-"}
+          label="Capital"
+          value={snapshot.capital_score ? score(snapshot.capital_score) : snapshot.composite_score ? score(snapshot.composite_score) : "-"}
+        />
+        <MetricCard
+          label="Timing"
+          value={snapshot.timing_score ? score(snapshot.timing_score) : "-"}
         />
         <MetricCard
           label="Max weight"
-          value={snapshot.recommended_weight ? weight(snapshot.recommended_weight) : "-"}
-        />
-        <MetricCard
-          label="Context"
-          value={formatLabel(snapshot.position_context)}
+          value={
+            snapshot.capital_blocked
+              ? "Blocked"
+              : snapshot.recommended_weight
+                ? weight(snapshot.recommended_weight)
+                : "-"
+          }
         />
       </div>
+
+      {(snapshot.setup_status || snapshot.capital_blocked) && (
+        <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+          Setup: {snapshot.setup_status ? formatLabel(snapshot.setup_status) : "—"}
+          {snapshot.capital_blocked ? " · Capital blocked" : ""}
+        </p>
+      )}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_1fr]">
         <div>
@@ -1077,8 +1094,12 @@ function QuickTriageResult({
   const shownInitialView = verdict?.initial_view ?? latestTriage?.initial_view;
   const shownConfidence =
     verdict?.confidence_score ?? latestTriage?.confidence_score ?? latestMemo?.confidence_score;
-  const shownComposite = verdict?.composite_score ?? latestTriage?.composite_score ?? latestMemo?.composite_score;
+  const shownCapital =
+    verdict?.capital_score ?? latestTriage?.capital_score ?? latestMemo?.composite_score;
+  const shownTiming = verdict?.timing_score ?? latestTriage?.timing_score;
   const shownWeight = verdict?.recommended_weight ?? latestTriage?.recommended_weight;
+  const capitalBlocked = verdict?.capital_blocked ?? latestTriage?.capital_blocked ?? false;
+  const entryPlan = verdict?.entry_plan ?? latestTriage?.entry_plan ?? null;
   const nextAction =
     verdict?.next_action ??
     latestTriage?.next_action ??
@@ -1098,20 +1119,48 @@ function QuickTriageResult({
           value={shownConfidence ? `${score(shownConfidence)}%` : "-"}
         />
         <MetricCard
-          label="Composite"
-          value={shownComposite ? score(shownComposite) : "-"}
+          label="Capital"
+          value={shownCapital ? score(shownCapital) : "-"}
         />
         <MetricCard
-          label="Max weight"
-          value={shownWeight ? weight(shownWeight) : "-"}
+          label="Timing"
+          value={shownTiming ? score(shownTiming) : "-"}
         />
       </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <MetricCard
+          label="Max weight"
+          value={capitalBlocked ? "Blocked" : shownWeight ? weight(shownWeight) : "-"}
+        />
+        <MetricCard
+          label="Capital gate"
+          value={capitalBlocked ? "Blocked" : "Open for research"}
+        />
+        <MetricCard
+          label="Setup"
+          value={
+            verdict?.setup_status || latestTriage?.setup_status
+              ? formatLabel(verdict?.setup_status ?? latestTriage?.setup_status ?? "")
+              : "-"
+          }
+        />
+      </div>
+
+      {entryPlan ? <EntryPlanCard plan={entryPlan} /> : null}
 
       {verdict ? (
         <>
           <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr_0.8fr]">
             <TriageList title="Top drivers" items={verdict.top_drivers} />
-            <TriageList title="Top blockers" items={verdict.top_blockers} />
+            <TriageList
+              title="Top blockers"
+              items={
+                verdict.hard_blockers.length
+                  ? [...verdict.hard_blockers, ...verdict.top_blockers]
+                  : verdict.top_blockers
+              }
+            />
             <section className="rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
               <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                 Why Now
@@ -1150,6 +1199,37 @@ function QuickTriageResult({
   );
 }
 
+function EntryPlanCard({ plan }: { plan: NonNullable<TickerVerdict["entry_plan"]> }) {
+  return (
+    <section className="mt-5 rounded-lg border border-zinc-100 p-4 dark:border-zinc-900">
+      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        Entry / Exit Plan
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Brief label="Status" value={formatLabel(plan.status)} />
+        <Brief label="Entry zone" value={plan.entry_zone ?? "—"} />
+        <Brief label="Invalidation" value={plan.invalidation ?? "—"} />
+        <Brief
+          label="Max loss"
+          value={plan.max_loss_pct_nav ? `${plan.max_loss_pct_nav}% NAV` : "—"}
+        />
+      </div>
+      {plan.chase_note ? (
+        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-400">{plan.chase_note}</p>
+      ) : null}
+      {plan.notes.length > 0 ? (
+        <div className="mt-2 space-y-1">
+          {plan.notes.map((note) => (
+            <p key={note} className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+              {note}
+            </p>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function TriageActions({
   desk,
   verdict,
@@ -1166,6 +1246,11 @@ function TriageActions({
   const [pending, setPending] = useState<"watchlist" | "opportunity" | null>(null);
   const queued = Boolean(desk?.opportunity);
   const watched = Boolean(desk?.on_watchlist);
+  const capitalBlocked = verdict.capital_blocked;
+  const queueBlocked =
+    verdict.triage_decision === "hard_pass" ||
+    verdict.triage_decision === "setup_invalid" ||
+    verdict.triage_decision === "reject";
 
   async function refreshDesk() {
     if (!onDeskChange) return;
@@ -1194,6 +1279,10 @@ function TriageActions({
   }
 
   async function handleOpportunity() {
+    if (queueBlocked) {
+      toast.error("Hard pass / chase setups cannot move to the queue.");
+      return;
+    }
     setPending("opportunity");
     try {
       await createOpportunity(buildOpportunityFromVerdict(verdict));
@@ -1226,10 +1315,23 @@ function TriageActions({
       <button
         type="button"
         onClick={() => void handleOpportunity()}
-        disabled={queued || pending !== null}
+        disabled={queued || queueBlocked || pending !== null}
         className={secondaryButtonClassName}
+        title={
+          queueBlocked
+            ? "Hard pass and chase setups stay out of the queue."
+            : capitalBlocked
+              ? "You can queue for research, but size stays blocked until entry rules are clear."
+              : undefined
+        }
       >
-        {queued ? "In Queue" : pending === "opportunity" ? "Saving..." : "Move to Queue"}
+        {queued
+          ? "In Queue"
+          : queueBlocked
+            ? "Queue blocked"
+            : pending === "opportunity"
+              ? "Saving..."
+              : "Move to Queue"}
       </button>
       {onOpenTicker ? (
         <button
@@ -2364,8 +2466,10 @@ function prefillFromVerdict(verdict: TickerVerdict): TickerPrefill {
 }
 
 function buildOpportunityFromVerdict(verdict: TickerVerdict): OpportunityCreateInput {
+  const plan = verdict.entry_plan;
   return {
     instrument: opportunityInstrument(verdict.instrument),
+    strategy_pod_code: "fundamental_equity",
     status: opportunityStatus(verdict.triage_decision),
     priority: opportunityPriority(verdict.research_priority),
     thesis: `${verdict.action_label}: ${verdict.why_now}`,
@@ -2373,13 +2477,20 @@ function buildOpportunityFromVerdict(verdict: TickerVerdict): OpportunityCreateI
     next_action: verdict.next_action,
     time_horizon: "6-18 months",
     conviction_score: verdict.conviction_score,
-    target_weight: verdict.recommended_weight,
+    target_weight: verdict.capital_blocked ? "0" : verdict.recommended_weight,
     notes: [
       `Quick Triage: ${formatLabel(verdict.triage_decision)}`,
+      `Capital: ${verdict.capital_score ?? "n/a"} · Timing: ${verdict.timing_score ?? "n/a"}`,
       `Initial view: ${formatLabel(verdict.initial_view)}`,
+      plan?.entry_zone ? `Entry zone: ${plan.entry_zone}` : null,
+      plan?.invalidation ? `Invalidation: ${plan.invalidation}` : null,
+      plan?.max_loss_pct_nav ? `Max loss: ${plan.max_loss_pct_nav}% NAV` : null,
+      plan?.chase_note ?? null,
       `Provider: ${verdict.provider}`,
       `Data timestamp: ${formatDateTime(verdict.data_timestamp)}`,
-    ].join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n"),
   };
 }
 
@@ -2398,8 +2509,11 @@ function opportunityInstrument(
 }
 
 function opportunityStatus(decision: string): OpportunityStatus {
-  if (decision === "research") return "research";
-  if (decision === "watch") return "watchlist";
+  if (decision === "candidate" || decision === "research") return "research";
+  if (decision === "watch") return "parked";
+  if (decision === "hard_pass" || decision === "setup_invalid" || decision === "reject") {
+    return "screening";
+  }
   return "screening";
 }
 

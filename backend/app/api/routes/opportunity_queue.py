@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.opportunity_queue import (
@@ -31,20 +31,26 @@ async def read_opportunity_queue(
     user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
 ) -> OpportunityQueueResponse:
-    return await list_opportunity_queue(
-        session,
-        user,
-        candidate_limit=candidate_limit,
-        page=page,
-        page_size=page_size,
-        status=status,
-    )
+    try:
+        return await list_opportunity_queue(
+            session,
+            user,
+            candidate_limit=candidate_limit,
+            page=page,
+            page_size=page_size,
+            status=status,
+        )
+    except OpportunityValidationError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post(
     "",
     response_model=OpportunityResponse,
-    status_code=status.HTTP_201_CREATED,
+    status_code=http_status.HTTP_201_CREATED,
 )
 async def post_opportunity(
     payload: OpportunityCreate,
@@ -55,7 +61,7 @@ async def post_opportunity(
         return await create_opportunity(session, user, payload)
     except OpportunityValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
 
@@ -71,11 +77,11 @@ async def patch_opportunity(
         return await update_opportunity(session, user, opportunity_id, payload)
     except OpportunityValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
     except OpportunityNotFoundError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=http_status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc

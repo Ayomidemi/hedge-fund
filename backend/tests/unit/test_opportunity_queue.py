@@ -1,10 +1,17 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 from unittest import TestCase
 
 from app.main import app
-from app.api.schemas.opportunity_queue import OpportunityLinks
-from app.services.opportunity_queue.queue import _paginate, _queue_summary, status_gate_error
+from app.api.schemas.opportunity_queue import OpportunityLinks, OpportunityRiskLink
+from app.services.opportunity_queue.queue import (
+    STATUS_ORDER,
+    default_strategy_pod_code,
+    _paginate,
+    _queue_summary,
+    status_gate_error,
+)
 
 
 class OpportunityQueueTests(TestCase):
@@ -24,6 +31,10 @@ class OpportunityQueueTests(TestCase):
         self.assertIn("page", get_params)
         self.assertIn("page_size", get_params)
         self.assertIn("status", get_params)
+
+    def test_status_order_uses_parked_not_watchlist(self) -> None:
+        self.assertIn("parked", STATUS_ORDER)
+        self.assertNotIn("watchlist", STATUS_ORDER)
 
     def test_queue_summary_counts_active_and_priority_states(self) -> None:
         summary = _queue_summary(
@@ -94,6 +105,27 @@ class OpportunityQueueTests(TestCase):
         self.assertIsNotNone(error)
         self.assertIn("pre-trade", error.lower())
 
+    def test_approved_requires_linked_pre_trade(self) -> None:
+        error = status_gate_error(
+            "approved",
+            thesis="A thesis",
+            research_question="Why?",
+            target_weight="3",
+            notes=None,
+            links=OpportunityLinks(
+                pre_trade=OpportunityRiskLink(
+                    id=uuid4(),
+                    decision="approve",
+                    risk_level="low",
+                    checked_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+                    linked=False,
+                )
+            ),
+            source_memo_id=None,
+        )
+        self.assertIsNotNone(error)
+        self.assertIn("link", error.lower())
+
     def test_candidate_requires_target_weight(self) -> None:
         error = status_gate_error(
             "candidate",
@@ -106,3 +138,16 @@ class OpportunityQueueTests(TestCase):
         )
         self.assertIsNotNone(error)
         self.assertIn("target weight", error.lower())
+
+    def test_default_pod_assignment_rules(self) -> None:
+        equity = SimpleNamespace(ticker="AAPL")
+        spy = SimpleNamespace(ticker="SPY")
+        self.assertEqual(default_strategy_pod_code(equity), "fundamental_equity")
+        self.assertEqual(default_strategy_pod_code(spy), "cross_asset_trend")
+        self.assertEqual(
+            default_strategy_pod_code(
+                equity,
+                discovery_evidence={"reasons": ["capital rotation beneficiary"]},
+            ),
+            "relative_value",
+        )

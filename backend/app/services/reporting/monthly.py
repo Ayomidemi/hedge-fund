@@ -685,7 +685,8 @@ def _research_pipeline_section(
         "discovered",
         "screening",
         "research",
-        "watchlist",
+        "parked",
+        "candidate",
         "investment_candidate",
         "approved",
     }
@@ -701,7 +702,7 @@ def _research_pipeline_section(
             label="In research", value=str(opportunity_counts.get("research", 0))
         ),
         MonthlyReportMetric(
-            label="Watchlist stage", value=str(opportunity_counts.get("watchlist", 0))
+            label="Parked", value=str(opportunity_counts.get("parked", 0))
         ),
     ]
     classifications = Counter(memo.classification or "unclassified" for memo in memos)

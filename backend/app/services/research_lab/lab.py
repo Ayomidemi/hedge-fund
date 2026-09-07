@@ -44,7 +44,7 @@ ACTIVE_OPPORTUNITY_STATUSES = {
     "discovered",
     "screening",
     "research",
-    "watchlist",
+    "parked",
     "candidate",
     "approved",
     "active_position",

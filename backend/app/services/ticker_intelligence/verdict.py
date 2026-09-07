@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.ticker_intelligence import (
     TickerScoreResponse,
+    TickerTriageEntryPlan,
     TickerVerdictContextResponse,
     TickerVerdictResponse,
 )
@@ -20,7 +21,14 @@ from app.services.ticker_intelligence.market_data import (
     prefill_ticker,
     resolve_market_hint,
 )
-from app.services.ticker_intelligence.scoring import TickerScore, score_ticker
+from app.services.ticker_intelligence.scoring import TickerScore, TickerScorecard, score_ticker
+
+CHASE_UP_PCT = Decimal("15")
+HOSTILE_TIMING = Decimal("35")
+WEAK_CAPITAL = Decimal("35")
+STRONG_CAPITAL = Decimal("70")
+RESEARCH_CAPITAL = Decimal("55")
+MIN_CAPITAL_COVERAGE = Decimal("40")
 
 
 async def build_ticker_verdict(
@@ -79,7 +87,21 @@ async def create_ticker_triage(
         provider=response.provider,
         data_timestamp=response.data_timestamp,
         metrics=response.metrics.model_dump(mode="json", exclude_none=True),
-        context=response.context.model_dump(mode="json"),
+        context={
+            **response.context.model_dump(mode="json"),
+            "capital_score": (
+                str(response.capital_score) if response.capital_score is not None else None
+            ),
+            "timing_score": (
+                str(response.timing_score) if response.timing_score is not None else None
+            ),
+            "capital_coverage": str(response.capital_coverage),
+            "timing_coverage": str(response.timing_coverage),
+            "hard_blockers": response.hard_blockers,
+            "setup_status": response.setup_status,
+            "capital_blocked": response.capital_blocked,
+            "entry_plan": response.entry_plan.model_dump(mode="json"),
+        },
         scorecard=[score.model_dump(mode="json") for score in response.scorecard],
     )
     session.add(triage)
@@ -102,6 +124,14 @@ async def create_ticker_triage(
             "research_priority": response.research_priority,
             "composite_score": str(response.composite_score),
             "confidence_score": str(response.confidence_score),
+            "capital_score": (
+                str(response.capital_score) if response.capital_score is not None else None
+            ),
+            "timing_score": (
+                str(response.timing_score) if response.timing_score is not None else None
+            ),
+            "setup_status": response.setup_status,
+            "capital_blocked": response.capital_blocked,
         },
     )
     await session.commit()
@@ -141,9 +171,40 @@ async def _compose_ticker_verdict(
         memo_count=len(desk.memos),
     )
 
-    top_scores = sorted(scorecard.scores, key=lambda item: item.score, reverse=True)
-    low_scores = sorted(scorecard.scores, key=lambda item: item.score)
-    warnings = _warnings(prefill.source_warnings, scorecard.confidence_score)
+    entry_plan = _entry_plan(scorecard, prefill.metrics.current_price, context)
+    triage_decision = _triage_decision(scorecard, context, entry_plan)
+    capital_blocked = (
+        triage_decision in {"hard_pass", "setup_invalid"}
+        or bool(scorecard.hard_blockers)
+        or entry_plan.status in {"invalid_chase", "hostile_timing"}
+    )
+    if capital_blocked:
+        entry_plan = entry_plan.model_copy(update={"capital_blocked": True})
+
+    top_scores = sorted(
+        [item for item in scorecard.scores if item.score > 0],
+        key=lambda item: item.score,
+        reverse=True,
+    )
+    low_scores = sorted(
+        [item for item in scorecard.scores if item.score > 0],
+        key=lambda item: item.score,
+    )
+    blockers = list(scorecard.hard_blockers)
+    blockers.extend(entry_plan.notes)
+    blockers.extend(_blocker_text(item) for item in low_scores[:3])
+    warnings = _warnings(
+        prefill.source_warnings,
+        scorecard.confidence_score,
+        scorecard.capital_coverage,
+        entry_plan,
+    )
+
+    weight = (
+        Decimal("0.0000")
+        if capital_blocked
+        else scorecard.recommended_weight
+    )
 
     response = TickerVerdictResponse(
         ticker=prefill.instrument.ticker,
@@ -156,29 +217,26 @@ async def _compose_ticker_verdict(
             market,
         ),
         generated_at=datetime.now(timezone.utc),
-        research_priority=_research_priority(
-            scorecard.composite_score,
-            scorecard.confidence_score,
-            context,
-        ),
-        initial_view=_initial_view(scorecard.composite_score, scorecard.scores),
-        triage_decision=_triage_decision(
-            scorecard.composite_score,
-            scorecard.confidence_score,
-        ),
-        action_label=_action_label(scorecard.action, context),
+        research_priority=_research_priority(scorecard, context, triage_decision),
+        initial_view=_initial_view(scorecard),
+        triage_decision=triage_decision,
+        action_label=_action_label(triage_decision, context),
         confidence_score=scorecard.confidence_score,
         conviction_score=scorecard.conviction_score,
         composite_score=scorecard.composite_score,
-        recommended_weight=scorecard.recommended_weight,
+        capital_score=scorecard.capital_score,
+        timing_score=scorecard.timing_score,
+        capital_coverage=scorecard.capital_coverage,
+        timing_coverage=scorecard.timing_coverage,
+        hard_blockers=scorecard.hard_blockers,
+        setup_status=entry_plan.status,
+        capital_blocked=capital_blocked,
+        entry_plan=entry_plan,
+        recommended_weight=weight,
         top_drivers=[_driver_text(item) for item in top_scores[:3]],
-        top_blockers=[_blocker_text(item) for item in low_scores[:3]],
+        top_blockers=list(dict.fromkeys(blockers))[:6],
         why_now=_why_now(context),
-        next_action=_next_action(
-            scorecard.composite_score,
-            scorecard.confidence_score,
-            context,
-        ),
+        next_action=_next_action(triage_decision, scorecard, context, entry_plan),
         warnings=warnings,
         source_reference=prefill.source_reference,
         provider=prefill.provider,
@@ -197,14 +255,112 @@ async def _compose_ticker_verdict(
     return response, instrument
 
 
-def _triage_decision(score: Decimal, confidence: Decimal) -> str:
-    if confidence < Decimal("45"):
+def _triage_decision(
+    scorecard: TickerScorecard,
+    context: TickerVerdictContextResponse,
+    entry_plan: TickerTriageEntryPlan,
+) -> str:
+    if scorecard.hard_blockers:
+        return "hard_pass"
+    if entry_plan.status == "invalid_chase":
+        return "setup_invalid"
+
+    capital = scorecard.capital_score
+    coverage = scorecard.capital_coverage
+    timing = scorecard.timing_score
+    research_signal = _has_research_signal(context)
+
+    if coverage < MIN_CAPITAL_COVERAGE or capital is None:
+        if research_signal:
+            return "research"
         return "watch"
-    if score >= Decimal("65"):
+
+    if capital < WEAK_CAPITAL:
+        return "hard_pass"
+
+    if timing is not None and timing < HOSTILE_TIMING and research_signal:
+        # Dislocation: worth research, not a capital green light.
         return "research"
-    if score >= Decimal("45"):
-        return "watch"
-    return "reject"
+
+    if capital >= STRONG_CAPITAL and (
+        timing is None or timing >= Decimal("45")
+    ):
+        return "candidate"
+
+    if capital >= RESEARCH_CAPITAL or research_signal:
+        return "research"
+
+    return "watch"
+
+
+def _entry_plan(
+    scorecard: TickerScorecard,
+    current_price: Decimal | None,
+    context: TickerVerdictContextResponse,
+) -> TickerTriageEntryPlan:
+    notes: list[str] = []
+    radar_change = context.radar_change_pct
+    timing = scorecard.timing_score
+
+    if radar_change is not None and radar_change >= CHASE_UP_PCT:
+        notes.append(
+            f"Chase risk: radar move is already +{radar_change}% — do not buy the spike."
+        )
+        return TickerTriageEntryPlan(
+            status="invalid_chase",
+            capital_blocked=True,
+            entry_zone=None,
+            invalidation=None,
+            max_loss_pct_nav=Decimal("0.00"),
+            time_stop_sessions=5,
+            chase_note=notes[0],
+            notes=notes,
+        )
+
+    entry_zone = None
+    invalidation = None
+    if current_price is not None:
+        if radar_change is not None and radar_change <= Decimal("-10"):
+            entry_high = current_price
+            entry_low = (current_price * Decimal("0.92")).quantize(Decimal("0.01"))
+            stop = (current_price * Decimal("0.88")).quantize(Decimal("0.01"))
+            entry_zone = f"{entry_low} – {entry_high} (near dislocation print)"
+            invalidation = f"Break below {stop} (~12% under print) or thesis breaker."
+            notes.append(
+                "Dislocation setup: only valid near the flagged print, not after a rebound chase."
+            )
+        else:
+            entry_high = current_price
+            entry_low = (current_price * Decimal("0.97")).quantize(Decimal("0.01"))
+            stop = (current_price * Decimal("0.92")).quantize(Decimal("0.01"))
+            entry_zone = f"{entry_low} – {entry_high}"
+            invalidation = f"Break below {stop} or thesis breaker."
+
+    if timing is not None and timing < HOSTILE_TIMING:
+        notes.append(
+            f"Timing is hostile ({timing}/100) — capital blocked until entry rules are explicit."
+        )
+
+    status = "suggested"
+    if current_price is None:
+        status = "incomplete"
+        notes.append("No mark available to propose an entry zone.")
+    elif timing is not None and timing < HOSTILE_TIMING:
+        status = "hostile_timing"
+
+    return TickerTriageEntryPlan(
+        status=status,
+        capital_blocked=False,
+        entry_zone=entry_zone,
+        invalidation=invalidation,
+        max_loss_pct_nav=Decimal("1.00"),
+        time_stop_sessions=10 if radar_change is not None else 15,
+        chase_note=(
+            f"Invalidate this setup if price rebounds more than {CHASE_UP_PCT}% "
+            "from the triage reference without a new underwriting."
+        ),
+        notes=notes,
+    )
 
 
 def _market_from_prefill(ticker: str, currency: str, market: str | None) -> str:
@@ -214,46 +370,67 @@ def _market_from_prefill(ticker: str, currency: str, market: str | None) -> str:
 
 
 def _research_priority(
-    score: Decimal,
-    confidence: Decimal,
+    scorecard: TickerScorecard,
     context: TickerVerdictContextResponse,
+    triage_decision: str,
 ) -> str:
-    if confidence >= Decimal("65") and score >= Decimal("80"):
+    if triage_decision == "hard_pass":
+        return "low"
+    if triage_decision == "setup_invalid":
+        return "low"
+    capital = scorecard.capital_score
+    if (
+        capital is not None
+        and capital >= Decimal("80")
+        and scorecard.confidence_score >= Decimal("65")
+        and scorecard.capital_coverage >= Decimal("65")
+    ):
         return "high"
-    if confidence >= Decimal("50") and score >= Decimal("65"):
+    if triage_decision in {"candidate", "research"}:
         return "medium"
-    if context.radar_state or context.latest_news_title or context.has_position:
+    if _has_research_signal(context):
         return "medium"
     return "low"
 
 
-def _initial_view(score: Decimal, scores: list[TickerScore]) -> str:
-    valuation = next((item.score for item in scores if item.name == "Valuation"), None)
-    if score >= Decimal("75"):
+def _initial_view(scorecard: TickerScorecard) -> str:
+    capital = scorecard.capital_score
+    valuation = next(
+        (item.score for item in scorecard.scores if item.name == "Valuation"),
+        None,
+    )
+    if capital is None or scorecard.capital_coverage < MIN_CAPITAL_COVERAGE:
+        return "unknown"
+    if capital >= Decimal("75"):
         return "attractive"
-    if score >= Decimal("62"):
+    if capital >= Decimal("62"):
         return "constructive"
-    if valuation is not None and valuation < Decimal("40"):
+    if valuation is not None and valuation < Decimal("40") and valuation > 0:
         return "expensive"
-    if score >= Decimal("45"):
+    if capital >= Decimal("45"):
         return "neutral"
     return "weak"
 
 
-def _action_label(action: str, context: TickerVerdictContextResponse) -> str:
+def _action_label(decision: str, context: TickerVerdictContextResponse) -> str:
     if context.has_position:
         return {
-            "buy": "Add candidate",
-            "hold": "Maintain",
+            "candidate": "Add candidate",
+            "research": "Review / research",
             "watch": "Review",
-            "avoid": "Trim / exit review",
-        }.get(action, "Review")
+            "setup_invalid": "Do not add / chase",
+            "hard_pass": "Trim / exit review",
+            # Legacy persisted values
+            "reject": "Trim / exit review",
+        }.get(decision, "Review")
     return {
-        "buy": "Buy candidate",
-        "hold": "Research candidate",
+        "candidate": "Research candidate",
+        "research": "Research",
         "watch": "Watch",
-        "avoid": "Avoid",
-    }.get(action, "Watch")
+        "setup_invalid": "Do not chase",
+        "hard_pass": "Hard pass",
+        "reject": "Hard pass",
+    }.get(decision, "Watch")
 
 
 def _driver_text(score: TickerScore) -> str:
@@ -279,26 +456,66 @@ def _why_now(context: TickerVerdictContextResponse) -> str:
 
 
 def _next_action(
-    score: Decimal,
-    confidence: Decimal,
+    decision: str,
+    scorecard: TickerScorecard,
     context: TickerVerdictContextResponse,
+    entry_plan: TickerTriageEntryPlan,
 ) -> str:
-    decision = _triage_decision(score, confidence)
-    if confidence < Decimal("45"):
-        return "Keep on watch and improve data coverage before capital work."
-    if context.has_position and decision == "reject":
-        return "Open Risk Centre and review trim or exit before making changes."
+    if decision == "hard_pass":
+        if context.has_position:
+            return "Open Risk Centre and review trim or exit before making changes."
+        return "Hard pass on capital — revisit only if leverage, cash flow, or thesis evidence changes."
+    if decision == "setup_invalid":
+        return (
+            "Do not chase. Re-underwrite only at a fresh entry zone after the spike cools, "
+            "or pass."
+        )
+    if scorecard.capital_coverage < MIN_CAPITAL_COVERAGE:
+        return "Improve capital data coverage before any size decision; deep research if the anomaly matters."
+    if decision == "candidate":
+        if context.opportunity_status:
+            return "Continue deep research with the suggested entry/invalidation plan before approval."
+        return (
+            "Proceed to deep research with entry zone, stop, and max loss filled before queue approval."
+        )
     if decision == "research":
+        if entry_plan.status == "hostile_timing":
+            return (
+                "Research the dislocation; capital stays blocked until an entry plan is explicit "
+                "and price is still inside the zone."
+            )
         if context.opportunity_status:
             return "Continue deep research and update the existing opportunity."
-        return "Proceed to deep research before moving toward a capital decision."
-    if decision == "watch":
-        return "Add or keep on watchlist; wait for stronger evidence."
-    return "Reject for now; revisit only if thesis or evidence changes."
+        return "Deep research before any capital decision; do not buy from triage alone."
+    return "Keep on watch; wait for stronger capital evidence or a cleaner setup."
 
 
-def _warnings(source_warnings: list[str], confidence: Decimal) -> list[str]:
+def _warnings(
+    source_warnings: list[str],
+    confidence: Decimal,
+    capital_coverage: Decimal,
+    entry_plan: TickerTriageEntryPlan,
+) -> list[str]:
     warnings = list(dict.fromkeys(source_warnings))
-    if confidence < Decimal("45"):
-        warnings.insert(0, "Data coverage is too thin for a capital decision.")
-    return warnings
+    warnings.insert(0, "Quick triage is a research screen, not trade approval.")
+    if confidence < Decimal("45") or capital_coverage < MIN_CAPITAL_COVERAGE:
+        warnings.insert(0, "Capital data coverage is too thin for a size decision.")
+    if entry_plan.status == "invalid_chase":
+        warnings.insert(0, "Setup invalid: chase risk after a large upside spike.")
+    elif entry_plan.status == "hostile_timing":
+        warnings.insert(0, "Timing is hostile — treat any interest as research-only.")
+    return list(dict.fromkeys(warnings))
+
+
+def _has_research_signal(context: TickerVerdictContextResponse) -> bool:
+    if context.radar_state:
+        return True
+    if context.latest_news_title:
+        return True
+    if context.has_position:
+        return True
+    if context.radar_change_pct is not None and abs(context.radar_change_pct) >= Decimal(
+        "5"
+    ):
+        return True
+    return False

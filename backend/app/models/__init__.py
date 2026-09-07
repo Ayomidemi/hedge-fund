@@ -940,6 +940,12 @@ class Opportunity(Base, TimestampMixin):
     source_recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("model_recommendations.id"), index=True
     )
+    strategy_pod_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("strategy_pods.id"), index=True
+    )
+    pre_trade_risk_check_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pre_trade_risk_checks.id"), index=True
+    )
     discovered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -970,6 +976,12 @@ class Opportunity(Base, TimestampMixin):
     )
     source_recommendation: Mapped["ModelRecommendation | None"] = relationship(
         foreign_keys=[source_recommendation_id]
+    )
+    strategy_pod: Mapped["StrategyPod | None"] = relationship(
+        foreign_keys=[strategy_pod_id]
+    )
+    pre_trade_risk_check: Mapped["PreTradeRiskCheck | None"] = relationship(
+        foreign_keys=[pre_trade_risk_check_id]
     )
 
     __table_args__ = (

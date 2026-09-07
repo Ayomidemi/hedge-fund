@@ -1,9 +1,10 @@
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +20,7 @@ from app.api.schemas.opportunity_queue import (
     OpportunityRadarLink,
     OpportunityResponse,
     OpportunityRiskLink,
+    OpportunityStrategyPodLink,
     OpportunityTradeLink,
     OpportunityUpdate,
 )
@@ -30,12 +32,17 @@ from app.models import (
     Position,
     PreTradeRiskCheck,
     RadarSnapshot,
+    StrategyPod,
     TickerMemo,
     Trade,
 )
 from app.services.administration.system_log import record_system_log
 from app.services.market_data.universe import quote_symbol_for
 from app.services.portfolio.operating_core import upsert_instrument
+from app.services.strategy_pods.pods import (
+    normalize_strategy_pod_code,
+    _get_or_seed_strategy_pods,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +50,7 @@ STATUS_ORDER = [
     "discovered",
     "screening",
     "research",
-    "watchlist",
+    "parked",
     "candidate",
     "approved",
     "active_position",
@@ -53,6 +60,26 @@ STATUS_ORDER = [
 ]
 CLOSED_STATUSES = {"exited", "post_mortem", "rejected"}
 ACTIVE_STATUSES = set(STATUS_ORDER) - CLOSED_STATUSES
+
+TREND_ETF_TICKERS = {
+    "SPY",
+    "QQQ",
+    "IWM",
+    "TLT",
+    "IEF",
+    "SHY",
+    "GLD",
+    "DBC",
+}
+DEFAULT_STRATEGY_POD_CODE = "fundamental_equity"
+_UNSET = object()
+
+
+@dataclass(frozen=True)
+class SimpleOpportunity:
+    status: str
+    priority: str
+    review_by: object
 
 
 class OpportunityQueueError(RuntimeError):
@@ -76,6 +103,29 @@ async def list_opportunity_queue(
     page_size: int = 20,
     status: str | None = None,
 ) -> OpportunityQueueResponse:
+    filters = [Opportunity.owner_user_id == user.id]
+    if status not in {None, "", "all"}:
+        if status not in STATUS_ORDER:
+            raise OpportunityValidationError("Unknown opportunity status filter.")
+        filters.append(Opportunity.status == status)
+
+    total = int(
+        await session.scalar(
+            select(func.count(Opportunity.id)).where(*filters)
+        )
+        or 0
+    )
+    page, page_size, total_pages, offset = _page_window(total, page, page_size)
+    status_sort = case(
+        {status_value: index for index, status_value in enumerate(STATUS_ORDER)},
+        value=Opportunity.status,
+        else_=len(STATUS_ORDER),
+    )
+    priority_sort = case(
+        {"urgent": 0, "high": 1, "medium": 2, "low": 3},
+        value=Opportunity.priority,
+        else_=4,
+    )
     opportunities = list(
         await session.scalars(
             select(Opportunity)
@@ -83,27 +133,38 @@ async def list_opportunity_queue(
                 selectinload(Opportunity.instrument),
                 selectinload(Opportunity.source_memo),
                 selectinload(Opportunity.source_recommendation),
+                selectinload(Opportunity.strategy_pod),
             )
-            .where(Opportunity.owner_user_id == user.id)
-            .order_by(Opportunity.updated_at.desc())
+            .where(*filters)
+            .order_by(status_sort, priority_sort, Opportunity.updated_at.desc())
+            .offset(offset)
+            .limit(page_size)
         )
     )
-    opportunities = sorted(opportunities, key=_opportunity_sort_key)
-    filtered = [
-        opportunity
-        for opportunity in opportunities
-        if status in {None, "", "all"} or opportunity.status == status
+    links_by_id = await _load_links(session, user, opportunities)
+    summary_rows = [
+        SimpleOpportunity(status=row.status, priority=row.priority, review_by=row.review_by)
+        for row in (
+            await session.execute(
+                select(Opportunity.status, Opportunity.priority, Opportunity.review_by)
+                .where(Opportunity.owner_user_id == user.id)
+            )
+        )
     ]
-    page, page_size, total, total_pages, paged = _paginate(filtered, page, page_size)
-    links_by_id = await _load_links(session, user, paged)
+    queued_memo_ids = set(
+        await session.scalars(
+            select(Opportunity.source_memo_id)
+            .where(Opportunity.owner_user_id == user.id)
+            .where(Opportunity.source_memo_id.is_not(None))
+        )
+    )
+    pods = await _ensure_owner_pods(session, user)
+    if not any(pod.pod_category == "alpha" for pod in pods):
+        pods = await _get_or_seed_strategy_pods(session, user)
     candidates = await _load_candidate_memos(
         session,
         user,
-        queued_memo_ids={
-            opportunity.source_memo_id
-            for opportunity in opportunities
-            if opportunity.source_memo_id is not None
-        },
+        queued_memo_ids=queued_memo_ids,
         limit=candidate_limit,
     )
 
@@ -111,7 +172,7 @@ async def list_opportunity_queue(
         "opportunity_queue_loaded",
         extra={
             "owner_user_id": user.id,
-            "opportunity_count": len(opportunities),
+            "opportunity_count": total,
             "page": page,
             "candidate_count": len(candidates),
         },
@@ -119,13 +180,14 @@ async def list_opportunity_queue(
 
     return OpportunityQueueResponse(
         generated_at=datetime.now(timezone.utc),
-        summary=_queue_summary(opportunities, len(candidates)),
+        summary=_queue_summary(summary_rows, len(candidates)),
         opportunities=[
             _opportunity_response(opportunity, links_by_id.get(opportunity.id))
-            for opportunity in paged
+            for opportunity in opportunities
         ],
         candidates=[_candidate_response(memo) for memo in candidates],
         status_order=STATUS_ORDER,
+        strategy_pods=[_strategy_pod_link(pod) for pod in pods if pod.pod_category == "alpha"],
         page=page,
         page_size=page_size,
         total=total,
@@ -165,6 +227,14 @@ async def create_opportunity(
     scores = source_memo.scores if source_memo is not None else {}
     now = datetime.now(timezone.utc)
     status = payload.status
+    strategy_pod = await resolve_strategy_pod_for_opportunity(
+        session,
+        user,
+        instrument=instrument,
+        strategy_pod_code=payload.strategy_pod_code,
+        discovery_evidence={},
+        source="memo" if source_memo is not None else "manual",
+    )
     opportunity = Opportunity(
         owner_user_id=user.id,
         instrument_id=instrument.id,
@@ -172,6 +242,7 @@ async def create_opportunity(
         source_recommendation_id=(
             source_memo.recommendation_id if source_memo is not None else None
         ),
+        strategy_pod_id=strategy_pod.id if strategy_pod is not None else None,
         discovered_at=now,
         status=status,
         priority=payload.priority,
@@ -186,6 +257,7 @@ async def create_opportunity(
         expected_edge_pct=payload.expected_edge_pct,
         target_weight=payload.target_weight
         or _decimal(scores.get("recommended_weight")),
+        pre_trade_risk_check_id=payload.pre_trade_check_id,
         review_by=payload.review_by,
         closed_at=now if status in CLOSED_STATUSES else None,
         notes=payload.notes,
@@ -193,6 +265,22 @@ async def create_opportunity(
     )
     session.add(opportunity)
     await session.flush()
+    if payload.pre_trade_check_id is not None:
+        await _validate_pre_trade_check_for_opportunity(
+            session, user, opportunity, payload.pre_trade_check_id
+        )
+    links = await _load_links(session, user, [opportunity])
+    error = status_gate_error(
+        status,
+        thesis=opportunity.thesis,
+        research_question=opportunity.research_question,
+        target_weight=opportunity.target_weight,
+        notes=opportunity.notes,
+        links=links.get(opportunity.id) or OpportunityLinks(),
+        source_memo_id=opportunity.source_memo_id,
+    )
+    if error:
+        raise OpportunityValidationError(error)
     await record_system_log(
         session,
         owner_user_id=user.id,
@@ -236,40 +324,81 @@ async def update_opportunity(
 
     updates = payload.model_dump(exclude_unset=True)
     override_reason = updates.pop("override_reason", None)
+    strategy_pod_code = updates.pop("strategy_pod_code", None)
+    pre_trade_check_id = updates.pop("pre_trade_check_id", _UNSET)
     previous_status = opportunity.status
     proposed_status = updates.get("status", previous_status)
 
-    if proposed_status != previous_status:
-        links = await _load_links(session, user, [opportunity])
-        error = status_gate_error(
-            proposed_status,
-            thesis=updates.get("thesis", opportunity.thesis),
-            research_question=updates.get("research_question", opportunity.research_question),
-            target_weight=updates.get("target_weight", opportunity.target_weight),
-            notes=updates.get("notes", opportunity.notes),
-            links=links.get(opportunity.id) or OpportunityLinks(),
-            source_memo_id=opportunity.source_memo_id,
+    if strategy_pod_code is not None:
+        strategy_pod = await resolve_strategy_pod_for_opportunity(
+            session,
+            user,
+            instrument=opportunity.instrument,
+            strategy_pod_code=strategy_pod_code,
+            discovery_evidence=dict(opportunity.discovery_evidence or {}),
+            source="update",
         )
-        if error and not override_reason:
-            raise OpportunityValidationError(error)
-        if error and override_reason:
-            history_note = f"Override from {previous_status}: {override_reason}"
+        opportunity.strategy_pod_id = strategy_pod.id if strategy_pod is not None else None
+
+    if pre_trade_check_id is not _UNSET:
+        if pre_trade_check_id is None:
+            opportunity.pre_trade_risk_check_id = None
         else:
-            history_note = f"Moved from {previous_status}."
-    else:
-        history_note = None
+            await _validate_pre_trade_check_for_opportunity(
+                session, user, opportunity, pre_trade_check_id
+            )
+            opportunity.pre_trade_risk_check_id = pre_trade_check_id
 
     for field_name, value in updates.items():
         if field_name == "thesis" and value is None:
             raise OpportunityValidationError("Opportunity thesis is required.")
         setattr(opportunity, field_name, value)
 
+    links = await _load_links(session, user, [opportunity])
+    error = status_gate_error(
+        str(proposed_status),
+        thesis=opportunity.thesis,
+        research_question=opportunity.research_question,
+        target_weight=opportunity.target_weight,
+        notes=opportunity.notes,
+        links=links.get(opportunity.id) or OpportunityLinks(),
+        source_memo_id=opportunity.source_memo_id,
+    )
+    if error and not override_reason:
+        raise OpportunityValidationError(error)
+
     if proposed_status != previous_status:
+        if error and override_reason:
+            history_note = f"Override from {previous_status}: {override_reason}"
+        else:
+            history_note = f"Moved from {previous_status}."
+    elif error and override_reason:
+        history_note = f"Override while retaining {previous_status}: {override_reason}"
+    else:
+        history_note = None
+
+    if history_note is not None:
         history = list(opportunity.status_history or [])
-        history.append(_status_event(str(proposed_status), history_note or ""))
+        history.append(_status_event(str(proposed_status), history_note))
         opportunity.status_history = history
-        if "next_action" not in updates:
+        if proposed_status != previous_status and "next_action" not in updates:
             opportunity.next_action = _default_next_action(str(proposed_status))
+
+    if error and override_reason:
+        await record_system_log(
+            session,
+            owner_user_id=user.id,
+            category="opportunity",
+            event="opportunity_gate_overridden",
+            message=f"{opportunity.instrument.ticker} opportunity gate overridden.",
+            context={
+                "opportunity_id": str(opportunity.id),
+                "ticker": opportunity.instrument.ticker,
+                "status": opportunity.status,
+                "blocker": error,
+                "override_reason": override_reason,
+            },
+        )
 
     if opportunity.status in CLOSED_STATUSES and opportunity.closed_at is None:
         opportunity.closed_at = datetime.now(timezone.utc)
@@ -320,6 +449,7 @@ async def _load_opportunity(
             selectinload(Opportunity.instrument),
             selectinload(Opportunity.source_memo),
             selectinload(Opportunity.source_recommendation),
+            selectinload(Opportunity.strategy_pod),
         )
         .where(Opportunity.owner_user_id == user.id, Opportunity.id == opportunity_id)
     )
@@ -336,6 +466,7 @@ async def _load_opportunity_by_source_memo(
             selectinload(Opportunity.instrument),
             selectinload(Opportunity.source_memo),
             selectinload(Opportunity.source_recommendation),
+            selectinload(Opportunity.strategy_pod),
         )
         .where(
             Opportunity.owner_user_id == user.id,
@@ -403,6 +534,13 @@ def _opportunity_response(
         instrument=InstrumentResponse.model_validate(opportunity.instrument),
         source_memo_id=opportunity.source_memo_id,
         source_recommendation_id=opportunity.source_recommendation_id,
+        strategy_pod_id=opportunity.strategy_pod_id,
+        pre_trade_risk_check_id=opportunity.pre_trade_risk_check_id,
+        strategy_pod=(
+            _strategy_pod_link(opportunity.strategy_pod)
+            if opportunity.strategy_pod is not None
+            else None
+        ),
         discovered_at=opportunity.discovered_at,
         status=opportunity.status,
         priority=opportunity.priority,
@@ -441,11 +579,87 @@ def _candidate_response(memo: TickerMemo) -> OpportunityCandidateResponse:
         action=_optional_string(scores.get("action")),
         composite_score=_decimal(scores.get("composite_score")),
         confidence_score=_decimal(scores.get("confidence_score")),
+        suggested_strategy_pod_code=default_strategy_pod_code(
+            memo.instrument,
+            discovery_evidence={},
+            source="memo",
+        ),
     )
 
 
+def _strategy_pod_link(pod: StrategyPod) -> OpportunityStrategyPodLink:
+    return OpportunityStrategyPodLink(
+        id=pod.id,
+        code=pod.code,
+        name=pod.name,
+        pod_category=pod.pod_category,
+    )
+
+
+def default_strategy_pod_code(
+    instrument: Instrument,
+    *,
+    discovery_evidence: dict | None = None,
+    source: str = "manual",
+) -> str:
+    ticker = (instrument.ticker or "").upper().removesuffix(".NG")
+    evidence = discovery_evidence or {}
+    evidence_blob = " ".join(
+        str(value).lower() for value in evidence.values() if value is not None
+    )
+    if any(
+        token in evidence_blob
+        for token in ("rotation", "beneficiary", "related_tickers", "capital rotation")
+    ):
+        return "relative_value"
+    if ticker in TREND_ETF_TICKERS:
+        return "cross_asset_trend"
+    if source == "quant":
+        return "quant_equity"
+    return DEFAULT_STRATEGY_POD_CODE
+
+
+async def resolve_strategy_pod_for_opportunity(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    *,
+    instrument: Instrument,
+    strategy_pod_code: str | None = None,
+    discovery_evidence: dict | None = None,
+    source: str = "manual",
+) -> StrategyPod | None:
+    pods = await _ensure_owner_pods(session, user)
+    by_code = {pod.code: pod for pod in pods}
+    requested = (
+        normalize_strategy_pod_code(strategy_pod_code)
+        if strategy_pod_code
+        else default_strategy_pod_code(
+            instrument,
+            discovery_evidence=discovery_evidence,
+            source=source,
+        )
+    )
+    if requested in by_code:
+        return by_code[requested]
+    return by_code.get(DEFAULT_STRATEGY_POD_CODE) or next(iter(pods), None)
+
+
+async def _ensure_owner_pods(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+) -> list[StrategyPod]:
+    existing = list(
+        await session.scalars(
+            select(StrategyPod).where(StrategyPod.owner_user_id == user.id)
+        )
+    )
+    if existing:
+        return existing
+    return await _get_or_seed_strategy_pods(session, user)
+
+
 def _queue_summary(
-    opportunities: list[Opportunity],
+    opportunities: list,
     candidate_count: int,
 ) -> OpportunityQueueSummaryResponse:
     status_counts = {status: 0 for status in STATUS_ORDER}
@@ -480,13 +694,13 @@ def _queue_summary(
     )
 
 
-def _opportunity_sort_key(opportunity: Opportunity) -> tuple[int, int, datetime]:
+def _opportunity_sort_key(opportunity: Opportunity) -> tuple[int, int, float]:
     priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
     status_order = {status: index for index, status in enumerate(STATUS_ORDER)}
     return (
         status_order.get(opportunity.status, len(status_order)),
         priority_order.get(opportunity.priority, len(priority_order)),
-        opportunity.updated_at,
+        -opportunity.updated_at.timestamp(),
     )
 
 
@@ -512,8 +726,8 @@ def _default_next_action(status: str) -> str:
         return "Open Ticker Analyst and decide whether to research."
     if status == "research":
         return "Save a ticker memo, then promote to candidate."
-    if status == "watchlist":
-        return "Hold in the queue until a thesis trigger. This is not the radar watchlist."
+    if status == "parked":
+        return "Parked in the queue until a thesis trigger. Not the radar watchlist."
     if status == "candidate":
         return "Set thesis, research question, and target weight, then run pre-trade risk."
     if status == "approved":
@@ -531,7 +745,7 @@ NEXT_STATUS = {
     "discovered": "screening",
     "screening": "research",
     "research": "candidate",
-    "watchlist": "candidate",
+    "parked": "candidate",
     "candidate": "approved",
     "approved": "active_position",
     "active_position": "exited",
@@ -621,6 +835,18 @@ def _paginate(
     return safe_page, safe_size, total, total_pages, rows[start : start + safe_size]
 
 
+def _page_window(
+    total: int,
+    page: int,
+    page_size: int,
+) -> tuple[int, int, int, int]:
+    safe_size = min(max(page_size, 1), 100)
+    total_pages = max(1, (total + safe_size - 1) // safe_size) if total else 1
+    safe_page = min(max(page, 1), total_pages)
+    offset = (safe_page - 1) * safe_size
+    return safe_page, safe_size, total_pages, offset
+
+
 async def _load_links(
     session: AsyncSession,
     user: AuthenticatedUser,
@@ -629,6 +855,11 @@ async def _load_links(
     if not opportunities:
         return {}
     instrument_ids = {opportunity.instrument_id for opportunity in opportunities}
+    linked_pre_trade_ids = {
+        opportunity.pre_trade_risk_check_id
+        for opportunity in opportunities
+        if opportunity.pre_trade_risk_check_id is not None
+    }
     tickers: set[str] = set()
     for opportunity in opportunities:
         ticker = opportunity.instrument.ticker.upper()
@@ -686,7 +917,18 @@ async def _load_links(
     for trade in trades:
         trade_by_instrument.setdefault(trade.instrument_id, trade)
 
-    checks = list(
+    linked_checks = []
+    if linked_pre_trade_ids:
+        linked_checks = list(
+            await session.scalars(
+                select(PreTradeRiskCheck)
+                .where(PreTradeRiskCheck.owner_user_id == user.id)
+                .where(PreTradeRiskCheck.id.in_(linked_pre_trade_ids))
+            )
+        )
+    check_by_id = {check.id: check for check in linked_checks}
+
+    latest_checks = list(
         await session.scalars(
             select(PreTradeRiskCheck)
             .where(PreTradeRiskCheck.owner_user_id == user.id)
@@ -694,13 +936,11 @@ async def _load_links(
             .limit(200)
         )
     )
-    check_by_ticker: dict = {}
-    for check in checks:
-        payload = check.request_payload or {}
-        instrument = payload.get("instrument") or {}
-        ticker = str(instrument.get("ticker") or "").upper()
-        if ticker and ticker not in check_by_ticker:
-            check_by_ticker[ticker] = check
+    latest_check_by_ticker: dict = {}
+    for check in latest_checks:
+        ticker = _pre_trade_ticker(check)
+        if ticker and ticker not in latest_check_by_ticker:
+            latest_check_by_ticker[ticker] = check
 
     links: dict = {}
     for opportunity in opportunities:
@@ -708,7 +948,14 @@ async def _load_links(
         quote_symbol = quote_symbol_for(opportunity.instrument)
         memo = opportunity.source_memo or memo_by_instrument.get(opportunity.instrument_id)
         snapshot = snapshot_by_ticker.get(quote_symbol) or snapshot_by_ticker.get(ticker)
-        check = check_by_ticker.get(quote_symbol) or check_by_ticker.get(ticker)
+        check = (
+            check_by_id.get(opportunity.pre_trade_risk_check_id)
+            if opportunity.pre_trade_risk_check_id is not None
+            else None
+        )
+        check_is_linked = check is not None
+        if check is None:
+            check = latest_check_by_ticker.get(quote_symbol) or latest_check_by_ticker.get(ticker)
         position = position_by_instrument.get(opportunity.instrument_id)
         trade = trade_by_instrument.get(opportunity.instrument_id)
         evidence = dict(snapshot.evidence or {}) if snapshot else {}
@@ -747,6 +994,7 @@ async def _load_links(
                     decision=check.decision,
                     risk_level=check.risk_level,
                     checked_at=check.checked_at,
+                    linked=check_is_linked,
                 )
                 if check is not None
                 else None
@@ -775,6 +1023,39 @@ async def _load_links(
             ),
         )
     return links
+
+
+async def _validate_pre_trade_check_for_opportunity(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    opportunity: Opportunity,
+    check_id: UUID,
+) -> PreTradeRiskCheck:
+    check = await session.scalar(
+        select(PreTradeRiskCheck).where(
+            PreTradeRiskCheck.owner_user_id == user.id,
+            PreTradeRiskCheck.id == check_id,
+        )
+    )
+    if check is None:
+        raise OpportunityValidationError("Pre-trade risk check was not found.")
+
+    valid_tickers = {
+        opportunity.instrument.ticker.upper(),
+        quote_symbol_for(opportunity.instrument).upper(),
+    }
+    if _pre_trade_ticker(check) not in valid_tickers:
+        raise OpportunityValidationError(
+            "Pre-trade risk check does not match this opportunity ticker."
+        )
+    return check
+
+
+def _pre_trade_ticker(check: PreTradeRiskCheck) -> str | None:
+    payload = check.request_payload or {}
+    instrument = payload.get("instrument") or {}
+    ticker = str(instrument.get("ticker") or "").upper()
+    return ticker or None
 
 
 def status_gate_error(
@@ -826,9 +1107,11 @@ def status_blockers(
     if status == "approved":
         if links.pre_trade is None:
             blockers.append("Run a pre-trade risk check in Risk Centre before Approved.")
+        elif not links.pre_trade.linked:
+            blockers.append("Link the matching pre-trade risk check before Approved.")
         elif links.pre_trade.decision != "approve":
             blockers.append(
-                f"Latest pre-trade decision is {links.pre_trade.decision}, not approve."
+                f"Linked pre-trade decision is {links.pre_trade.decision}, not approve."
             )
     if status == "active_position" and links.position is None:
         blockers.append("Record a live fill in the Trade Journal before Active Position.")

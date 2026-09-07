@@ -40,6 +40,7 @@ from app.models import (
     RadarSnapshot,
 )
 from app.api.schemas.operating_core import InstrumentCreate
+from app.core.auth import AuthenticatedUser
 from app.services.administration.system_log import record_system_log
 from app.services.market_data.ingestion import persist_quotes
 from app.services.market_data.quote_provider import LiveQuote, fetch_quotes
@@ -70,6 +71,7 @@ from app.services.market_radar.scoring import (
     score_candidate,
 )
 from app.services.market_radar.watchlist import load_always_watched
+from app.services.opportunity_queue.queue import resolve_strategy_pod_for_opportunity
 from app.services.portfolio.operating_core import upsert_instrument
 
 logger = logging.getLogger(__name__)
@@ -1105,10 +1107,18 @@ async def promote_flagged_candidates(
                     ),
                 )
             evidence = build_evidence_package(candidate, as_of=now)
+            strategy_pod = await resolve_strategy_pod_for_opportunity(
+                session,
+                AuthenticatedUser(id=owner, email=None),
+                instrument=instrument,
+                discovery_evidence=evidence,
+                source="radar",
+            )
             session.add(
                 Opportunity(
                     owner_user_id=owner,
                     instrument_id=instrument.id,
+                    strategy_pod_id=strategy_pod.id if strategy_pod is not None else None,
                     discovered_at=now,
                     status="discovered",
                     priority=queue_priority_for(candidate.radar_priority),
@@ -1126,6 +1136,7 @@ async def promote_flagged_candidates(
                             "radar_priority": candidate.radar_priority,
                             "anomaly_score": str(candidate.anomaly_score),
                             "priority_score": str(candidate.priority_score),
+                            "strategy_pod": strategy_pod.code if strategy_pod else None,
                         }
                     ],
                 )

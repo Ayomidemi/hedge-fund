@@ -98,6 +98,9 @@ export function ReportsCenter({
   const [selectedAsOf, setSelectedAsOf] = useState(
     initialReport?.period_start ?? currentDateValue(),
   );
+  const [loadedParams, setLoadedParams] = useState<ReportQueryParams | null>(
+    initialReport ? paramsFromReport(initialReport) : null,
+  );
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [archiveAction, setArchiveAction] = useState<string | null>(null);
@@ -152,13 +155,19 @@ export function ReportsCenter({
         report.research_pipeline,
       ]
     : [];
+  const controlsDirty =
+    report !== null &&
+    loadedParams !== null &&
+    reportQueryKey(currentParams()) !== reportQueryKey(loadedParams);
 
   async function handleLoad() {
     setLoading(true);
     setError(null);
     try {
-      const next = await getReportOverview(currentParams());
+      const params = currentParams();
+      const next = await getReportOverview(params);
       setReport(next);
+      setLoadedParams(paramsFromReport(next));
       syncControls(next);
     } catch (loadError) {
       setError(
@@ -176,10 +185,11 @@ export function ReportsCenter({
     setSaving(true);
     setError(null);
     try {
-      const saved = await saveReportSnapshot(currentParams());
+      const saved = await saveReportSnapshot(loadedParams ?? paramsFromReport(report));
       setSnapshots((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       if (saved.payload) {
         setReport(saved.payload);
+        setLoadedParams(paramsFromReport(saved.payload));
         syncControls(saved.payload);
       }
     } catch (saveError) {
@@ -256,6 +266,7 @@ export function ReportsCenter({
         return;
       }
       setReport(detail.payload);
+      setLoadedParams(paramsFromReport(detail.payload));
       syncControls(detail.payload);
       setSelectedSnapshot(null);
     } catch (snapshotError) {
@@ -421,7 +432,7 @@ export function ReportsCenter({
   }
 
   return (
-    <div className="mx-auto max-w-[1560px] space-y-5">
+    <div className="mx-auto max-w-[1320px] space-y-4">
       <datalist id="report-month-options">
         {monthOptions.map((option) => (
           <option key={option.value} value={option.value}>
@@ -430,8 +441,8 @@ export function ReportsCenter({
         ))}
       </datalist>
       <section className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-          <div>
+        <div className="flex flex-col gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               {report.portfolio_name}
             </p>
@@ -444,11 +455,11 @@ export function ReportsCenter({
               {formatLabel(report.reporting_mode)}
             </p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-zinc-50 p-2 dark:bg-zinc-900/60 xl:justify-end">
             <select
               value={selectedKind}
               onChange={(event) => handleKindChange(event.target.value as ReportKind)}
-              className={`${inputControlClassName} h-10 w-[134px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+              className={`${inputControlClassName} h-9 w-[128px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
               aria-label="Report type"
             >
               {reportKindOptions.map((option) => (
@@ -472,17 +483,17 @@ export function ReportsCenter({
               type="button"
               onClick={() => void handleLoad()}
               disabled={loading}
-              className={`${whiteButtonClassName} w-10 px-0`}
+              className={`${whiteButtonClassName} h-9 gap-2`}
               aria-label="Go to selected report"
-              title="Go"
             >
-              {loading ? <span className="text-xs">...</span> : <GoIcon />}
+              <GoIcon />
+              {loading ? "Loading" : "Generate"}
             </button>
             <button
               type="button"
               onClick={() => void handleSaveSnapshot()}
               disabled={saving}
-              className={`${whiteButtonClassName} gap-2`}
+              className={`${whiteButtonClassName} h-9 gap-2`}
             >
               <SaveIcon />
               {saving ? "Saving" : "Save"}
@@ -490,15 +501,15 @@ export function ReportsCenter({
             <button
               type="button"
               onClick={handleExport}
-              className={`${whiteButtonClassName} gap-2`}
+              className={`${whiteButtonClassName} h-9 gap-2`}
             >
               <PdfIcon />
-              Print PDF
+              PDF
             </button>
           </div>
         </div>
 
-        <div className="grid divide-y divide-zinc-200 sm:grid-cols-2 lg:grid-cols-6 lg:divide-x lg:divide-y-0 dark:divide-zinc-800">
+        <div className="grid gap-px bg-zinc-200 sm:grid-cols-2 lg:grid-cols-6 dark:bg-zinc-800">
           {summaryMetrics.map((metric) => (
             <Metric key={metric.label} {...metric} />
           ))}
@@ -508,21 +519,20 @@ export function ReportsCenter({
             {error}
           </p>
         ) : null}
+        {controlsDirty ? (
+          <p className="border-t border-zinc-200 px-5 py-3 text-sm text-zinc-500 dark:border-zinc-800">
+            Period controls changed. Generate to update the report; Save keeps
+            the report currently on screen.
+          </p>
+        ) : null}
       </section>
 
       <ReportTabs activeView={activeView} onChange={handleViewChange} />
 
       {activeView === "overview" ? (
         <OverviewView
-          activeSnapshotKey={`${report.report_kind}:${report.period_key}:${report.generated_at}`}
           compactSections={compactSections}
-          archiveAction={archiveAction}
-          onSnapshotDelete={handleSnapshotDelete}
-          onSnapshotExport={handleSnapshotExport}
-          onSnapshotOpen={handleSnapshotOpen}
-          onSnapshotPreview={handleSnapshotPreview}
           report={report}
-          snapshots={snapshots}
         />
       ) : null}
 
@@ -537,8 +547,6 @@ export function ReportsCenter({
           activeSnapshotKey={`${report.report_kind}:${report.period_key}:${report.generated_at}`}
           maxItems={24}
           archiveAction={archiveAction}
-          onDelete={handleSnapshotDelete}
-          onExport={handleSnapshotExport}
           onOpen={handleSnapshotOpen}
           onPreview={handleSnapshotPreview}
           snapshots={snapshots}
@@ -570,7 +578,7 @@ function ReportTabs({
   onChange: (view: ReportCenterView) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2 rounded-lg border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
       {reportViewOptions.map((option) => {
         const isActive = option.value === activeView;
         return (
@@ -578,10 +586,10 @@ function ReportTabs({
             key={option.value}
             type="button"
             onClick={() => onChange(option.value)}
-            className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+            className={`border-b-2 px-3 py-2 text-sm font-medium transition ${
               isActive
-                ? "bg-zinc-950 text-white dark:bg-zinc-50 dark:text-zinc-950"
-                : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                ? "border-zinc-950 text-zinc-950 dark:border-zinc-50 dark:text-zinc-50"
+                : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
             }`}
           >
             {option.label}
@@ -593,96 +601,81 @@ function ReportTabs({
 }
 
 function OverviewView({
-  activeSnapshotKey,
-  archiveAction,
   compactSections,
-  onSnapshotDelete,
-  onSnapshotExport,
-  onSnapshotOpen,
-  onSnapshotPreview,
   report,
-  snapshots,
 }: {
-  activeSnapshotKey: string;
-  archiveAction: string | null;
   compactSections: ReportCompactSection[];
-  onSnapshotDelete: (snapshot: ReportSnapshot) => void;
-  onSnapshotExport: (snapshot: ReportSnapshot) => void;
-  onSnapshotOpen: (snapshot: ReportSnapshot) => void;
-  onSnapshotPreview: (snapshot: ReportSnapshot) => void;
   report: MonthlyReport;
-  snapshots: ReportSnapshot[];
 }) {
+  const aiOverview = compactSections[0] ?? buildClientAiOverview(report);
+  const operatingSections = compactSections.filter(
+    (section) => section.title !== aiOverview.title,
+  );
+
   return (
-    <div className="space-y-5">
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="space-y-4">
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <Panel title={aiOverview.title} subtitle="Generated from report data">
+          <div className="grid gap-3 sm:grid-cols-2">
+            {aiOverview.items.map((item) => (
+              <SummaryRead key={item.label} label={item.label} value={item.value} />
+            ))}
+          </div>
+          {aiOverview.note ? (
+            <p className="mt-4 text-xs leading-5 text-zinc-500">{aiOverview.note}</p>
+          ) : null}
+        </Panel>
+
+        <Panel title="Period Snapshot" subtitle={formatDateTime(report.generated_at)}>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <SmallMetric label="Cash" value={money(report.cash_balance)} />
+            <SmallMetric label="Invested" value={money(report.invested_value)} />
+            <SmallMetric label="Cash flow" value={money(report.period_cash_flow)} />
+            <SmallMetric label="Activity" value={`${report.period_trade_count} trades`} />
+          </div>
+        </Panel>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Panel
           title={
             report.report_kind === "monthly"
               ? "Investment Letter"
               : "Report Narrative"
           }
-          subtitle={`Generated ${formatDateTime(report.generated_at)}`}
         >
           <p className="max-w-4xl text-sm leading-6 text-zinc-700 dark:text-zinc-300">
             {report.commentary}
           </p>
         </Panel>
 
-        <ArchivePanel
-          activeSnapshotKey={activeSnapshotKey}
-          archiveAction={archiveAction}
-          maxItems={4}
-          onDelete={onSnapshotDelete}
-          onExport={onSnapshotExport}
-          onOpen={onSnapshotOpen}
-          onPreview={onSnapshotPreview}
-          snapshots={snapshots}
-        />
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {compactSections.map((section) => (
-          <CompactSectionCard key={section.title} section={section} />
-        ))}
-      </section>
-
-      <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-        <AttributionPanel report={report} />
         <Panel title="Benchmark And Risk">
           <BenchmarkSummary report={report} />
-          <div className="mt-5 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-            {report.risk_warnings.length > 0 ? (
-              <div className="space-y-2">
-                {report.risk_warnings.slice(0, 5).map((warning) => (
-                  <p
-                    key={warning}
-                    className="text-sm leading-6 text-amber-700 dark:text-amber-300"
-                  >
-                    {warning}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-zinc-500">No active risk warnings.</p>
-            )}
-          </div>
+          <RiskWarningList warnings={report.risk_warnings} />
         </Panel>
       </section>
 
-      <Panel title="Top Positions">
-        <Table
-          headers={["Ticker", "Asset", "Weight", "Market value", "P/L"]}
-          rows={report.top_positions.map((position) => [
-            position.ticker,
-            formatLabel(position.asset_class),
-            pct(position.portfolio_weight_pct),
-            money(position.market_value),
-            money(position.unrealized_pnl),
-          ])}
-          empty="No open positions."
-        />
-      </Panel>
+      <section className="grid gap-4 lg:grid-cols-2">
+        <AttributionPanel report={report} />
+        <Panel title="Top Positions">
+          <Table
+            headers={["Ticker", "Weight", "Value", "P/L"]}
+            rows={report.top_positions.slice(0, 5).map((position) => [
+              position.ticker,
+              pct(position.portfolio_weight_pct),
+              money(position.market_value),
+              money(position.unrealized_pnl),
+            ])}
+            empty="No open positions."
+          />
+        </Panel>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {operatingSections.slice(0, 4).map((section) => (
+          <CompactSectionCard key={section.title} section={section} />
+        ))}
+      </section>
     </div>
   );
 }
@@ -828,7 +821,7 @@ function PeriodControls({
         type="date"
         value={selectedAsOf}
         onChange={(event) => setSelectedAsOf(event.target.value)}
-        className={`${inputControlClassName} h-10 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+        className={`${inputControlClassName} h-9 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
         aria-label="Report day"
       />
     );
@@ -840,7 +833,7 @@ function PeriodControls({
         type="date"
         value={selectedAsOf}
         onChange={(event) => setSelectedAsOf(event.target.value)}
-        className={`${inputControlClassName} h-10 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+        className={`${inputControlClassName} h-9 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
         aria-label="Report week"
       />
     );
@@ -852,7 +845,7 @@ function PeriodControls({
         type="month"
         value={selectedMonth}
         onChange={(event) => setSelectedMonth(event.target.value)}
-        className={`${inputControlClassName} h-10 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+        className={`${inputControlClassName} h-9 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
         aria-label="Report month"
         list="report-month-options"
       />
@@ -865,7 +858,7 @@ function PeriodControls({
         <select
           value={selectedQuarter}
           onChange={(event) => setSelectedQuarter(event.target.value)}
-          className={`${inputControlClassName} h-10 w-[82px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+          className={`${inputControlClassName} h-9 w-[82px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
           aria-label="Report quarter"
         >
           {quarterOptions.map((option) => (
@@ -895,7 +888,7 @@ function YearSelect({
     <select
       value={selectedYear}
       onChange={(event) => setSelectedYear(event.target.value)}
-      className={`${inputControlClassName} h-10 w-[108px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+      className={`${inputControlClassName} h-9 w-[108px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
       aria-label="Report year"
     >
       {yearOptions.map((option) => (
@@ -911,8 +904,6 @@ function ArchivePanel({
   activeSnapshotKey,
   archiveAction,
   maxItems = 8,
-  onDelete,
-  onExport,
   onOpen,
   onPreview,
   snapshots,
@@ -921,8 +912,6 @@ function ArchivePanel({
   activeSnapshotKey: string;
   archiveAction: string | null;
   maxItems?: number;
-  onDelete: (snapshot: ReportSnapshot) => void;
-  onExport: (snapshot: ReportSnapshot) => void;
   onOpen: (snapshot: ReportSnapshot) => void;
   onPreview: (snapshot: ReportSnapshot) => void;
   snapshots: ReportSnapshot[];
@@ -971,28 +960,31 @@ function ArchivePanel({
                     {snapshot.return_pct ? pct(snapshot.return_pct) : "-"}
                   </span>
                 </button>
-                <div className="flex shrink-0 items-center gap-1">
-                  <ArchiveActionButton
-                    disabled={busy}
-                    label="Preview"
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
                     onClick={() => onPreview(snapshot)}
-                  />
-                  <ArchiveActionButton
                     disabled={busy}
-                    label="Open"
+                    className={`rounded-md px-2 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isActive
+                        ? "text-zinc-200 hover:bg-white/10 dark:text-zinc-700"
+                        : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                    }`}
+                  >
+                    Preview
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onOpen(snapshot)}
-                  />
-                  <ArchiveActionButton
                     disabled={busy}
-                    label="PDF"
-                    onClick={() => onExport(snapshot)}
-                  />
-                  <ArchiveActionButton
-                    danger
-                    disabled={busy}
-                    label="Delete"
-                    onClick={() => onDelete(snapshot)}
-                  />
+                    className={`rounded-md px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      isActive
+                        ? "bg-white text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50"
+                        : "bg-zinc-950 text-white hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    }`}
+                  >
+                    Open
+                  </button>
                 </div>
               </div>
             </div>
@@ -1003,33 +995,6 @@ function ArchivePanel({
         ) : null}
       </div>
     </Panel>
-  );
-}
-
-function ArchiveActionButton({
-  danger,
-  disabled,
-  label,
-  onClick,
-}: {
-  danger?: boolean;
-  disabled?: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`rounded-md px-2 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
-        danger
-          ? "text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/40"
-          : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-      }`}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -1239,6 +1204,43 @@ function BenchmarkSummary({ report }: { report: MonthlyReport }) {
           {benchmark.notes[0]}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function RiskWarningList({ warnings }: { warnings: string[] }) {
+  return (
+    <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      {warnings.length > 0 ? (
+        <div className="space-y-2">
+          {warnings.slice(0, 3).map((warning) => (
+            <p
+              key={warning}
+              className="text-sm leading-6 text-amber-700 dark:text-amber-300"
+            >
+              {warning}
+            </p>
+          ))}
+          {warnings.length > 3 ? (
+            <p className="text-xs text-zinc-500">+{warnings.length - 3} more</p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-sm text-zinc-500">No active risk warnings.</p>
+      )}
+    </div>
+  );
+}
+
+function SummaryRead({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border-l border-zinc-200 pl-3 dark:border-zinc-800">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+        {label}
+      </p>
+      <p className="mt-1 text-sm font-medium leading-5 text-zinc-800 dark:text-zinc-200">
+        {value}
+      </p>
     </div>
   );
 }
@@ -1610,11 +1612,11 @@ function Metric({
   value: string;
 }) {
   return (
-    <div className="px-5 py-4">
+    <div className="bg-white px-5 py-3 dark:bg-zinc-950">
       <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </p>
-      <p className={`mt-2 text-xl font-semibold tabular-nums ${toneClass(metricTone)}`}>
+      <p className={`mt-1.5 text-lg font-semibold tabular-nums ${toneClass(metricTone)}`}>
         {value}
       </p>
     </div>
@@ -2258,6 +2260,38 @@ function buildClientAiOverview(report: MonthlyReport): ReportCompactSection {
   };
 }
 
+function paramsFromReport(report: MonthlyReport): ReportQueryParams {
+  if (report.report_kind === "daily" || report.report_kind === "weekly") {
+    return { kind: report.report_kind, as_of: report.period_start };
+  }
+  if (report.report_kind === "monthly") {
+    const [year, month] = report.period_start.split("-").map(Number);
+    return { kind: report.report_kind, year, month };
+  }
+  if (report.report_kind === "quarterly") {
+    return {
+      kind: report.report_kind,
+      quarter: quarterFromDate(report.period_start),
+      year: parseDate(report.period_start).getFullYear(),
+    };
+  }
+  return {
+    kind: report.report_kind,
+    year: parseDate(report.period_start).getFullYear(),
+  };
+}
+
+function reportQueryKey(params: ReportQueryParams | null) {
+  if (!params) return "";
+  return [
+    params.kind ?? "",
+    params.year ?? "",
+    params.month ?? "",
+    params.quarter ?? "",
+    params.as_of ?? "",
+  ].join(":");
+}
+
 function formatDate(value: string) {
   return dateFormatter.format(parseDate(value));
 }
@@ -2317,40 +2351,6 @@ function buildYearOptions() {
     options.push({ label: String(year), value: String(year) });
   }
   return options;
-}
-
-function buildDayOptions() {
-  const options: { label: string; value: string }[] = [];
-  const date = new Date();
-  for (let index = 0; index < 45; index += 1) {
-    options.push({
-      label: dateFormatter.format(date),
-      value: dateValue(date),
-    });
-    date.setDate(date.getDate() - 1);
-  }
-  return options;
-}
-
-function buildWeekOptions() {
-  const options: { label: string; value: string }[] = [];
-  const date = startOfWeek(new Date());
-  for (let index = 0; index < 52; index += 1) {
-    options.push({
-      label: `Week of ${dateFormatter.format(date)}`,
-      value: dateValue(date),
-    });
-    date.setDate(date.getDate() - 7);
-  }
-  return options;
-}
-
-function startOfWeek(value: Date) {
-  const next = new Date(value);
-  const day = next.getDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  next.setDate(next.getDate() + mondayOffset);
-  return next;
 }
 
 function dateValue(date: Date) {

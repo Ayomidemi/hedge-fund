@@ -247,7 +247,7 @@ export type OpportunityStatus =
   | "discovered"
   | "screening"
   | "research"
-  | "watchlist"
+  | "parked"
   | "candidate"
   | "approved"
   | "active_position"
@@ -279,6 +279,7 @@ export type OpportunityLinks = {
     decision: string;
     risk_level: string;
     checked_at: string;
+    linked: boolean;
   } | null;
   position: {
     quantity: string;
@@ -303,6 +304,14 @@ export type Opportunity = {
   instrument: Instrument;
   source_memo_id: string | null;
   source_recommendation_id: string | null;
+  strategy_pod_id?: string | null;
+  pre_trade_risk_check_id?: string | null;
+  strategy_pod?: {
+    id: string;
+    code: string;
+    name: string;
+    pod_category: string;
+  } | null;
   discovered_at: string;
   status: OpportunityStatus;
   priority: OpportunityPriority;
@@ -338,6 +347,7 @@ export type OpportunityCandidate = {
   action: string | null;
   composite_score: string | null;
   confidence_score: string | null;
+  suggested_strategy_pod_code?: string;
 };
 
 export type OpportunityQueueSummary = {
@@ -356,6 +366,12 @@ export type OpportunityQueue = {
   opportunities: Opportunity[];
   candidates: OpportunityCandidate[];
   status_order: OpportunityStatus[];
+  strategy_pods?: Array<{
+    id: string;
+    code: string;
+    name: string;
+    pod_category: string;
+  }>;
   page: number;
   page_size: number;
   total: number;
@@ -365,6 +381,8 @@ export type OpportunityQueue = {
 export type OpportunityCreateInput = {
   source_memo_id?: string;
   instrument?: ManualTradeInput["instrument"];
+  pre_trade_check_id?: string | null;
+  strategy_pod_code?: string;
   status?: OpportunityStatus;
   priority?: OpportunityPriority;
   thesis?: string;
@@ -679,10 +697,18 @@ export type TickerDesk = {
     generated_at: string;
     research_priority: "high" | "medium" | "low" | string;
     initial_view: string;
-    triage_decision: "research" | "watch" | "reject" | string;
+    triage_decision: "research" | "watch" | "reject" | "hard_pass" | "setup_invalid" | "candidate" | string;
     action_label: string;
     confidence_score: string;
     composite_score: string;
+    capital_score: string | null;
+    timing_score: string | null;
+    capital_coverage: string | null;
+    timing_coverage: string | null;
+    hard_blockers: string[];
+    setup_status: string | null;
+    capital_blocked: boolean;
+    entry_plan: TickerTriageEntryPlan | null;
     recommended_weight: string;
     next_action: string;
   } | null;
@@ -693,13 +719,28 @@ export type TickerDesk = {
     summary: string;
     confidence_score: string | null;
     composite_score: string | null;
+    capital_score: string | null;
+    timing_score: string | null;
     recommended_weight: string | null;
     source_generated_at: string | null;
     position_context: "owned" | "not_owned" | string;
     blockers: string[];
     next_step: string;
+    setup_status: string | null;
+    capital_blocked: boolean;
   } | null;
   memos: TickerMemoSummary[];
+};
+
+export type TickerTriageEntryPlan = {
+  status: string;
+  capital_blocked: boolean;
+  entry_zone: string | null;
+  invalidation: string | null;
+  max_loss_pct_nav: string | null;
+  time_stop_sessions: number | null;
+  chase_note: string | null;
+  notes: string[];
 };
 
 export type TickerVerdict = {
@@ -712,11 +753,19 @@ export type TickerVerdict = {
   generated_at: string;
   research_priority: "high" | "medium" | "low" | string;
   initial_view: string;
-  triage_decision: "research" | "watch" | "reject" | string;
+  triage_decision: "research" | "watch" | "reject" | "hard_pass" | "setup_invalid" | "candidate" | string;
   action_label: string;
   confidence_score: string;
   conviction_score: string;
   composite_score: string;
+  capital_score: string | null;
+  timing_score: string | null;
+  capital_coverage: string;
+  timing_coverage: string;
+  hard_blockers: string[];
+  setup_status: string | null;
+  capital_blocked: boolean;
+  entry_plan: TickerTriageEntryPlan | null;
   recommended_weight: string;
   top_drivers: string[];
   top_blockers: string[];

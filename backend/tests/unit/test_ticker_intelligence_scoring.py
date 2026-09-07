@@ -36,6 +36,8 @@ class TickerIntelligenceScoringTests(TestCase):
 
         self.assertGreaterEqual(scorecard.composite_score, Decimal("70"))
         self.assertGreaterEqual(scorecard.confidence_score, Decimal("80"))
+        self.assertIsNotNone(scorecard.capital_score)
+        self.assertGreaterEqual(scorecard.capital_score or Decimal("0"), Decimal("70"))
         self.assertIn(scorecard.action, {"buy", "hold"})
         self.assertGreater(scorecard.recommended_weight, Decimal("0"))
 
@@ -47,6 +49,66 @@ class TickerIntelligenceScoringTests(TestCase):
 
         self.assertEqual(scorecard.action, "watch")
         self.assertEqual(scorecard.classification, "data-incomplete watchlist")
+        self.assertEqual(scorecard.recommended_weight, Decimal("0.0000"))
+        self.assertLess(scorecard.capital_coverage, Decimal("40"))
+
+    def test_missing_metrics_are_excluded_not_neutral_fifty(self) -> None:
+        scorecard = score_ticker(
+            TickerMetricsInput(
+                pe_ratio=Decimal("12"),
+                forward_pe=Decimal("11"),
+                free_cash_flow_yield_pct=Decimal("6"),
+                net_margin_pct=Decimal("20"),
+                debt_to_equity=Decimal("0.3"),
+                revenue_growth_pct=Decimal("15"),
+                earnings_growth_pct=Decimal("18"),
+                # No momentum fields — must not invent 50s into capital.
+            ),
+            asset_class="equity",
+        )
+
+        self.assertIsNotNone(scorecard.capital_score)
+        self.assertIsNone(scorecard.timing_score)
+        self.assertEqual(scorecard.timing_coverage, Decimal("0.00"))
+        self.assertGreaterEqual(scorecard.capital_score or Decimal("0"), Decimal("70"))
+
+    def test_crash_tape_hurts_timing_not_automatic_capital_avoid(self) -> None:
+        scorecard = score_ticker(
+            TickerMetricsInput(
+                pe_ratio=Decimal("14"),
+                forward_pe=Decimal("12"),
+                revenue_growth_pct=Decimal("10"),
+                earnings_growth_pct=Decimal("12"),
+                free_cash_flow_yield_pct=Decimal("5"),
+                net_margin_pct=Decimal("18"),
+                debt_to_equity=Decimal("0.5"),
+                price_vs_200d_pct=Decimal("-33"),
+                relative_strength_6m_pct=Decimal("-28"),
+                volatility_30d_pct=Decimal("70"),
+            ),
+            asset_class="equity",
+        )
+
+        self.assertIsNotNone(scorecard.capital_score)
+        self.assertIsNotNone(scorecard.timing_score)
+        self.assertGreaterEqual(scorecard.capital_score or Decimal("0"), Decimal("55"))
+        self.assertLess(scorecard.timing_score or Decimal("100"), Decimal("35"))
+        self.assertNotEqual(scorecard.action, "avoid")
+        self.assertEqual(scorecard.hard_blockers, [])
+
+    def test_extreme_leverage_is_hard_capital_blocker(self) -> None:
+        scorecard = score_ticker(
+            TickerMetricsInput(
+                debt_to_equity=Decimal("7"),
+                free_cash_flow_yield_pct=Decimal("-2"),
+                net_margin_pct=Decimal("-5"),
+                pe_ratio=Decimal("8"),
+            ),
+            asset_class="equity",
+        )
+
+        self.assertTrue(scorecard.hard_blockers)
+        self.assertEqual(scorecard.action, "avoid")
         self.assertEqual(scorecard.recommended_weight, Decimal("0.0000"))
 
     def test_etf_weight_cap_is_larger_than_single_equity_cap(self) -> None:
@@ -65,7 +127,7 @@ class TickerIntelligenceScoringTests(TestCase):
         self.assertLessEqual(equity_weight, Decimal("0.0500"))
         self.assertLessEqual(etf_weight, Decimal("0.2000"))
 
-    def test_low_score_is_avoid_action(self) -> None:
+    def test_low_known_capital_score_is_avoid_action(self) -> None:
         self.assertEqual(action_from_score(Decimal("30"), Decimal("90")), "avoid")
 
 
@@ -76,7 +138,7 @@ class TickerDeskTests(TestCase):
         self.assertEqual(ticker_variants("dangcem.ng"), {"DANGCEM", "DANGCEM.NG"})
         self.assertEqual(ticker_variants("aapl"), {"AAPL", "AAPL.NG"})
 
-    def test_decision_snapshot_turns_research_triage_into_buy_candidate(self) -> None:
+    def test_decision_snapshot_turns_candidate_triage_into_research_candidate(self) -> None:
         from app.services.ticker_intelligence.analysis import _build_decision_snapshot
 
         snapshot = _build_decision_snapshot(
@@ -86,7 +148,12 @@ class TickerDeskTests(TestCase):
                 generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
                 next_action="Proceed to deep research.",
                 recommended_weight=Decimal("0.0300"),
-                triage_decision="research",
+                triage_decision="candidate",
+                context={
+                    "capital_score": "74",
+                    "timing_score": "60",
+                    "capital_blocked": False,
+                },
             ),
             position=None,
             opportunity=None,
@@ -98,11 +165,11 @@ class TickerDeskTests(TestCase):
             memo_count=0,
         )
 
-        self.assertEqual(snapshot.action, "buy_candidate")
-        self.assertEqual(snapshot.action_label, "Buy Candidate")
+        self.assertEqual(snapshot.action, "research_candidate")
+        self.assertEqual(snapshot.action_label, "Research Candidate")
         self.assertEqual(snapshot.stance, "constructive")
 
-    def test_decision_snapshot_flags_owned_reject_as_position_review(self) -> None:
+    def test_decision_snapshot_flags_owned_hard_pass_as_position_review(self) -> None:
         from app.services.ticker_intelligence.analysis import _build_decision_snapshot
 
         snapshot = _build_decision_snapshot(
@@ -110,9 +177,10 @@ class TickerDeskTests(TestCase):
                 confidence_score=Decimal("70"),
                 composite_score=Decimal("35"),
                 generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
-                next_action="Reject for now.",
+                next_action="Hard pass on capital.",
                 recommended_weight=Decimal("0.0000"),
-                triage_decision="reject",
+                triage_decision="hard_pass",
+                context={"capital_blocked": True, "hard_blockers": ["Extreme leverage."]},
             ),
             position=SimpleNamespace(quantity=Decimal("10")),
             opportunity=None,
@@ -127,6 +195,32 @@ class TickerDeskTests(TestCase):
         self.assertEqual(snapshot.action, "review_position")
         self.assertEqual(snapshot.action_label, "Review Position")
         self.assertEqual(snapshot.stance, "risk")
+
+    def test_decision_snapshot_maps_legacy_reject_to_hard_pass(self) -> None:
+        from app.services.ticker_intelligence.analysis import _build_decision_snapshot
+
+        snapshot = _build_decision_snapshot(
+            latest_triage=SimpleNamespace(
+                confidence_score=Decimal("70"),
+                composite_score=Decimal("35"),
+                generated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+                next_action="Reject for now.",
+                recommended_weight=Decimal("0.0000"),
+                triage_decision="reject",
+                context={},
+            ),
+            position=None,
+            opportunity=None,
+            watchlist_id=None,
+            radar_snapshot=None,
+            radar_evidence={},
+            pre_trade=None,
+            news=None,
+            memo_count=0,
+        )
+
+        self.assertEqual(snapshot.action, "hard_pass")
+        self.assertEqual(snapshot.action_label, "Hard Pass")
 
     def test_decision_snapshot_asks_for_triage_when_no_saved_screen_exists(self) -> None:
         from app.services.ticker_intelligence.analysis import _build_decision_snapshot
@@ -239,6 +333,86 @@ class TickerTriageTests(IsolatedAsyncioTestCase):
         self.assertEqual(response.metrics.current_price, Decimal("151.00"))
         self.assertEqual(triage.metrics["current_price"], "151.00")
         self.assertEqual(triage.provider, "test-provider")
+        self.assertIn(response.triage_decision, {"candidate", "research", "watch"})
+        self.assertIsNotNone(response.entry_plan)
+        self.assertIn("capital_score", triage.context)
+
+    async def test_chase_spike_marks_setup_invalid(self) -> None:
+        session = FakeTriageSession()
+        instrument = SimpleNamespace(id=uuid4(), ticker="FOMO")
+        prefill = TickerPrefillResponse(
+            instrument=InstrumentCreate(
+                ticker="FOMO",
+                name="Fomo Corp",
+                asset_class="equity",
+                exchange="XNAS",
+                currency="USD",
+            ),
+            metrics=TickerMetricsInput(
+                current_price=Decimal("40"),
+                pe_ratio=Decimal("20"),
+                forward_pe=Decimal("18"),
+                revenue_growth_pct=Decimal("12"),
+                earnings_growth_pct=Decimal("14"),
+                free_cash_flow_yield_pct=Decimal("3"),
+                net_margin_pct=Decimal("15"),
+                debt_to_equity=Decimal("0.6"),
+                price_vs_200d_pct=Decimal("40"),
+                relative_strength_6m_pct=Decimal("35"),
+                volatility_30d_pct=Decimal("55"),
+            ),
+            provider="test-provider",
+            source_reference="test://fomo",
+            data_timestamp=datetime(2026, 8, 24, tzinfo=timezone.utc),
+            source_warnings=[],
+            raw_sources={},
+        )
+
+        with (
+            patch(
+                "app.services.ticker_intelligence.verdict.prefill_ticker",
+                new_callable=AsyncMock,
+                return_value=prefill,
+            ),
+            patch(
+                "app.services.ticker_intelligence.verdict.upsert_instrument",
+                new_callable=AsyncMock,
+                return_value=instrument,
+            ),
+            patch(
+                "app.services.ticker_intelligence.verdict.get_cached_quote_price",
+                new_callable=AsyncMock,
+                return_value=Decimal("40"),
+            ),
+            patch(
+                "app.services.ticker_intelligence.verdict.get_ticker_desk",
+                new_callable=AsyncMock,
+                return_value=SimpleNamespace(
+                    on_watchlist=False,
+                    position=None,
+                    opportunity=None,
+                    radar=SimpleNamespace(change_pct=Decimal("80"), scan_state="spiking"),
+                    news=None,
+                    pre_trade=None,
+                    memos=[],
+                ),
+            ),
+            patch(
+                "app.services.ticker_intelligence.verdict.record_system_log",
+                new_callable=AsyncMock,
+            ),
+        ):
+            response = await create_ticker_triage(
+                session,
+                "FOMO",
+                market="US",
+                user=AuthenticatedUser(id="user-1", email="pm@example.com"),
+            )
+
+        self.assertEqual(response.triage_decision, "setup_invalid")
+        self.assertTrue(response.capital_blocked)
+        self.assertEqual(response.recommended_weight, Decimal("0.0000"))
+        self.assertEqual(response.entry_plan.status if response.entry_plan else None, "invalid_chase")
 
 
 class FakeTriageSession:

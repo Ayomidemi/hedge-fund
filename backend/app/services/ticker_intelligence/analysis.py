@@ -23,6 +23,7 @@ from app.api.schemas.ticker_intelligence import (
     TickerMemoResponse,
     TickerMemoSummaryResponse,
     TickerScoreResponse,
+    TickerTriageEntryPlan,
 )
 from app.models import (
     EvidenceSnapshot,
@@ -375,20 +376,7 @@ async def get_ticker_desk(
             else None
         ),
         latest_triage=(
-            TickerDeskTriage(
-                id=latest_triage.id,
-                generated_at=latest_triage.generated_at,
-                research_priority=latest_triage.research_priority,
-                initial_view=latest_triage.initial_view,
-                triage_decision=latest_triage.triage_decision,
-                action_label=latest_triage.action_label,
-                confidence_score=latest_triage.confidence_score,
-                composite_score=latest_triage.composite_score,
-                recommended_weight=latest_triage.recommended_weight,
-                next_action=latest_triage.next_action,
-            )
-            if latest_triage is not None
-            else None
+            _desk_triage(latest_triage) if latest_triage is not None else None
         ),
         decision_snapshot=decision_snapshot,
         memos=[_memo_summary(memo) for memo in memos],
@@ -569,10 +557,12 @@ def _build_decision_snapshot(
             next_step="Run Quick Triage before making a research or capital decision.",
         )
 
+    triage_meta = _triage_assessment(latest_triage)
     action, action_label, stance = _decision_action(
         latest_triage,
         has_position=has_position,
         blockers=blockers,
+        capital_blocked=triage_meta["capital_blocked"],
     )
     context_note = _decision_context_note(
         has_position=has_position,
@@ -590,11 +580,15 @@ def _build_decision_snapshot(
         summary=summary,
         confidence_score=latest_triage.confidence_score,
         composite_score=latest_triage.composite_score,
+        capital_score=triage_meta["capital_score"],
+        timing_score=triage_meta["timing_score"],
         recommended_weight=latest_triage.recommended_weight,
         source_generated_at=latest_triage.generated_at,
         position_context=position_context,
         blockers=blockers,
         next_step=_decision_next_step(action, latest_triage, has_position=has_position),
+        setup_status=triage_meta["setup_status"],
+        capital_blocked=triage_meta["capital_blocked"],
     )
 
 
@@ -603,21 +597,35 @@ def _decision_action(
     *,
     has_position: bool,
     blockers: list[str],
+    capital_blocked: bool = False,
 ) -> tuple[str, str, str]:
     decision = latest_triage.triage_decision.strip().lower()
-    confidence = latest_triage.confidence_score
     composite = latest_triage.composite_score
     has_risk_blocker = any(_is_risk_blocker(blocker) for blocker in blockers)
+    meta = _triage_assessment(latest_triage)
+    capital = meta["capital_score"]
 
     if has_position:
-        if decision == "reject" or has_risk_blocker:
+        if decision in {"hard_pass", "reject", "setup_invalid"} or has_risk_blocker:
             return "review_position", "Review Position", "risk"
-        return "hold", "Hold", "constructive" if composite >= Decimal("60") else "neutral"
+        return (
+            "hold",
+            "Hold",
+            "constructive"
+            if (capital is not None and capital >= Decimal("60"))
+            or composite >= Decimal("60")
+            else "neutral",
+        )
 
-    if decision == "research" and confidence >= Decimal("50"):
-        return "buy_candidate", "Buy Candidate", "constructive"
-    if decision == "reject":
-        return "avoid", "Avoid", "negative"
+    if decision in {"hard_pass", "reject"}:
+        return "hard_pass", "Hard Pass", "negative"
+    if decision == "setup_invalid":
+        return "do_not_chase", "Do Not Chase", "risk"
+    if decision == "candidate":
+        return "research_candidate", "Research Candidate", "constructive"
+    if decision == "research":
+        stance = "risk" if capital_blocked else "neutral"
+        return "research", "Research", stance
     return "watch", "Watch", "neutral"
 
 
@@ -630,8 +638,16 @@ def _decision_blockers(
     pre_trade: PreTradeRiskCheck | None,
 ) -> list[str]:
     blockers: list[str] = []
-    if latest_triage is not None and latest_triage.confidence_score < Decimal("45"):
-        blockers.append("Low triage confidence.")
+    if latest_triage is not None:
+        meta = _triage_assessment(latest_triage)
+        blockers.extend(meta["hard_blockers"])
+        if latest_triage.confidence_score < Decimal("45"):
+            blockers.append("Low triage confidence.")
+        if meta["capital_blocked"]:
+            blockers.append("Capital blocked by triage setup or hard pass.")
+        entry_plan = meta["entry_plan"]
+        if entry_plan is not None:
+            blockers.extend(entry_plan.notes)
 
     if pre_trade is not None:
         decision = pre_trade.decision.strip().lower()
@@ -678,14 +694,18 @@ def _decision_next_step(
     *,
     has_position: bool,
 ) -> str:
-    if action == "buy_candidate":
-        return "Open deep research, then move to Opportunity Queue if the thesis survives."
+    if action in {"buy_candidate", "research_candidate", "research"}:
+        return (
+            "Open deep research with entry/invalidation/max loss filled before any approval."
+        )
     if action == "hold":
         return "Keep monitoring; refresh triage when price, news, or thesis changes."
     if action == "watch":
-        return "Keep or add to watchlist; wait for stronger evidence."
-    if action == "avoid":
-        return "Do not spend more research time unless new evidence changes the setup."
+        return "Keep or add to watchlist; wait for stronger capital evidence."
+    if action == "do_not_chase":
+        return "Do not buy the spike. Re-underwrite only at a fresh entry zone or pass."
+    if action in {"avoid", "hard_pass"}:
+        return "Hard pass on capital unless leverage, cash flow, or thesis evidence changes."
     if action == "review_position":
         return "Open Risk Centre before adding, trimming, or exiting."
     if has_position:
@@ -699,7 +719,72 @@ def _is_risk_blocker(blocker: str) -> bool:
         "risk centre" in normalized
         or "position is down" in normalized
         or "market radar state" in normalized
+        or "chase risk" in normalized
+        or "capital blocked" in normalized
     )
+
+
+def _desk_triage(latest_triage: TickerTriageRun) -> TickerDeskTriage:
+    meta = _triage_assessment(latest_triage)
+    return TickerDeskTriage(
+        id=latest_triage.id,
+        generated_at=latest_triage.generated_at,
+        research_priority=latest_triage.research_priority,
+        initial_view=latest_triage.initial_view,
+        triage_decision=latest_triage.triage_decision,
+        action_label=latest_triage.action_label,
+        confidence_score=latest_triage.confidence_score,
+        composite_score=latest_triage.composite_score,
+        capital_score=meta["capital_score"],
+        timing_score=meta["timing_score"],
+        capital_coverage=meta["capital_coverage"],
+        timing_coverage=meta["timing_coverage"],
+        hard_blockers=meta["hard_blockers"],
+        setup_status=meta["setup_status"],
+        capital_blocked=meta["capital_blocked"],
+        entry_plan=meta["entry_plan"],
+        recommended_weight=latest_triage.recommended_weight,
+        next_action=latest_triage.next_action,
+    )
+
+
+def _triage_assessment(latest_triage: TickerTriageRun) -> dict:
+    context = latest_triage.context if isinstance(latest_triage.context, dict) else {}
+    entry_raw = context.get("entry_plan")
+    entry_plan = None
+    if isinstance(entry_raw, dict):
+        try:
+            entry_plan = TickerTriageEntryPlan.model_validate(entry_raw)
+        except Exception:
+            entry_plan = None
+
+    capital_score = _optional_decimal(context.get("capital_score"))
+    timing_score = _optional_decimal(context.get("timing_score"))
+    capital_coverage = _optional_decimal(context.get("capital_coverage"))
+    timing_coverage = _optional_decimal(context.get("timing_coverage"))
+    hard_blockers = context.get("hard_blockers")
+    if not isinstance(hard_blockers, list):
+        hard_blockers = []
+    hard_blockers = [str(item) for item in hard_blockers]
+
+    decision = latest_triage.triage_decision.strip().lower()
+    capital_blocked = bool(context.get("capital_blocked"))
+    if decision in {"hard_pass", "reject", "setup_invalid"}:
+        capital_blocked = True
+    setup_status = context.get("setup_status")
+    if setup_status is not None:
+        setup_status = str(setup_status)
+
+    return {
+        "capital_score": capital_score,
+        "timing_score": timing_score,
+        "capital_coverage": capital_coverage,
+        "timing_coverage": timing_coverage,
+        "hard_blockers": hard_blockers,
+        "setup_status": setup_status,
+        "capital_blocked": capital_blocked,
+        "entry_plan": entry_plan,
+    }
 
 
 async def _load_desk_instrument(

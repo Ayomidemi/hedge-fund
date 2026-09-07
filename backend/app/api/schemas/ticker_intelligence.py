@@ -125,6 +125,17 @@ class TickerVerdictContextResponse(BaseModel):
     memo_count: int = 0
 
 
+class TickerTriageEntryPlan(BaseModel):
+    status: str
+    capital_blocked: bool = False
+    entry_zone: str | None = None
+    invalidation: str | None = None
+    max_loss_pct_nav: Decimal | None = None
+    time_stop_sessions: int | None = None
+    chase_note: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class TickerVerdictResponse(BaseModel):
     triage_run_id: UUID | None = None
     ticker: str
@@ -140,6 +151,14 @@ class TickerVerdictResponse(BaseModel):
     confidence_score: Decimal
     conviction_score: Decimal
     composite_score: Decimal
+    capital_score: Decimal | None = None
+    timing_score: Decimal | None = None
+    capital_coverage: Decimal = Decimal("0.00")
+    timing_coverage: Decimal = Decimal("0.00")
+    hard_blockers: list[str] = Field(default_factory=list)
+    setup_status: str | None = None
+    capital_blocked: bool = False
+    entry_plan: TickerTriageEntryPlan | None = None
     recommended_weight: Decimal
     top_drivers: list[str] = Field(default_factory=list)
     top_blockers: list[str] = Field(default_factory=list)
@@ -501,6 +520,14 @@ class TickerDeskTriage(BaseModel):
     action_label: str
     confidence_score: Decimal
     composite_score: Decimal
+    capital_score: Decimal | None = None
+    timing_score: Decimal | None = None
+    capital_coverage: Decimal | None = None
+    timing_coverage: Decimal | None = None
+    hard_blockers: list[str] = Field(default_factory=list)
+    setup_status: str | None = None
+    capital_blocked: bool = False
+    entry_plan: TickerTriageEntryPlan | None = None
     recommended_weight: Decimal
     next_action: str
 
@@ -512,11 +539,15 @@ class TickerDeskDecisionSnapshot(BaseModel):
     summary: str
     confidence_score: Decimal | None = None
     composite_score: Decimal | None = None
+    capital_score: Decimal | None = None
+    timing_score: Decimal | None = None
     recommended_weight: Decimal | None = None
     source_generated_at: datetime | None = None
     position_context: str
     blockers: list[str] = Field(default_factory=list)
     next_step: str
+    setup_status: str | None = None
+    capital_blocked: bool = False
 
 
 class TickerDeskResponse(BaseModel):

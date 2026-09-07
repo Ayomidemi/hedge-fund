@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 
 from app.api.schemas.ticker_intelligence import TickerMetricsInput
@@ -22,50 +22,81 @@ class TickerScorecard:
     recommended_weight: Decimal
     scores: list[TickerScore]
     evidence_summary: str
+    capital_score: Decimal | None = None
+    timing_score: Decimal | None = None
+    capital_coverage: Decimal = Decimal("0.00")
+    timing_coverage: Decimal = Decimal("0.00")
+    hard_blockers: list[str] = field(default_factory=list)
 
 
 def score_ticker(metrics: TickerMetricsInput, asset_class: str) -> TickerScorecard:
-    scores = [
-        TickerScore(
-            "Quality", _quality_score(metrics), Decimal("0.25"), _quality_note(metrics)
-        ),
-        TickerScore(
-            "Growth", _growth_score(metrics), Decimal("0.20"), _growth_note(metrics)
-        ),
-        TickerScore(
-            "Valuation",
-            _valuation_score(metrics),
-            Decimal("0.20"),
-            _valuation_note(metrics),
-        ),
-        TickerScore(
-            "Momentum",
-            _momentum_score(metrics),
-            Decimal("0.20"),
-            _momentum_note(metrics),
-        ),
-        TickerScore(
-            "Balance Sheet Risk",
-            _risk_score(metrics),
-            Decimal("0.15"),
-            _risk_note(metrics),
-        ),
+    quality = _quality_score(metrics)
+    growth = _growth_score(metrics)
+    valuation = _valuation_score(metrics)
+    leverage = _leverage_score(metrics)
+    trend = _trend_score(metrics)
+    relative = _relative_strength_score(metrics)
+    volatility = _volatility_score(metrics)
+
+    capital_parts = [
+        ("Quality", quality, Decimal("0.30"), _quality_note(metrics)),
+        ("Growth", growth, Decimal("0.25"), _growth_note(metrics)),
+        ("Valuation", valuation, Decimal("0.25"), _valuation_note(metrics)),
+        ("Balance Sheet Risk", leverage, Decimal("0.20"), _leverage_note(metrics)),
     ]
-    composite = _quantize(
-        sum((score.score * score.weight for score in scores), Decimal("0"))
+    timing_parts = [
+        ("Trend", trend, Decimal("0.40"), _trend_note(metrics)),
+        ("Relative Strength", relative, Decimal("0.35"), _relative_note(metrics)),
+        ("Volatility", volatility, Decimal("0.25"), _volatility_note(metrics)),
+    ]
+
+    capital_score, capital_coverage = _weighted_optional(
+        [(score, weight) for _, score, weight, _ in capital_parts]
     )
-    confidence = _confidence_score(metrics)
+    timing_score, timing_coverage = _weighted_optional(
+        [(score, weight) for _, score, weight, _ in timing_parts]
+    )
+    hard_blockers = _hard_capital_blockers(metrics)
+
+    composite = _composite_score(capital_score, timing_score)
+    confidence = _confidence_score(
+        metrics,
+        capital_coverage=capital_coverage,
+        timing_coverage=timing_coverage,
+    )
     conviction = _quantize(
         (composite * Decimal("0.70")) + (confidence * Decimal("0.30"))
     )
-    classification = classify_score(composite, confidence)
-    action = action_from_score(composite, confidence)
-    recommended_weight = recommended_weight_from_score(
-        composite, confidence, asset_class
+    classification = classify_score(
+        composite,
+        confidence,
+        capital_score=capital_score,
+        capital_coverage=capital_coverage,
+        hard_blockers=hard_blockers,
     )
+    action = action_from_score(
+        composite,
+        confidence,
+        capital_score=capital_score,
+        capital_coverage=capital_coverage,
+        hard_blockers=hard_blockers,
+    )
+    recommended_weight = recommended_weight_from_score(
+        composite,
+        confidence,
+        asset_class,
+        capital_score=capital_score,
+        capital_coverage=capital_coverage,
+        hard_blockers=hard_blockers,
+    )
+
+    display_scores = _display_scores(capital_parts, timing_parts, timing_score)
     evidence_summary = (
-        f"Composite {composite}/100 with {confidence}/100 confidence from "
-        f"{_provided_metric_count(metrics)} of {_metric_count()} supplied metrics."
+        f"Capital { _fmt_optional(capital_score) }/100 "
+        f"({capital_coverage:.0f}% coverage); "
+        f"timing { _fmt_optional(timing_score) }/100 "
+        f"({timing_coverage:.0f}% coverage); "
+        f"{_provided_metric_count(metrics)} of {_metric_count()} metrics supplied."
     )
 
     return TickerScorecard(
@@ -75,33 +106,60 @@ def score_ticker(metrics: TickerMetricsInput, asset_class: str) -> TickerScoreca
         classification=classification,
         action=action,
         recommended_weight=recommended_weight,
-        scores=scores,
+        scores=display_scores,
         evidence_summary=evidence_summary,
+        capital_score=capital_score,
+        timing_score=timing_score,
+        capital_coverage=_quantize(capital_coverage),
+        timing_coverage=_quantize(timing_coverage),
+        hard_blockers=hard_blockers,
     )
 
 
-def classify_score(score: Decimal, confidence: Decimal) -> str:
-    if confidence < Decimal("45"):
+def classify_score(
+    score: Decimal,
+    confidence: Decimal,
+    *,
+    capital_score: Decimal | None = None,
+    capital_coverage: Decimal | None = None,
+    hard_blockers: list[str] | None = None,
+) -> str:
+    coverage = capital_coverage if capital_coverage is not None else Decimal("100")
+    if hard_blockers:
+        return "hard capital pass"
+    if confidence < Decimal("45") or coverage < Decimal("40"):
         return "data-incomplete watchlist"
-    if score >= Decimal("80"):
+    effective = capital_score if capital_score is not None else score
+    if effective >= Decimal("80"):
         return "high-conviction candidate"
-    if score >= Decimal("65"):
+    if effective >= Decimal("65"):
         return "research candidate"
-    if score >= Decimal("50"):
+    if effective >= Decimal("50"):
         return "watchlist"
-    if score >= Decimal("35"):
+    if effective >= Decimal("35"):
         return "low-conviction"
-    return "avoid"
+    return "hard capital pass"
 
 
-def action_from_score(score: Decimal, confidence: Decimal) -> str:
-    if confidence < Decimal("45"):
+def action_from_score(
+    score: Decimal,
+    confidence: Decimal,
+    *,
+    capital_score: Decimal | None = None,
+    capital_coverage: Decimal | None = None,
+    hard_blockers: list[str] | None = None,
+) -> str:
+    coverage = capital_coverage if capital_coverage is not None else Decimal("100")
+    if hard_blockers:
+        return "avoid"
+    if confidence < Decimal("45") or coverage < Decimal("40"):
         return "watch"
-    if score >= Decimal("82"):
+    effective = capital_score if capital_score is not None else score
+    if effective >= Decimal("82"):
         return "buy"
-    if score >= Decimal("65"):
+    if effective >= Decimal("65"):
         return "hold"
-    if score >= Decimal("45"):
+    if effective >= Decimal("45"):
         return "watch"
     return "avoid"
 
@@ -110,8 +168,18 @@ def recommended_weight_from_score(
     score: Decimal,
     confidence: Decimal,
     asset_class: str,
+    *,
+    capital_score: Decimal | None = None,
+    capital_coverage: Decimal | None = None,
+    hard_blockers: list[str] | None = None,
 ) -> Decimal:
-    if confidence < Decimal("45") or score < Decimal("65"):
+    coverage = capital_coverage if capital_coverage is not None else Decimal("100")
+    if hard_blockers:
+        return Decimal("0.0000")
+    if confidence < Decimal("45") or coverage < Decimal("40"):
+        return Decimal("0.0000")
+    effective = capital_score if capital_score is not None else score
+    if effective < Decimal("65"):
         return Decimal("0.0000")
 
     max_weight = Decimal("0.0500")
@@ -120,7 +188,7 @@ def recommended_weight_from_score(
     if asset_class == "commodity":
         max_weight = Decimal("0.0750")
 
-    score_fraction = min((score - Decimal("65")) / Decimal("35"), Decimal("1"))
+    score_fraction = min((effective - Decimal("65")) / Decimal("35"), Decimal("1"))
     confidence_fraction = confidence / Decimal("100")
     return (max_weight * score_fraction * confidence_fraction).quantize(
         Decimal("0.0001"),
@@ -135,6 +203,15 @@ def score_payload(scorecard: TickerScorecard) -> dict[str, str | list[dict[str, 
         "conviction_score": str(scorecard.conviction_score),
         "action": scorecard.action,
         "recommended_weight": str(scorecard.recommended_weight),
+        "capital_score": (
+            str(scorecard.capital_score) if scorecard.capital_score is not None else None
+        ),
+        "timing_score": (
+            str(scorecard.timing_score) if scorecard.timing_score is not None else None
+        ),
+        "capital_coverage": str(scorecard.capital_coverage),
+        "timing_coverage": str(scorecard.timing_coverage),
+        "hard_blockers": scorecard.hard_blockers,
         "scorecard": [
             {
                 "name": score.name,
@@ -147,44 +224,104 @@ def score_payload(scorecard: TickerScorecard) -> dict[str, str | list[dict[str, 
     }
 
 
-def _quality_score(metrics: TickerMetricsInput) -> Decimal:
-    parts = [
-        _band_score(
-            metrics.net_margin_pct,
-            [
-                (Decimal("25"), 100),
-                (Decimal("15"), 80),
-                (Decimal("8"), 60),
-                (Decimal("0"), 40),
-            ],
-            50,
-        ),
-        _band_score(
-            metrics.free_cash_flow_yield_pct,
-            [
-                (Decimal("6"), 100),
-                (Decimal("3"), 75),
-                (Decimal("0"), 50),
-                (Decimal("-3"), 25),
-            ],
-            50,
-        ),
-        _inverse_band_score(
-            metrics.debt_to_equity,
-            [
-                (Decimal("0.4"), 100),
-                (Decimal("1.0"), 75),
-                (Decimal("2.0"), 45),
-                (Decimal("4.0"), 20),
-            ],
-            50,
-        ),
-    ]
-    return _average(parts)
+def _display_scores(
+    capital_parts: list[tuple[str, Decimal | None, Decimal, str]],
+    timing_parts: list[tuple[str, Decimal | None, Decimal, str]],
+    timing_score: Decimal | None,
+) -> list[TickerScore]:
+    scores: list[TickerScore] = []
+    for name, score, weight, notes in capital_parts:
+        scores.append(
+            TickerScore(
+                name,
+                score if score is not None else Decimal("0"),
+                weight,
+                notes if score is not None else f"{notes} (missing — excluded).",
+            )
+        )
+    # Keep a single Momentum row for UI compatibility with older scorecards.
+    momentum_notes = (
+        "Timing blends trend, six-month relative strength, and volatility once."
+        if timing_score is not None
+        else "Timing score is provisional until trend, relative strength, or volatility is entered."
+    )
+    scores.append(
+        TickerScore(
+            "Momentum",
+            timing_score if timing_score is not None else Decimal("0"),
+            Decimal("0.20"),
+            momentum_notes,
+        )
+    )
+    return scores
 
 
-def _growth_score(metrics: TickerMetricsInput) -> Decimal:
-    return _average(
+def _hard_capital_blockers(metrics: TickerMetricsInput) -> list[str]:
+    blockers: list[str] = []
+    debt = metrics.debt_to_equity
+    fcf = metrics.free_cash_flow_yield_pct
+    margin = metrics.net_margin_pct
+
+    if debt is not None and debt >= Decimal("6"):
+        blockers.append(f"Extreme leverage (D/E {debt}).")
+    elif (
+        debt is not None
+        and debt >= Decimal("4")
+        and (
+            (fcf is not None and fcf < Decimal("0"))
+            or (margin is not None and margin < Decimal("0"))
+        )
+    ):
+        blockers.append(
+            f"High leverage (D/E {debt}) with negative cash generation or margin."
+        )
+
+    if fcf is not None and fcf <= Decimal("-8") and (
+        debt is not None and debt >= Decimal("2")
+    ):
+        blockers.append(
+            f"Severe cash burn (FCF yield {fcf}%) with elevated leverage."
+        )
+
+    return blockers
+
+
+def _quality_score(metrics: TickerMetricsInput) -> Decimal | None:
+    return _average_optional(
+        [
+            _band_score(
+                metrics.net_margin_pct,
+                [
+                    (Decimal("25"), 100),
+                    (Decimal("15"), 80),
+                    (Decimal("8"), 60),
+                    (Decimal("0"), 40),
+                ],
+            ),
+            _band_score(
+                metrics.free_cash_flow_yield_pct,
+                [
+                    (Decimal("6"), 100),
+                    (Decimal("3"), 75),
+                    (Decimal("0"), 50),
+                    (Decimal("-3"), 25),
+                ],
+            ),
+            _inverse_band_score(
+                metrics.debt_to_equity,
+                [
+                    (Decimal("0.4"), 100),
+                    (Decimal("1.0"), 75),
+                    (Decimal("2.0"), 45),
+                    (Decimal("4.0"), 20),
+                ],
+            ),
+        ]
+    )
+
+
+def _growth_score(metrics: TickerMetricsInput) -> Decimal | None:
+    return _average_optional(
         [
             _band_score(
                 metrics.revenue_growth_pct,
@@ -194,7 +331,6 @@ def _growth_score(metrics: TickerMetricsInput) -> Decimal:
                     (Decimal("3"), 60),
                     (Decimal("0"), 45),
                 ],
-                50,
             ),
             _band_score(
                 metrics.earnings_growth_pct,
@@ -204,73 +340,39 @@ def _growth_score(metrics: TickerMetricsInput) -> Decimal:
                     (Decimal("3"), 60),
                     (Decimal("0"), 45),
                 ],
-                50,
             ),
         ]
     )
 
 
-def _valuation_score(metrics: TickerMetricsInput) -> Decimal:
+def _valuation_score(metrics: TickerMetricsInput) -> Decimal | None:
     pe = metrics.forward_pe if metrics.forward_pe is not None else metrics.pe_ratio
-    pe_score = _inverse_band_score(
-        pe,
+    return _average_optional(
         [
-            (Decimal("12"), 100),
-            (Decimal("20"), 75),
-            (Decimal("30"), 50),
-            (Decimal("45"), 25),
-        ],
-        50,
+            _inverse_band_score(
+                pe,
+                [
+                    (Decimal("12"), 100),
+                    (Decimal("20"), 75),
+                    (Decimal("30"), 50),
+                    (Decimal("45"), 25),
+                ],
+            ),
+            _band_score(
+                metrics.free_cash_flow_yield_pct,
+                [
+                    (Decimal("8"), 100),
+                    (Decimal("5"), 80),
+                    (Decimal("2"), 60),
+                    (Decimal("0"), 40),
+                ],
+            ),
+        ]
     )
-    fcf_score = _band_score(
-        metrics.free_cash_flow_yield_pct,
-        [
-            (Decimal("8"), 100),
-            (Decimal("5"), 80),
-            (Decimal("2"), 60),
-            (Decimal("0"), 40),
-        ],
-        50,
-    )
-    return _average([pe_score, fcf_score])
 
 
-def _momentum_score(metrics: TickerMetricsInput) -> Decimal:
-    trend_score = _band_score(
-        metrics.price_vs_200d_pct,
-        [
-            (Decimal("20"), 100),
-            (Decimal("8"), 80),
-            (Decimal("0"), 60),
-            (Decimal("-10"), 35),
-        ],
-        50,
-    )
-    relative_score = _band_score(
-        metrics.relative_strength_6m_pct,
-        [
-            (Decimal("20"), 100),
-            (Decimal("8"), 80),
-            (Decimal("0"), 60),
-            (Decimal("-10"), 35),
-        ],
-        50,
-    )
-    volatility_score = _inverse_band_score(
-        metrics.volatility_30d_pct,
-        [
-            (Decimal("20"), 90),
-            (Decimal("35"), 70),
-            (Decimal("55"), 40),
-            (Decimal("80"), 20),
-        ],
-        50,
-    )
-    return _average([trend_score, relative_score, volatility_score])
-
-
-def _risk_score(metrics: TickerMetricsInput) -> Decimal:
-    debt_score = _inverse_band_score(
+def _leverage_score(metrics: TickerMetricsInput) -> Decimal | None:
+    return _inverse_band_score(
         metrics.debt_to_equity,
         [
             (Decimal("0.4"), 100),
@@ -278,9 +380,35 @@ def _risk_score(metrics: TickerMetricsInput) -> Decimal:
             (Decimal("2.0"), 45),
             (Decimal("4.0"), 20),
         ],
-        50,
     )
-    volatility_score = _inverse_band_score(
+
+
+def _trend_score(metrics: TickerMetricsInput) -> Decimal | None:
+    return _band_score(
+        metrics.price_vs_200d_pct,
+        [
+            (Decimal("20"), 100),
+            (Decimal("8"), 80),
+            (Decimal("0"), 60),
+            (Decimal("-10"), 35),
+        ],
+    )
+
+
+def _relative_strength_score(metrics: TickerMetricsInput) -> Decimal | None:
+    return _band_score(
+        metrics.relative_strength_6m_pct,
+        [
+            (Decimal("20"), 100),
+            (Decimal("8"), 80),
+            (Decimal("0"), 60),
+            (Decimal("-10"), 35),
+        ],
+    )
+
+
+def _volatility_score(metrics: TickerMetricsInput) -> Decimal | None:
+    return _inverse_band_score(
         metrics.volatility_30d_pct,
         [
             (Decimal("18"), 100),
@@ -288,14 +416,37 @@ def _risk_score(metrics: TickerMetricsInput) -> Decimal:
             (Decimal("50"), 45),
             (Decimal("75"), 20),
         ],
-        50,
     )
-    return _average([debt_score, volatility_score])
 
 
-def _confidence_score(metrics: TickerMetricsInput) -> Decimal:
+def _composite_score(
+    capital_score: Decimal | None,
+    timing_score: Decimal | None,
+) -> Decimal:
+    if capital_score is not None and timing_score is not None:
+        return _quantize(
+            (capital_score * Decimal("0.65")) + (timing_score * Decimal("0.35"))
+        )
+    if capital_score is not None:
+        return _quantize(capital_score)
+    if timing_score is not None:
+        return _quantize(timing_score)
+    return Decimal("50.00")
+
+
+def _confidence_score(
+    metrics: TickerMetricsInput,
+    *,
+    capital_coverage: Decimal,
+    timing_coverage: Decimal,
+) -> Decimal:
     completeness = Decimal(_provided_metric_count(metrics)) / Decimal(_metric_count())
-    return _quantize(Decimal("25") + (completeness * Decimal("75")))
+    # Capital coverage dominates confidence for capital decisions.
+    coverage_blend = (
+        (capital_coverage * Decimal("0.70")) + (timing_coverage * Decimal("0.30"))
+    ) / Decimal("100")
+    blended = (completeness * Decimal("40")) + (coverage_blend * Decimal("40"))
+    return _quantize(Decimal("20") + blended)
 
 
 def _provided_metric_count(metrics: TickerMetricsInput) -> int:
@@ -308,15 +459,13 @@ def _metric_count() -> int:
 
 def _quality_note(metrics: TickerMetricsInput) -> str:
     if metrics.net_margin_pct is None and metrics.free_cash_flow_yield_pct is None:
-        return "Quality score is provisional until margin or cash-flow data is entered."
+        return "Quality score excluded until margin or cash-flow data is entered."
     return "Quality reflects margin strength, cash generation, and balance-sheet load."
 
 
 def _growth_note(metrics: TickerMetricsInput) -> str:
     if metrics.revenue_growth_pct is None and metrics.earnings_growth_pct is None:
-        return (
-            "Growth score is provisional until revenue or earnings growth is entered."
-        )
+        return "Growth score excluded until revenue or earnings growth is entered."
     return "Growth combines revenue and earnings expansion."
 
 
@@ -326,29 +475,40 @@ def _valuation_note(metrics: TickerMetricsInput) -> str:
         and metrics.forward_pe is None
         and metrics.free_cash_flow_yield_pct is None
     ):
-        return "Valuation score is provisional until multiple or cash-flow yield data is entered."
+        return "Valuation score excluded until multiple or cash-flow yield data is entered."
     return "Valuation favors lower earnings multiples and stronger cash-flow yield."
 
 
-def _momentum_note(metrics: TickerMetricsInput) -> str:
-    if metrics.price_vs_200d_pct is None and metrics.relative_strength_6m_pct is None:
-        return "Momentum score is provisional until trend or relative-strength data is entered."
-    return "Momentum reflects trend, six-month relative strength, and volatility drag."
+def _leverage_note(metrics: TickerMetricsInput) -> str:
+    if metrics.debt_to_equity is None:
+        return "Leverage score excluded until debt-to-equity is entered."
+    return "Balance-sheet risk rewards lower leverage (volatility is timing-only)."
 
 
-def _risk_note(metrics: TickerMetricsInput) -> str:
-    if metrics.debt_to_equity is None and metrics.volatility_30d_pct is None:
-        return "Risk score is provisional until leverage or volatility data is entered."
-    return "Risk score rewards lower leverage and lower recent volatility."
+def _trend_note(metrics: TickerMetricsInput) -> str:
+    if metrics.price_vs_200d_pct is None:
+        return "Trend excluded until price vs 200d is entered."
+    return "Trend uses price versus the 200-day average."
+
+
+def _relative_note(metrics: TickerMetricsInput) -> str:
+    if metrics.relative_strength_6m_pct is None:
+        return "Relative strength excluded until six-month RS is entered."
+    return "Six-month relative strength versus the market."
+
+
+def _volatility_note(metrics: TickerMetricsInput) -> str:
+    if metrics.volatility_30d_pct is None:
+        return "Volatility excluded until 30d realized vol is entered."
+    return "Volatility is used once in timing (not double-counted in capital)."
 
 
 def _band_score(
     value: Decimal | None,
     bands: list[tuple[Decimal, int]],
-    default: int,
-) -> Decimal:
+) -> Decimal | None:
     if value is None:
-        return Decimal(default)
+        return None
     for threshold, score in bands:
         if value >= threshold:
             return Decimal(score)
@@ -358,18 +518,42 @@ def _band_score(
 def _inverse_band_score(
     value: Decimal | None,
     bands: list[tuple[Decimal, int]],
-    default: int,
-) -> Decimal:
+) -> Decimal | None:
     if value is None:
-        return Decimal(default)
+        return None
     for threshold, score in bands:
         if value <= threshold:
             return Decimal(score)
     return Decimal("10")
 
 
-def _average(values: list[Decimal]) -> Decimal:
-    return _quantize(sum(values, Decimal("0")) / Decimal(len(values)))
+def _average_optional(values: list[Decimal | None]) -> Decimal | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return _quantize(sum(present, Decimal("0")) / Decimal(len(present)))
+
+
+def _weighted_optional(
+    parts: list[tuple[Decimal | None, Decimal]],
+) -> tuple[Decimal | None, Decimal]:
+    present = [(score, weight) for score, weight in parts if score is not None]
+    if not present:
+        return None, Decimal("0")
+    weight_sum = sum((weight for _, weight in present), Decimal("0"))
+    if weight_sum <= 0:
+        return None, Decimal("0")
+    score = sum((score * weight for score, weight in present), Decimal("0")) / weight_sum
+    # Coverage vs the original weight total for this group.
+    full_weight = sum((weight for _, weight in parts), Decimal("0"))
+    coverage = (
+        (weight_sum / full_weight) * Decimal("100") if full_weight > 0 else Decimal("0")
+    )
+    return _quantize(score), coverage
+
+
+def _fmt_optional(value: Decimal | None) -> str:
+    return str(value) if value is not None else "n/a"
 
 
 def _quantize(value: Decimal) -> Decimal:
