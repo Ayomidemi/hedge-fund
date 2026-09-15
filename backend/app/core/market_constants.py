@@ -33,7 +33,7 @@ RADAR_WORKING_SET_SIZE = 100
 # Celery cadence. The task still no-ops closed jurisdictions, so this is an
 # upper bound on how often an *open* market is scanned — not a request to
 # poll vendors overnight.
-RADAR_SCAN_INTERVAL_SECONDS = 1800
+RADAR_SCAN_INTERVAL_SECONDS = 300
 
 # How long after the cash session we still allow one discovery scan using
 # that day's session data, without treating the market as open for live quotes.
