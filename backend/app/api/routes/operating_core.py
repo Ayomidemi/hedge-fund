@@ -15,7 +15,7 @@ from app.api.schemas.operating_core import (
     TradeJournalResponse,
     TradeResponse,
 )
-from app.core.auth import AuthenticatedUser, require_authenticated_user
+from app.core.auth import AuthenticatedUser, require_capital_user
 from app.db.session import get_session
 from app.services.portfolio.operating_core import (
     TradeNotFoundError,
@@ -35,7 +35,7 @@ router = APIRouter(prefix="/operating-core")
 
 @router.get("/dashboard", response_model=PortfolioDashboardResponse)
 async def read_dashboard(
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> PortfolioDashboardResponse:
     return await get_dashboard(session, user)
@@ -48,7 +48,7 @@ async def read_dashboard(
 )
 async def add_cash_entry(
     payload: CashLedgerEntryCreate,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
     return await create_cash_deposit(session, payload, user)
@@ -61,7 +61,7 @@ async def add_cash_entry(
 )
 async def add_cash_deposit(
     payload: CashDepositCreate,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
     return await create_cash_deposit(session, payload, user)
@@ -74,7 +74,7 @@ async def add_cash_deposit(
 )
 async def add_cash_withdrawal(
     payload: CashWithdrawalCreate,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
     return await create_cash_withdrawal(session, payload, user)
@@ -87,7 +87,7 @@ async def add_cash_withdrawal(
 )
 async def add_cash_adjustment(
     payload: CashAdjustmentCreate,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> CashLedgerEntryResponse:
     return await create_cash_adjustment(session, payload, user)
@@ -95,7 +95,7 @@ async def add_cash_adjustment(
 
 @router.get("/cash-ledger/history", response_model=list[CashLedgerEntryResponse])
 async def read_cash_ledger_history(
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[CashLedgerEntryResponse]:
     return await list_cash_ledger_history(session, user)
@@ -103,7 +103,7 @@ async def read_cash_ledger_history(
 
 @router.get("/cash-ledger", response_model=list[CashLedgerEntryResponse])
 async def read_cash_ledger_history_compat(
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[CashLedgerEntryResponse]:
     return await list_cash_ledger_history(session, user)
@@ -116,7 +116,7 @@ async def read_cash_ledger_history_compat(
 )
 async def add_manual_trade(
     payload: ManualTradeCreate,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> TradeResponse:
     try:
@@ -132,7 +132,7 @@ async def add_manual_trade(
 async def edit_manual_trade(
     trade_id: UUID,
     payload: ManualTradeUpdate,
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> TradeResponse:
     try:
@@ -147,7 +147,7 @@ async def edit_manual_trade(
 @router.get("/trades", response_model=TradeJournalResponse)
 async def read_trade_journal(
     limit: int = Query(default=100, ge=1, le=500),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
+    user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
 ) -> TradeJournalResponse:
     return await get_trade_journal(session, user, limit=limit)

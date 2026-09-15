@@ -5,6 +5,7 @@ from app.api.routes import (
     attribution,
     auth,
     health,
+    invest,
     market_radar,
     news,
     operating_core,
@@ -32,3 +33,4 @@ api_router.include_router(research_lab.router, tags=["research-lab"])
 api_router.include_router(risk_centre.router, tags=["risk-centre"])
 api_router.include_router(strategy_pods.router, tags=["strategy-pods"])
 api_router.include_router(websocket.router, tags=["realtime"])
+api_router.include_router(invest.router, tags=["invest"])

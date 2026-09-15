@@ -1,5 +1,6 @@
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from decimal import Decimal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -66,6 +67,8 @@ class Settings(BaseSettings):
     # app/core/market_constants.py.
     hf_price_refresh_interval_seconds: int = 300
     hf_redis_url: str = "redis://localhost:6379/0"
+
+    hf_invest_paper_starting_cash: Decimal = Decimal("10000.00")
 
     hf_ai_provider: str = "disabled"
     hf_openai_api_key: str | None = None
@@ -280,6 +283,13 @@ class Settings(BaseSettings):
     @property
     def auth_enabled(self) -> bool:
         return bool(self.hf_supabase_jwt_secret or self.supabase_url)
+
+    @property
+    def invest_paper_starting_cash(self) -> Decimal:
+        cash = Decimal(str(self.hf_invest_paper_starting_cash))
+        if cash < Decimal("100.00"):
+            return Decimal("100.00")
+        return cash.quantize(Decimal("0.01"))
 
     @staticmethod
     def _uses_pooler_host(hostname: str | None) -> bool:

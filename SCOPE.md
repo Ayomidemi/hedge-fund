@@ -6920,3 +6920,685 @@ The guiding principle is:
 
 > **Alpha tells us what risk we want to take. Hedging removes the risks we never intended to take.**
 
+
+---
+
+# 25. Pease Invest — V1 Product Scope
+
+Pease Invest is the retail investing product under the wider Pease platform.
+
+It sits alongside Pease Capital. The two products may share infrastructure, but they must remain operationally separate.
+
+```text
+                         PEASE PLATFORM
+                               │
+                ┌──────────────┴──────────────┐
+                │                             │
+                ▼                             ▼
+         PEASE CAPITAL                   PEASE INVEST
+        Institutional Fund              Retail Investing
+                │                             │
+         PC decides trades              User decides trades
+```
+
+## 25.1 Purpose
+
+**Pease Capital** makes investment decisions on behalf of the fund.
+
+**Pease Invest** lets the user make their own investment decisions using Pease’s market data, research and brokerage infrastructure.
+
+Shared platform ≠ shared capital, portfolios, orders or decision authority.
+
+## 25.2 V1 Objective
+
+Prove one complete retail investing loop on a paper brokerage provider first:
+
+```text
+Create account
+      ↓
+Receive paper buying power
+      ↓
+Discover/search security
+      ↓
+Open asset detail
+      ↓
+Review research
+      ↓
+Place order
+      ↓
+Order fills
+      ↓
+Portfolio updates
+      ↓
+Track position/P&L
+```
+
+Real broker integration comes after this product flow works correctly.
+
+First milestone:
+
+```text
+Retail user
+→ paper account
+→ search AAPL
+→ review AAPL
+→ buy $500
+→ order fills
+→ portfolio updates
+```
+
+## 25.3 Product Structure
+
+Recommended routing:
+
+* `/capital` — Pease Capital (current fund desk)
+* `/invest` — Pease Invest (retail)
+
+Top-level product switcher:
+
+```text
+PEASE
+
+[ Capital ]   [ Invest ]
+```
+
+Pease Invest navigation:
+
+```text
+PEASE INVEST
+│
+├── Home
+├── Discover
+├── Markets
+├── Search
+├── Watchlist
+├── Portfolio
+├── Orders
+├── Cash
+└── Profile
+```
+
+## 25.4 Shared Platform Layer
+
+Reuse Capital infrastructure where appropriate.
+
+Shared services:
+
+```text
+core/
+├── authentication
+├── users
+├── instruments
+├── market_data
+├── news
+├── fx
+├── notifications
+├── audit_logs
+└── provider_health
+
+research/
+├── market_radar
+├── fundamentals
+├── ticker_analysis
+└── ai_summaries
+
+execution/
+└── broker_gateway
+```
+
+The shared layer supplies data and services. It does **not** share portfolios, accounts, orders or capital between the two products.
+
+## 25.5 Product Separation
+
+Architecture must enforce:
+
+```text
+capital.*  ≠  invest.*
+```
+
+Examples:
+
+```text
+capital.portfolios
+capital.positions
+capital.orders
+capital.strategies
+capital.risk
+
+invest.accounts
+invest.portfolios
+invest.positions
+invest.orders
+invest.watchlists
+```
+
+Hard rules:
+
+* No fund position may appear in a retail customer's portfolio.
+* No retail cash may become available to Pease Capital.
+
+## 25.6 Retail Account
+
+Each Pease Invest user gets an investment account.
+
+V1 paper account model:
+
+```text
+RetailAccount
+  id
+  user_id
+  account_number
+  broker_provider
+  broker_account_id
+  status
+  base_currency
+  created_at
+```
+
+Initial provider: `PAPER`
+
+Later: `ALPACA`, `DRIVEWEALTH`, `NG_BROKER`
+
+## 25.7 Paper Brokerage Provider
+
+Build a provider interface first:
+
+```text
+BrokerProvider
+  create_account()
+  get_account()
+  get_balances()
+  get_positions()
+  submit_order()
+  cancel_order()
+  get_orders()
+  get_transactions()
+  deposit()
+  withdraw()
+```
+
+Then implement `PaperBrokerProvider`, simulating:
+
+* account creation
+* cash / buying power
+* orders and fills
+* positions / average cost
+* realized and unrealized P&L
+* transaction history
+
+Starting paper balance should be configurable (example: `$10,000`).
+
+## 25.8 Retail Home
+
+Consumer-friendly account snapshot:
+
+* Portfolio value
+* Today’s change
+* Cash
+* Invested
+* Your investments
+* What’s happening (simplified market narrative)
+
+## 25.9 Discover
+
+Discover is the retail presentation of Market Radar.
+
+Same engine as Capital Radar. Different language.
+
+Capital may say: residual return +2.8σ, sector breadth 84%, relative volume 2.1x.
+
+Retail should say: semiconductor stocks are unusually strong today, with several names moving on elevated volume.
+
+Possible sections: Trending, Big Movers, Unusual Activity, Sector Moves, Latest News, Watchlist Updates.
+
+## 25.10 Markets
+
+Broad market context. Initial markets: United States, Nigeria.
+
+US: S&P 500, Nasdaq, Dow, Treasury yields.
+
+Nigeria: NGX ASI, Banking, Consumer, Industrial, Oil & Gas.
+
+Later: Fixed Income, Currencies, Commodities.
+
+## 25.11 Search
+
+Universal instrument search by ticker, company, market, asset class.
+
+Must use the shared Instrument Registry.
+
+## 25.12 Retail Asset Detail
+
+Retail version of Ticker Analyst. Must **not** expose Pease Capital proprietary strategy output.
+
+Recommended tabs: Overview, Chart, News, Financials, Analysis.
+
+Analysis may show a simplified Pease View (business quality, growth, valuation, momentum, risk) plus “what looks good” / “what to watch”.
+
+Actions: Buy, Sell, Add to Watchlist.
+
+## 25.13 Retail Research Rules
+
+**May expose:** financial ratios; fundamentals; news; charts; bull/bear explanations; general risk indicators; simplified Radar findings; AI summaries.
+
+**Do not expose by default:**
+
+* Pease Capital target weight
+* Internal expected alpha
+* Strategy assignment
+* Fund conviction
+* Hedge recommendation
+* PM decision
+* Proprietary model weights
+* Internal opportunity ranking
+
+Useful research without giving away the fund’s internal investment process.
+
+## 25.14 Watchlist
+
+```text
+RetailWatchlistItem
+  user_id
+  instrument_id
+  date_added
+  notes
+```
+
+Surface: latest price, daily move, important news, unusual activity; later earnings/event reminders.
+
+Actions: Open, Buy, Remove.
+
+## 25.15 Order Ticket
+
+V1 order types: Market Buy, Market Sell.
+
+Later: Limit, Stop, Stop Limit.
+
+Flow: amount / estimated shares → Review Order → Confirm.
+
+## 25.16 Retail Order Model
+
+```text
+RetailOrder
+  id
+  user_id
+  account_id
+  instrument_id
+  side
+  order_type
+  quantity
+  notional
+  limit_price
+  status
+  submitted_at
+  filled_at
+  average_fill_price
+  broker_provider
+  broker_order_id
+```
+
+Statuses: `DRAFT`, `SUBMITTED`, `ACCEPTED`, `PARTIALLY_FILLED`, `FILLED`, `CANCELLED`, `REJECTED`
+
+## 25.17 Order Lifecycle
+
+```text
+User submits order
+       ↓
+Validate account
+       ↓
+Validate buying power
+       ↓
+Validate instrument
+       ↓
+Retail risk/compliance checks
+       ↓
+Broker gateway
+       ↓
+Broker provider
+       ↓
+Fill
+       ↓
+Position update
+       ↓
+Portfolio update
+```
+
+V1 broker provider = `PaperBrokerProvider`.
+
+## 25.18 Retail Positions
+
+```text
+RetailPosition
+  account_id
+  instrument_id
+  quantity
+  average_cost
+  cost_basis
+  current_price
+  market_value
+  unrealized_pnl
+  unrealized_pnl_pct
+  realized_pnl
+```
+
+Prices come from the shared market-data system.
+
+## 25.19 Portfolio
+
+Show: Total Value, Cash, Invested, Today’s Change, Total Return, holdings table, basic allocation (Stocks / ETFs / Cash).
+
+Later: Fixed Income, Options.
+
+## 25.20 Cash & Buying Power
+
+V1 paper mode: Cash Balance, Buying Power, Pending Orders.
+
+Simulate: Add Paper Cash, Reset Paper Account.
+
+Real deposits/withdrawals only after real broker integration.
+
+## 25.21 Orders Screen
+
+Open / Filled / Cancelled orders with inspectable transaction detail.
+
+## 25.22 Transaction Ledger
+
+Immutable retail ledger. Entry types:
+
+`DEPOSIT`, `WITHDRAWAL`, `BUY`, `SELL`, `DIVIDEND`, `FEE`, `INTEREST`, `ADJUSTMENT`
+
+Each entry stores: account, amount, currency, instrument, timestamp, source, broker_reference.
+
+Portfolio balance must be reconcilable to this ledger.
+
+## 25.23 Brokerage Gateway
+
+Shared execution infrastructure with normalized commands:
+
+```text
+                       BROKER GATEWAY
+                              │
+             ┌────────────────┼────────────────┐
+             ▼                ▼                ▼
+           PAPER           US BROKER         NG BROKER
+```
+
+Commands: `create_account`, `submit_order`, `cancel_order`, `positions`, `balances`, `orders`, `transactions`.
+
+Pease Invest must not depend on Alpaca/DriveWealth-specific response structures.
+
+## 25.24 Future US Brokerage Integration
+
+Adapters: `AlpacaBrokerProvider`, `DriveWealthBrokerProvider`.
+
+Switch providers without rewriting portfolio UI, order ticket, watchlist, research or market data.
+
+## 25.25 Future Nigeria Brokerage Integration
+
+`NigeriaBrokerProvider` for NGX stocks/ETFs; later T-bills, FGN bonds, money-market products.
+
+## 25.26 Fixed Income Retail Layer
+
+Own asset-detail type. Emphasize yield, maturity, expected payout, minimum amount, issuer, liquidity, basic risk.
+
+Do not overwhelm retail with DV01, curve z-score, relative-value score (Capital analytics).
+
+## 25.27 Fixed Income Instrument Model
+
+Shared instrument layer with institutional extensions optional for Capital. Retail need not display duration / DV01 / convexity / curve position.
+
+## 25.28 Retail Risk Layer
+
+Lighter than Capital risk. V1:
+
+* Buying power check
+* Cash check
+* Position concentration warning
+* Instrument availability
+* Market status
+
+Example: warn if a purchase would make Apple 62% of the portfolio. Do not auto-reject unless required.
+
+Later: options suitability, margin, day-trading restrictions, complex-product permissions.
+
+## 25.29 Fund Risk vs Retail Risk
+
+Keep separate:
+
+* `capital.risk` — VaR, ES, factor exposure, strategy limits, drawdown, hedge requirements
+* `invest.risk` — buying power, suitability, concentration, product eligibility, retail regulatory restrictions
+
+## 25.30 Identity & Permissions
+
+One Pease identity may access multiple products.
+
+Roles: `RETAIL_USER`, `CAPITAL_ANALYST`, `CAPITAL_PM`, `CAPITAL_RISK`, `ADMIN`
+
+Example permissions: `invest.view`, `invest.trade`, `invest.withdraw`, `capital.research`, `capital.trade`, `capital.risk`, `capital.admin`
+
+## 25.31 Security Boundary
+
+Backend must enforce product boundaries. A retail user cannot access `/capital/orders`, `/capital/risk`, `/capital/strategies` by URL alone.
+
+Authorization belongs in backend services, not only frontend navigation.
+
+## 25.32 Market Data Flow
+
+Shared market data fetched once and reused by Capital and Invest.
+
+## 25.33 News Flow
+
+Shared ingestion → dedupe → entity mapping → event store → institutional vs retail interpretation.
+
+## 25.34 AI Layer
+
+Shared AI engine with separate prompts/policies:
+
+* Capital Research Narrator — alpha, thesis, hedge implications
+* Retail Research Explainer — clear language and investor risks
+
+## 25.35 Notifications
+
+Retail: order filled, price alert, watchlist news, major market event, deposit completed.
+
+Capital notifications remain separate (risk breach, Radar P0, thesis break, model disagreement, strategy alert).
+
+## 25.36 Auditability
+
+Log retail: account created, order submitted/modified/cancelled, cash changed, broker response.
+
+Capital institutional audit logs continue separately.
+
+## 25.37 Recommended Code Structure
+
+```text
+pease/
+│
+├── apps/
+│   ├── capital-web/
+│   └── invest-web/
+│
+├── services/
+│   ├── core/
+│   ├── market-data/
+│   ├── research/
+│   ├── brokerage/
+│   └── notifications/
+│
+├── domains/
+│   ├── capital/
+│   │   ├── portfolio/
+│   │   ├── strategies/
+│   │   ├── risk/
+│   │   └── execution/
+│   │
+│   └── invest/
+│       ├── accounts/
+│       ├── portfolios/
+│       ├── orders/
+│       ├── cash/
+│       └── watchlists/
+│
+└── packages/
+    ├── ui/
+    ├── api-client/
+    ├── instruments/
+    └── charts/
+```
+
+One repository is acceptable initially.
+
+## 25.38 V1 Asset Scope
+
+**Supported:** US equities, US ETFs. Include NG equities if NGX integration is already stable; otherwise immediately after the US paper loop works.
+
+**Not V1:** options, margin, short selling, crypto, social/copy trading, automated investing.
+
+Fixed income is the next major asset module after the equity loop.
+
+## 25.39 V1 Screen Scope
+
+1. Product Switcher
+2. Invest Home
+3. Discover
+4. Market/Search
+5. Asset Detail
+6. Watchlist
+7. Order Ticket
+8. Portfolio
+9. Orders
+10. Cash
+11. Profile
+
+## 25.40 V1 Backend Scope
+
+* Retail account service
+* Paper broker provider
+* Order service
+* Position service
+* Retail portfolio service
+* Retail ledger
+* Watchlist service
+* Broker gateway
+* Shared instrument service
+* Shared market-data service
+
+## 25.41 V1 API Scope
+
+```text
+GET  /invest/account
+POST /invest/account
+
+GET  /invest/home
+
+GET  /invest/instruments/search
+GET  /invest/instruments/{id}
+
+GET  /invest/watchlist
+POST /invest/watchlist
+DELETE /invest/watchlist/{instrument_id}
+
+GET  /invest/portfolio
+GET  /invest/positions
+
+POST /invest/orders
+GET  /invest/orders
+GET  /invest/orders/{id}
+POST /invest/orders/{id}/cancel
+
+GET  /invest/cash
+POST /invest/paper/deposit
+
+GET  /invest/transactions
+
+GET  /invest/discover
+```
+
+## 25.42 Phase 1 — Architecture
+
+`/invest`, product switcher, retail domain, permissions, paper broker provider, shared broker interface.
+
+## 25.43 Phase 2 — Trading Loop
+
+Search, Asset Detail, Buy/Sell, order lifecycle, Positions, Portfolio, Cash.
+
+Definition of success: user starts with paper cash, buys AAPL, sees the fill, and immediately sees the updated portfolio.
+
+## 25.44 Phase 3 — Intelligence
+
+Discover, Retail Radar, News, Retail Ticker Analyst, Watchlist intelligence, AI explainers.
+
+## 25.45 Phase 4 — Nigeria
+
+NGX instruments, NG market data, NG brokerage adapter, NG order flow.
+
+## 25.46 Phase 5 — Real Brokerage
+
+Alpaca / DriveWealth (or selected partner): real onboarding, KYC, funding, withdrawals, statements, broker reconciliation.
+
+## 25.47 Phase 6 — Fixed Income
+
+T-bills, FGN bonds, US Treasuries, FI discovery/detail/orders, interest/maturity handling.
+
+## 25.48 Phase 7 — Advanced Retail Products
+
+Only later: options, margin, advanced orders, recurring investing, automated portfolios — each with its own risk and regulatory scope.
+
+## 25.49 Hard Architectural Rules
+
+Non-negotiable:
+
+1. Retail users decide their own trades.
+2. Capital and retail money never commingle.
+3. Capital positions and retail positions use separate books.
+4. Retail brokerage accounts belong to retail users.
+5. Shared infrastructure does not mean shared capital.
+6. Proprietary Capital signals are not automatically exposed to retail.
+7. All execution goes through normalized broker adapters.
+8. Market data is fetched once and reused.
+9. Brokerage-provider-specific logic stays behind the Broker Gateway.
+10. Every order and cash movement is auditable.
+
+## 25.50 Final Product Architecture
+
+```text
+                              PEASE
+                                │
+                 ┌──────────────┴──────────────┐
+                 │                             │
+                 ▼                             ▼
+          PEASE CAPITAL                   PEASE INVEST
+                 │                             │
+       Fund-managed capital              Self-directed users
+                 │                             │
+        Strategy decisions               User decisions
+                 │                             │
+       Institutional risk                Retail risk
+                 │                             │
+                 └──────────────┬──────────────┘
+                                │
+                        SHARED PLATFORM
+                                │
+             ┌──────────────────┼──────────────────┐
+             │                  │                  │
+             ▼                  ▼                  ▼
+         Market Data        Research/AI       Instruments
+             │                  │                  │
+             └──────────────────┼──────────────────┘
+                                │
+                        BROKER GATEWAY
+                                │
+                ┌───────────────┼───────────────┐
+                ▼               ▼               ▼
+              PAPER          US BROKER       NG BROKER
+```
+
+### Immediate goal
+
+Build Pease Invest as a separate retail product surface that reuses Pease’s market intelligence and infrastructure, while keeping customer accounts, orders, portfolios and decision authority completely separate from Pease Capital.
+
+### First milestone
+
+```text
+Retail user → paper account → search AAPL → review AAPL → buy $500 → fill → portfolio updates
+```

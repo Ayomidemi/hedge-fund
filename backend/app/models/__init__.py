@@ -1502,3 +1502,151 @@ class SystemLogEntry(Base, TimestampMixin):
         Index("ix_system_log_entries_owner_created", "owner_user_id", "created_at"),
         Index("ix_system_log_entries_category_created", "category", "created_at"),
     )
+
+
+class RetailAccount(Base, TimestampMixin):
+    """Pease Invest brokerage account. Separate book from Capital portfolios."""
+
+    __tablename__ = "invest_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    account_number: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    broker_provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="PAPER"
+    )
+    broker_account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    base_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    cash_balance: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+
+    orders: Mapped[list["RetailOrder"]] = relationship(back_populates="account")
+    positions: Mapped[list["RetailPosition"]] = relationship(back_populates="account")
+    transactions: Mapped[list["RetailTransaction"]] = relationship(
+        back_populates="account"
+    )
+
+    __table_args__ = (
+        Index("ix_invest_accounts_user_id", "user_id"),
+        Index("ix_invest_accounts_broker", "broker_provider", "broker_account_id"),
+    )
+
+
+class RetailOrder(Base, TimestampMixin):
+    __tablename__ = "invest_orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invest_accounts.id"), nullable=False, index=True
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    order_type: Mapped[str] = mapped_column(String(16), nullable=False, default="market")
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    notional: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    limit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="SUBMITTED")
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    filled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    average_fill_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    filled_quantity: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    broker_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    broker_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+    warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+
+    account: Mapped["RetailAccount"] = relationship(back_populates="orders")
+    instrument: Mapped["Instrument"] = relationship()
+
+    __table_args__ = (
+        Index("ix_invest_orders_account_submitted", "account_id", "submitted_at"),
+        UniqueConstraint("broker_provider", "broker_order_id", name="uq_invest_broker_order"),
+    )
+
+
+class RetailPosition(Base, TimestampMixin):
+    __tablename__ = "invest_positions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invest_accounts.id"), nullable=False, index=True
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
+    average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    cost_basis: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    realized_pnl: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0
+    )
+
+    account: Mapped["RetailAccount"] = relationship(back_populates="positions")
+    instrument: Mapped["Instrument"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "instrument_id", name="uq_invest_position_instrument"),
+    )
+
+
+class RetailTransaction(Base, TimestampMixin):
+    __tablename__ = "invest_transactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invest_accounts.id"), nullable=False, index=True
+    )
+    entry_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    instrument_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("instruments.id"), index=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="paper")
+    broker_reference: Mapped[str | None] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text)
+
+    account: Mapped["RetailAccount"] = relationship(back_populates="transactions")
+    instrument: Mapped["Instrument | None"] = relationship()
+
+    __table_args__ = (
+        Index("ix_invest_transactions_account_occurred", "account_id", "occurred_at"),
+    )
+
+
+class RetailWatchlistItem(Base, TimestampMixin):
+    __tablename__ = "invest_watchlist_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False, index=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    date_added: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    instrument: Mapped["Instrument"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "instrument_id", name="uq_invest_watchlist_instrument"),
+    )

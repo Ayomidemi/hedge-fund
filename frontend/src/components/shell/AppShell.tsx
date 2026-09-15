@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LiveStatusIndicator } from "@/components/shell/LiveStatusIndicator";
+import { ProductSwitcher } from "@/components/shell/ProductSwitcher";
 
 const navigationItems = [
   { label: "Fund Dashboard", href: "/" },
@@ -69,6 +70,9 @@ export function AppShell({ children, userOrgName }: AppShellProps) {
               <p className="text-xs text-zinc-500">Operating system</p>
             </div>
           </div>
+          <div className="mt-4">
+            <ProductSwitcher active="capital" />
+          </div>
         </div>
 
         <nav className="space-y-1 px-3 py-4">
@@ -111,6 +115,9 @@ export function AppShell({ children, userOrgName }: AppShellProps) {
             </div>
 
             <div className="flex items-center gap-4">
+              <div className="lg:hidden">
+                <ProductSwitcher active="capital" />
+              </div>
               <LiveStatusIndicator />
               <Link
                 href="/settings"

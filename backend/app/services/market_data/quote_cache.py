@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Instrument, InstrumentQuote, Portfolio
 from app.services.market_data.fx_convert import mark_price_for_position
 from app.services.market_data.fx_refresh import load_fx_rates
+from app.services.market_data.ingestion import persist_quotes
+from app.services.market_data.quote_provider import fetch_quotes
 
 
 async def get_cached_quote_price(
@@ -23,6 +25,33 @@ async def get_cached_quote_price(
         .where(InstrumentQuote.is_stale.is_(False))
     )
     return quote.price if quote is not None else None
+
+
+async def get_or_fetch_quote_price(
+    session: AsyncSession,
+    ticker: str,
+    *,
+    instrument_id: UUID | None = None,
+) -> Decimal | None:
+    """Return a cached mark, fetching and persisting one if the cache is empty."""
+    cached = await get_cached_quote_price(session, ticker)
+    if cached is not None and cached > 0:
+        return cached
+
+    symbol = ticker.strip().upper()
+    fetched = await fetch_quotes([symbol])
+    live = fetched.get(symbol) or next(iter(fetched.values()), None)
+    if live is None or live.price <= 0:
+        return None
+    if instrument_id is not None:
+        await persist_quotes(
+            session,
+            {live.ticker: [instrument_id]},
+            {live.ticker: live},
+            mark_missing_stale=False,
+        )
+        await session.flush()
+    return live.price
 
 
 async def get_mark_price(

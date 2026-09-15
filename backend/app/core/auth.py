@@ -180,3 +180,54 @@ async def require_authenticated_user(
 
     payload = _decode_supabase_token(credentials.credentials)
     return _user_from_payload(payload)
+
+
+RETAIL_ONLY_ROLES = {"RETAIL_USER"}
+CAPITAL_ROLES = {"CAPITAL_ANALYST", "CAPITAL_PM", "CAPITAL_RISK"}
+ADMIN_ROLES = {"ADMIN"}
+
+
+def _normalized_role(user: AuthenticatedUser) -> str:
+    return (user.role or "").strip().upper()
+
+
+def user_can_access_invest(user: AuthenticatedUser) -> bool:
+    role = _normalized_role(user)
+    if role in RETAIL_ONLY_ROLES or role in ADMIN_ROLES:
+        return True
+    if role in CAPITAL_ROLES:
+        return True
+    if role == "ANONYMOUS":
+        return True
+    return True
+
+
+def user_can_access_capital(user: AuthenticatedUser) -> bool:
+    role = _normalized_role(user)
+    if role == "ANONYMOUS":
+        return True
+    if role in RETAIL_ONLY_ROLES:
+        return False
+    return role in CAPITAL_ROLES or role in ADMIN_ROLES
+
+
+async def require_invest_user(
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> AuthenticatedUser:
+    if not user_can_access_invest(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account cannot access Pease Invest.",
+        )
+    return user
+
+
+async def require_capital_user(
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> AuthenticatedUser:
+    if not user_can_access_capital(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account cannot access Pease Capital.",
+        )
+    return user

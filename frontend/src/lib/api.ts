@@ -2623,3 +2623,162 @@ export function getRadarWatchlistChart(
     options,
   );
 }
+
+export type InvestAccount = {
+  id: string;
+  account_number: string;
+  broker_provider: string;
+  status: string;
+  base_currency: string;
+  cash: string;
+  buying_power: string;
+  created_at: string;
+};
+
+export type InvestHolding = {
+  ticker: string;
+  name: string;
+  quantity: string;
+  average_cost: string;
+  current_price: string | null;
+  market_value: string;
+  unrealized_pnl: string;
+  unrealized_pnl_pct: string | null;
+};
+
+export type InvestHome = {
+  account: InvestAccount;
+  portfolio_value: string;
+  cash: string;
+  invested: string;
+  today_change: string | null;
+  today_change_pct: string | null;
+  holdings: InvestHolding[];
+  headlines: string[];
+};
+
+export type InvestOrder = {
+  id: string;
+  ticker: string;
+  name: string;
+  side: string;
+  order_type: string;
+  quantity: string | null;
+  notional: string | null;
+  status: string;
+  submitted_at: string;
+  filled_at: string | null;
+  average_fill_price: string | null;
+  warnings: string[];
+};
+
+export type InvestWatchlistItem = {
+  id: string;
+  ticker: string;
+  name: string;
+  notes: string | null;
+  date_added: string;
+  price: string | null;
+  change_pct?: string | null;
+};
+
+export type InvestInstrument = {
+  ticker: string;
+  name: string;
+  asset_class: string;
+  exchange: string | null;
+  currency: string;
+  sector: string | null;
+  industry: string | null;
+  price: string | null;
+};
+
+export type InvestTransaction = {
+  id: string;
+  entry_type: string;
+  amount: string;
+  currency: string;
+  ticker: string | null;
+  occurred_at: string;
+  description: string | null;
+};
+
+export function getInvestHome(options?: ApiRequestOptions) {
+  return fetchApi<InvestHome>("/api/invest/home", options);
+}
+
+export function getInvestAccount(options?: ApiRequestOptions) {
+  return fetchApi<InvestAccount>("/api/invest/account", options);
+}
+
+export function getInvestOrders(options?: ApiRequestOptions) {
+  return fetchApi<InvestOrder[]>("/api/invest/orders", options);
+}
+
+export function getInvestOrder(orderId: string, options?: ApiRequestOptions) {
+  return fetchApi<InvestOrder>(
+    `/api/invest/orders/${encodeURIComponent(orderId)}`,
+    options,
+  );
+}
+
+export function createInvestOrder(
+  payload: { ticker: string; side: "BUY" | "SELL"; amount?: string; quantity?: string },
+  options?: ApiRequestOptions,
+) {
+  return postApi<InvestOrder, typeof payload>("/api/invest/orders", payload, options);
+}
+
+export function cancelInvestOrder(orderId: string, options?: ApiRequestOptions) {
+  return postApi<InvestOrder, Record<string, never>>(
+    `/api/invest/orders/${encodeURIComponent(orderId)}/cancel`,
+    {},
+    options,
+  );
+}
+
+export function getInvestWatchlist(options?: ApiRequestOptions) {
+  return fetchApi<InvestWatchlistItem[]>("/api/invest/watchlist", options);
+}
+
+export function addInvestWatchlistItem(
+  payload: { ticker: string; notes?: string },
+  options?: ApiRequestOptions,
+) {
+  return postApi<InvestWatchlistItem, typeof payload>("/api/invest/watchlist", payload, options);
+}
+
+export function removeInvestWatchlistItem(ticker: string, options?: ApiRequestOptions) {
+  return deleteApi(`/api/invest/watchlist/${encodeURIComponent(ticker)}`, options);
+}
+
+export function searchInvestInstruments(query: string, market = "US", options?: ApiRequestOptions) {
+  const search = new URLSearchParams({ query, market });
+  return fetchApi<InvestInstrument[]>(`/api/invest/instruments/search?${search.toString()}`, options);
+}
+
+export function getInvestInstrument(ticker: string, options?: ApiRequestOptions) {
+  return fetchApi<InvestInstrument>(
+    `/api/invest/instruments/${encodeURIComponent(ticker)}`,
+    options,
+  );
+}
+
+export function addInvestPaperCash(amount: string, options?: ApiRequestOptions) {
+  return postApi<InvestAccount, { amount: string }>("/api/invest/paper/deposit", { amount }, options);
+}
+
+export function resetInvestPaperAccount(options?: ApiRequestOptions) {
+  return postApi<InvestAccount, Record<string, never>>("/api/invest/paper/reset", {}, options);
+}
+
+export function getInvestTransactions(options?: ApiRequestOptions) {
+  return fetchApi<InvestTransaction[]>("/api/invest/transactions", options);
+}
+
+export function getInvestDiscover(options?: ApiRequestOptions) {
+  return fetchApi<{ status: string; summary: string; sections: string[] }>(
+    "/api/invest/discover",
+    options,
+  );
+}
