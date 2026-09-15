@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas.invest import (
     InvestAccountResponse,
     InvestCashRequest,
+    InvestDiscoverResponse,
+    InvestFixedIncomeProductResponse,
     InvestHolding,
     InvestHomeResponse,
     InvestInstrumentResponse,
@@ -18,6 +20,13 @@ from app.api.schemas.invest import (
 from app.core.auth import AuthenticatedUser, require_invest_user
 from app.db.session import get_session
 from app.services.invest import accounts as invest
+from app.services.invest.fixed_income import (
+    ensure_fixed_income_instrument,
+    fixed_income_response,
+    get_fixed_income_product,
+    search_fixed_income_products,
+)
+from app.services.invest.discover import build_invest_discover
 
 router = APIRouter(prefix="/invest")
 
@@ -221,19 +230,41 @@ async def read_instrument(
     return response
 
 
-@router.get("/discover")
+@router.get("/fixed-income", response_model=list[InvestFixedIncomeProductResponse])
+async def read_fixed_income_products(
+    query: str = Query(default="", max_length=64),
+    market: str = Query(default="ALL", max_length=8),
+    user: AuthenticatedUser = Depends(require_invest_user),
+) -> list[InvestFixedIncomeProductResponse]:
+    return [
+        fixed_income_response(product)
+        for product in search_fixed_income_products(query, market=market)
+    ]
+
+
+@router.get(
+    "/fixed-income/{ticker}",
+    response_model=InvestFixedIncomeProductResponse,
+)
+async def read_fixed_income_product(
+    ticker: str,
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> InvestFixedIncomeProductResponse:
+    product = get_fixed_income_product(ticker)
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Fixed-income product was not found.",
+        )
+    await ensure_fixed_income_instrument(session, product)
+    await session.commit()
+    return fixed_income_response(product)
+
+
+@router.get("/discover", response_model=InvestDiscoverResponse)
 async def read_discover(
     user: AuthenticatedUser = Depends(require_invest_user),
-) -> dict:
-    return {
-        "status": "coming_soon",
-        "summary": "Retail Discover will reuse Market Radar with simpler language.",
-        "sections": [
-            "Trending",
-            "Big Movers",
-            "Unusual Activity",
-            "Sector Moves",
-            "Latest News",
-            "Watchlist Updates",
-        ],
-    }
+    session: AsyncSession = Depends(get_session),
+) -> InvestDiscoverResponse:
+    return await build_invest_discover(session, user)

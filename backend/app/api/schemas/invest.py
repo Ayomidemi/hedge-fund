@@ -106,6 +106,55 @@ class InvestInstrumentResponse(BaseModel):
     price: Decimal | None = None
 
 
+class InvestRiskCheckResponse(BaseModel):
+    code: str
+    level: str
+    message: str
+    passed: bool
+
+
+class InvestFixedIncomeProductResponse(BaseModel):
+    ticker: str
+    name: str
+    market: str
+    currency: str
+    issuer: str
+    instrument_type: str
+    tenor: str
+    maturity_date: str | None = None
+    indicative_yield_pct: Decimal | None = None
+    minimum_order_amount: Decimal
+    liquidity: str
+    risk_level: str
+    expected_payout: str
+    trade_status: str
+    retail_notes: list[str] = Field(default_factory=list)
+    risk_checks: list[InvestRiskCheckResponse] = Field(default_factory=list)
+
+
+class InvestDiscoverItemResponse(BaseModel):
+    title: str
+    subtitle: str | None = None
+    badge: str | None = None
+    href: str | None = None
+    tone: str = "neutral"
+    metadata: list[str] = Field(default_factory=list)
+
+
+class InvestDiscoverSectionResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    items: list[InvestDiscoverItemResponse] = Field(default_factory=list)
+
+
+class InvestDiscoverResponse(BaseModel):
+    generated_at: datetime
+    summary: str
+    sections: list[InvestDiscoverSectionResponse]
+    next_actions: list[InvestDiscoverItemResponse] = Field(default_factory=list)
+
+
 class InvestTransactionResponse(BaseModel):
     id: UUID
     entry_type: str

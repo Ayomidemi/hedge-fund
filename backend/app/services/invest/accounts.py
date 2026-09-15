@@ -23,6 +23,7 @@ from app.api.schemas.operating_core import InstrumentCreate
 from app.core.auth import AuthenticatedUser
 from app.core.config import settings
 from app.models import Instrument, RetailAccount, RetailOrder, RetailWatchlistItem
+from app.services.administration.system_log import record_system_log
 from app.services.brokerage.gateway import get_broker_provider
 from app.services.brokerage.paper import PaperBrokerProvider
 from app.services.brokerage.protocol import (
@@ -30,6 +31,12 @@ from app.services.brokerage.protocol import (
     CashRequest,
     SubmitOrderRequest,
 )
+from app.services.invest.fixed_income import (
+    ensure_fixed_income_instrument,
+    get_fixed_income_product,
+    search_fixed_income_products,
+)
+from app.services.invest.risk import evaluate_order_risk
 from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.market_data import search_ticker_suggestions
@@ -85,6 +92,18 @@ async def get_or_create_account(
         )
     )
     await session.flush()
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="invest",
+        event="retail_account_created",
+        message=f"Pease Invest paper account {account.account_number} created.",
+        context={
+            "account_id": str(account.id),
+            "broker_provider": account.broker_provider,
+            "starting_cash": str(starting),
+        },
+    )
     return account
 
 
@@ -133,7 +152,16 @@ async def submit_order(
     account = await get_or_create_account(session, user)
     if payload.amount is None and payload.quantity is None:
         raise InvestValidationError("Enter an amount or a quantity.")
-    await _require_instrument(session, payload.ticker)
+    instrument = await _require_instrument(session, payload.ticker)
+    risk_assessment = evaluate_order_risk(
+        account=account,
+        instrument=instrument,
+        payload=payload,
+    )
+    if risk_assessment.blockers:
+        raise InvestValidationError(
+            " ".join(check.message for check in risk_assessment.blockers)
+        )
     broker = get_broker_provider(session, account.broker_provider)
     try:
         result = await broker.submit_order(
@@ -157,6 +185,32 @@ async def submit_order(
     )
     if order is None or instrument is None:
         raise InvestError("Order could not be loaded after fill.")
+    merged_warnings = list(dict.fromkeys([*list(order.warnings or []), *risk_assessment.warnings]))
+    order.warnings = merged_warnings
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="invest",
+        event="retail_order_submitted",
+        message=f"Paper {order.side.lower()} order for {instrument.ticker} filled.",
+        context={
+            "account_id": str(account.id),
+            "order_id": str(order.id),
+            "ticker": instrument.ticker,
+            "status": order.status,
+            "notional": str(order.notional),
+            "quantity": str(order.quantity),
+            "risk_checks": [
+                {
+                    "code": check.code,
+                    "level": check.level,
+                    "passed": check.passed,
+                    "message": check.message,
+                }
+                for check in risk_assessment.checks
+            ],
+        },
+    )
     await session.commit()
     return _order_response(order, instrument)
 
@@ -209,6 +263,19 @@ async def cancel_order(
         await broker.cancel_order(account.broker_account_id, order.broker_order_id)
     except BrokerValidationError as exc:
         raise InvestValidationError(str(exc)) from exc
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="invest",
+        event="retail_order_cancel_requested",
+        message=f"Cancel requested for Pease Invest order {order.id}.",
+        context={
+            "account_id": str(account.id),
+            "order_id": str(order.id),
+            "ticker": instrument.ticker,
+            "broker_order_id": order.broker_order_id,
+        },
+    )
     await session.commit()
     return _order_response(order, instrument)
 
@@ -254,6 +321,18 @@ async def add_paper_cash(
         )
     except BrokerValidationError as exc:
         raise InvestValidationError(str(exc)) from exc
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="invest",
+        event="retail_cash_deposit",
+        message="Paper cash added to Pease Invest account.",
+        context={
+            "account_id": str(account.id),
+            "amount": str(payload.amount),
+            "currency": account.base_currency,
+        },
+    )
     await session.commit()
     return _account_response(account, balances.cash, balances.buying_power)
 
@@ -267,6 +346,17 @@ async def reset_paper_account(
         raise InvestValidationError("Only paper accounts can be reset.")
     snapshot = await broker.reset_account(
         account.broker_account_id, settings.invest_paper_starting_cash
+    )
+    await record_system_log(
+        session,
+        owner_user_id=user.id,
+        category="invest",
+        event="retail_paper_account_reset",
+        message="Pease Invest paper account reset.",
+        context={
+            "account_id": str(account.id),
+            "starting_cash": str(settings.invest_paper_starting_cash),
+        },
     )
     await session.commit()
     return _account_response(
@@ -362,6 +452,7 @@ async def search_instruments(
 ) -> list[InvestInstrumentResponse]:
     suggestions = await search_ticker_suggestions(session, query, market_hint=market)
     results: list[InvestInstrumentResponse] = []
+    seen: set[str] = set()
     for item in suggestions:
         price = await get_cached_quote_price(session, item.ticker)
         results.append(
@@ -376,6 +467,22 @@ async def search_instruments(
                 price=price,
             )
         )
+        seen.add(item.ticker)
+    for product in search_fixed_income_products(query, market=market):
+        if product.ticker in seen:
+            continue
+        results.append(
+            InvestInstrumentResponse(
+                ticker=product.ticker,
+                name=product.name,
+                asset_class=product.asset_class,
+                exchange=product.exchange,
+                currency=product.currency,
+                sector="Fixed Income",
+                industry=product.instrument_type,
+                price=None,
+            )
+        )
     return results
 
 
@@ -383,6 +490,18 @@ async def get_instrument(
     session: AsyncSession, ticker: str
 ) -> InvestInstrumentResponse:
     instrument = await _require_instrument(session, ticker)
+    product = get_fixed_income_product(instrument.ticker)
+    if product is not None:
+        return InvestInstrumentResponse(
+            ticker=instrument.ticker,
+            name=instrument.name,
+            asset_class=instrument.asset_class,
+            exchange=instrument.exchange,
+            currency=instrument.currency,
+            sector=instrument.sector,
+            industry=instrument.industry,
+            price=None,
+        )
     price = await get_or_fetch_quote_price(
         session, instrument.ticker, instrument_id=instrument.id
     )
@@ -400,6 +519,9 @@ async def get_instrument(
 
 async def _require_instrument(session: AsyncSession, ticker: str) -> Instrument:
     normalized = ticker.strip().upper()
+    product = get_fixed_income_product(normalized)
+    if product is not None:
+        return await ensure_fixed_income_instrument(session, product)
     instrument = await session.scalar(
         select(Instrument).where(Instrument.ticker == normalized)
     )

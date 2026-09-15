@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
+
+from app.api.schemas.invest import InvestOrderCreate
+from app.models import Instrument, RetailAccount
+from app.services.invest.fixed_income import get_fixed_income_product
+
+MONEY = Decimal("0.01")
+SUPPORTED_ASSET_CLASSES = {"equity", "etf", "bond", "cash_equivalent"}
+
+
+@dataclass(frozen=True)
+class RetailRiskCheck:
+    code: str
+    level: str
+    message: str
+    passed: bool
+
+
+@dataclass(frozen=True)
+class RetailRiskAssessment:
+    checks: tuple[RetailRiskCheck, ...]
+
+    @property
+    def blockers(self) -> list[RetailRiskCheck]:
+        return [check for check in self.checks if not check.passed]
+
+    @property
+    def warnings(self) -> list[str]:
+        return [
+            check.message
+            for check in self.checks
+            if check.passed and check.level in {"warning", "review"}
+        ]
+
+
+def evaluate_order_risk(
+    *,
+    account: RetailAccount,
+    instrument: Instrument,
+    payload: InvestOrderCreate,
+) -> RetailRiskAssessment:
+    checks: list[RetailRiskCheck] = []
+    asset_class = instrument.asset_class.strip().lower()
+    side = payload.side.strip().upper()
+    order_type = payload.order_type.strip().lower()
+    notional = _money(payload.amount) if payload.amount is not None else None
+
+    checks.append(
+        _check(
+            "product_eligibility",
+            asset_class in SUPPORTED_ASSET_CLASSES,
+            f"{instrument.asset_class} is eligible for Pease Invest paper trading.",
+            f"{instrument.asset_class} is not currently eligible for Pease Invest.",
+        )
+    )
+    checks.append(
+        _check(
+            "order_type",
+            order_type == "market",
+            "Market order accepted for the current paper provider.",
+            "Pease Invest paper V1 only accepts market orders.",
+        )
+    )
+    checks.append(
+        _check(
+            "side",
+            side in {"BUY", "SELL"},
+            "Order side accepted.",
+            "Order side must be BUY or SELL.",
+        )
+    )
+
+    if side == "BUY" and notional is not None:
+        checks.append(
+            _check(
+                "buying_power",
+                notional <= account.cash_balance,
+                "Cash check passed.",
+                "Not enough buying power for this order.",
+            )
+        )
+        if account.cash_balance > 0 and notional / account.cash_balance >= Decimal("0.50"):
+            checks.append(
+                RetailRiskCheck(
+                    code="concentration_review",
+                    level="warning",
+                    message="This paper order uses at least half of available cash.",
+                    passed=True,
+                )
+            )
+
+    product = get_fixed_income_product(instrument.ticker)
+    if product is not None:
+        if notional is not None:
+            checks.append(
+                _check(
+                    "minimum_order",
+                    notional >= product.minimum_order_amount,
+                    "Fixed-income minimum order check passed.",
+                    f"Minimum order for {product.ticker} is {product.currency} {product.minimum_order_amount}.",
+                )
+            )
+        checks.append(
+            _check(
+                "fixed_income_execution",
+                product.trade_status == "paper_tradable",
+                "Fixed-income paper execution is enabled.",
+                "Fixed-income products are watch-only until pricing, accrued-interest, settlement, and broker support are complete.",
+            )
+        )
+
+    return RetailRiskAssessment(tuple(checks))
+
+
+def _check(code: str, passed: bool, pass_message: str, fail_message: str) -> RetailRiskCheck:
+    return RetailRiskCheck(
+        code=code,
+        level="info" if passed else "blocker",
+        message=pass_message if passed else fail_message,
+        passed=passed,
+    )
+
+
+def _money(value: Decimal) -> Decimal:
+    return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)

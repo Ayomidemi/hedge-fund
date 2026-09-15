@@ -2693,6 +2693,55 @@ export type InvestInstrument = {
   price: string | null;
 };
 
+export type InvestRiskCheck = {
+  code: string;
+  level: string;
+  message: string;
+  passed: boolean;
+};
+
+export type InvestFixedIncomeProduct = {
+  ticker: string;
+  name: string;
+  market: string;
+  currency: string;
+  issuer: string;
+  instrument_type: string;
+  tenor: string;
+  maturity_date: string | null;
+  indicative_yield_pct: string | null;
+  minimum_order_amount: string;
+  liquidity: string;
+  risk_level: string;
+  expected_payout: string;
+  trade_status: string;
+  retail_notes: string[];
+  risk_checks: InvestRiskCheck[];
+};
+
+export type InvestDiscoverItem = {
+  title: string;
+  subtitle: string | null;
+  badge: string | null;
+  href: string | null;
+  tone: string;
+  metadata: string[];
+};
+
+export type InvestDiscoverSection = {
+  id: string;
+  title: string;
+  description: string;
+  items: InvestDiscoverItem[];
+};
+
+export type InvestDiscover = {
+  generated_at: string;
+  summary: string;
+  sections: InvestDiscoverSection[];
+  next_actions: InvestDiscoverItem[];
+};
+
 export type InvestTransaction = {
   id: string;
   entry_type: string;
@@ -2764,6 +2813,31 @@ export function getInvestInstrument(ticker: string, options?: ApiRequestOptions)
   );
 }
 
+export function getInvestFixedIncomeProducts(
+  params?: { query?: string; market?: string },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.query) {
+    search.set("query", params.query);
+  }
+  if (params?.market) {
+    search.set("market", params.market);
+  }
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return fetchApi<InvestFixedIncomeProduct[]>(
+    `/api/invest/fixed-income${suffix}`,
+    options,
+  );
+}
+
+export function getInvestFixedIncomeProduct(ticker: string, options?: ApiRequestOptions) {
+  return fetchApi<InvestFixedIncomeProduct>(
+    `/api/invest/fixed-income/${encodeURIComponent(ticker)}`,
+    options,
+  );
+}
+
 export function addInvestPaperCash(amount: string, options?: ApiRequestOptions) {
   return postApi<InvestAccount, { amount: string }>("/api/invest/paper/deposit", { amount }, options);
 }
@@ -2777,8 +2851,5 @@ export function getInvestTransactions(options?: ApiRequestOptions) {
 }
 
 export function getInvestDiscover(options?: ApiRequestOptions) {
-  return fetchApi<{ status: string; summary: string; sections: string[] }>(
-    "/api/invest/discover",
-    options,
-  );
+  return fetchApi<InvestDiscover>("/api/invest/discover", options);
 }
