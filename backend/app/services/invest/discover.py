@@ -33,8 +33,8 @@ async def build_invest_discover(
     watchlist = await list_watchlist(session, user)
 
     sections = [
-        _market_pulse_section(radar),
         _fixed_income_section(),
+        _market_context_section(radar),
         _watchlist_section(watchlist),
         _news_section(news),
     ]
@@ -52,16 +52,17 @@ async def build_invest_discover(
 def _summary(flagged_count: int, news_count: int, watchlist_count: int) -> str:
     if flagged_count > 0:
         return (
-            f"{flagged_count} market moves need a closer look. "
-            f"Your watchlist has {watchlist_count} saved names, and {news_count} current stories are available."
+            "Start with cash-yield and fixed-income products, then use market context "
+            f"to decide what else deserves attention. {flagged_count} market moves, "
+            f"{watchlist_count} saved names, and {news_count} current stories are available."
         )
     return (
-        "Start with fixed income, broad market context, and your watchlist. "
+        "Start with fixed income, cash-yield products, broad market context, and your watchlist. "
         f"{news_count} current stories are available for review."
     )
 
 
-def _market_pulse_section(radar) -> InvestDiscoverSectionResponse:
+def _market_context_section(radar) -> InvestDiscoverSectionResponse:
     items: list[InvestDiscoverItemResponse] = []
     for item in radar.flagged[:5]:
         move = _pct(item.change_pct)
@@ -81,18 +82,18 @@ def _market_pulse_section(radar) -> InvestDiscoverSectionResponse:
     if not items:
         items.append(
             InvestDiscoverItemResponse(
-                title="No urgent equity moves right now",
-                subtitle="Radar has not found a high-priority retail move in the latest working set.",
+                title="No urgent secondary-market moves right now",
+                subtitle="Radar has not found a high-priority move outside the fixed-income shelf.",
                 badge="Quiet",
-                href="/invest/search",
+                href="/invest/markets",
                 metadata=[f"{radar.working_set_count} names screened"],
             )
         )
 
     return InvestDiscoverSectionResponse(
-        id="market_pulse",
-        title="Market pulse",
-        description="Plain-language highlights from the shared Market Radar.",
+        id="market_context",
+        title="Market context",
+        description="Plain-language market movement after the fixed-income shelf.",
         items=items,
     )
 
@@ -141,10 +142,10 @@ def _watchlist_section(watchlist) -> InvestDiscoverSectionResponse:
         items.append(
             InvestDiscoverItemResponse(
                 title="Build your first watchlist",
-                subtitle="Save stocks, ETFs, and later fixed-income products you want to track.",
+                subtitle="Save T-bills, bonds, funds, and other instruments you want to track.",
                 badge="Start",
-                href="/invest/search",
-                metadata=["Search AAPL, SPY, or a Treasury product"],
+                href="/invest/markets",
+                metadata=["Start with T-bills, Treasury notes, or FGN bonds"],
             )
         )
 
@@ -200,8 +201,8 @@ def _next_actions(has_watchlist: bool) -> list[InvestDiscoverItemResponse]:
             tone="income",
         ),
         InvestDiscoverItemResponse(
-            title="Search a security",
-            subtitle="Open a retail asset detail page and decide whether it belongs on your watchlist.",
+            title="Search an instrument",
+            subtitle="Look up funds and listed instruments after reviewing cash-yield products.",
             badge="Research",
             href="/invest/search",
             tone="neutral",
@@ -225,7 +226,7 @@ def _plain_radar_reason(item) -> str:
         return item.priority_reasons[0]
     if item.flags:
         return f"{item.ticker} is moving differently from its recent pattern."
-    return f"{item.ticker} appeared in the latest radar working set."
+    return f"{item.ticker} appeared in the secondary market scan."
 
 
 def _pct(value: Decimal | None) -> str | None:

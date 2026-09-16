@@ -25,14 +25,14 @@ export default async function InvestPortfolioPage() {
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Total" value={money(home.portfolio_value)} />
         <Stat label="Cash" value={money(home.cash)} />
-        <Stat label="Invested" value={money(home.invested)} />
-        <Stat label="Holdings" value={String(home.holdings.length)} />
+        <Stat label="Allocated" value={money(home.invested)} />
+        <Stat label="Positions" value={String(home.holdings.length)} />
       </section>
       <section className="rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         {home.holdings.length === 0 ? (
           <p className="p-6 text-sm text-zinc-500">
-            No positions. <Link href="/invest/search" className="underline">Buy something</Link>{" "}
-            with paper cash.
+            No paper positions yet. <Link href="/invest/markets" className="underline">Review fixed income</Link>{" "}
+            before using the listed-instrument paper loop.
           </p>
         ) : (
           <table className="w-full text-left text-sm">

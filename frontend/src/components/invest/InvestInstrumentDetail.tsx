@@ -21,7 +21,7 @@ export function InvestInstrumentDetail({ instrument }: { instrument: InvestInstr
   const [amount, setAmount] = useState("500");
   const [pending, setPending] = useState<"buy" | "watch" | null>(null);
   const price = instrument.price ? Number(instrument.price) : null;
-  const shares =
+  const estimatedUnits =
     price && Number(amount) > 0 ? (Number(amount) / price).toFixed(4) : "—";
 
   async function handleBuy(event: FormEvent) {
@@ -33,7 +33,7 @@ export function InvestInstrumentDetail({ instrument }: { instrument: InvestInstr
         side: "BUY",
         amount,
       });
-      toast.success(`Bought ${instrument.ticker} · ${order.status}`);
+      toast.success(`Order filled for ${instrument.ticker} · ${order.status}`);
       router.push("/invest/portfolio");
       router.refresh();
     } catch (error) {
@@ -72,7 +72,11 @@ export function InvestInstrumentDetail({ instrument }: { instrument: InvestInstr
         onSubmit={(event) => void handleBuy(event)}
         className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950"
       >
-        <h2 className="text-lg font-semibold">Buy with paper cash</h2>
+        <h2 className="text-lg font-semibold">Listed-instrument paper order</h2>
+        <p className="mt-2 text-sm text-zinc-500">
+          This secondary flow is for exchange-listed instruments. Fixed-income
+          products use the dedicated bills and bonds detail page.
+        </p>
         <label className="mt-4 block text-sm">
           <span className="text-xs uppercase tracking-wide text-zinc-500">Amount</span>
           <input
@@ -82,14 +86,14 @@ export function InvestInstrumentDetail({ instrument }: { instrument: InvestInstr
             inputMode="decimal"
           />
         </label>
-        <p className="mt-2 text-sm text-zinc-500">Estimated shares: {shares}</p>
+        <p className="mt-2 text-sm text-zinc-500">Estimated units: {estimatedUnits}</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="submit"
             disabled={pending !== null || !price}
             className={buttonPrimaryClassName}
           >
-            {pending === "buy" ? "Buying…" : "Buy"}
+            {pending === "buy" ? "Submitting..." : "Submit paper order"}
           </button>
           <button
             type="button"

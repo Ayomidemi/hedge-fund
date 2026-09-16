@@ -133,8 +133,9 @@ async def get_home(
         invested=invested,
         holdings=holdings,
         headlines=[
-            "This is paper trading — no real money is at risk.",
-            "Search a name, review it, then buy a small amount to prove the loop.",
+            "Fixed-income products are watch-only until pricing, accrued interest, settlement, and broker support are complete.",
+            "Use Markets to compare T-bills, Treasury notes, FGN bonds, and cash-yield options first.",
+            "Listed market instruments remain available as a secondary paper-trading loop.",
         ],
     )
 
@@ -450,24 +451,8 @@ async def remove_watchlist_item(
 async def search_instruments(
     session: AsyncSession, query: str, market: str = "US"
 ) -> list[InvestInstrumentResponse]:
-    suggestions = await search_ticker_suggestions(session, query, market_hint=market)
     results: list[InvestInstrumentResponse] = []
     seen: set[str] = set()
-    for item in suggestions:
-        price = await get_cached_quote_price(session, item.ticker)
-        results.append(
-            InvestInstrumentResponse(
-                ticker=item.ticker,
-                name=item.name,
-                asset_class=item.asset_class,
-                exchange=item.exchange,
-                currency=item.currency,
-                sector=item.sector,
-                industry=item.industry,
-                price=price,
-            )
-        )
-        seen.add(item.ticker)
     for product in search_fixed_income_products(query, market=market):
         if product.ticker in seen:
             continue
@@ -483,6 +468,26 @@ async def search_instruments(
                 price=None,
             )
         )
+        seen.add(product.ticker)
+
+    suggestions = await search_ticker_suggestions(session, query, market_hint=market)
+    for item in suggestions:
+        if item.ticker in seen:
+            continue
+        price = await get_cached_quote_price(session, item.ticker)
+        results.append(
+            InvestInstrumentResponse(
+                ticker=item.ticker,
+                name=item.name,
+                asset_class=item.asset_class,
+                exchange=item.exchange,
+                currency=item.currency,
+                sector=item.sector,
+                industry=item.industry,
+                price=price,
+            )
+        )
+        seen.add(item.ticker)
     return results
 
 
@@ -529,7 +534,7 @@ async def _require_instrument(session: AsyncSession, ticker: str) -> Instrument:
         return instrument
     return await upsert_instrument(
         session,
-        InstrumentCreate(ticker=normalized, name=normalized, asset_class="equity"),
+        InstrumentCreate(ticker=normalized, name=normalized, asset_class="other"),
     )
 
 

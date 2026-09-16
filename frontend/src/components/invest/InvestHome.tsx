@@ -29,7 +29,7 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
         </p>
         <div className="mt-5 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
           <Metric label="Cash" value={money(home.cash)} />
-          <Metric label="Invested" value={money(home.invested)} />
+          <Metric label="Allocated" value={money(home.invested)} />
           <Metric label="Buying power" value={money(home.account.buying_power)} />
         </div>
         <p className="mt-4 text-xs text-zinc-500">
@@ -39,14 +39,15 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Your investments</h2>
-          <Link href="/invest/search" className={buttonPrimaryClassName}>
-            Find a stock
+          <h2 className="text-lg font-semibold">Your income and market book</h2>
+          <Link href="/invest/markets" className={buttonPrimaryClassName}>
+            Explore fixed income
           </Link>
         </div>
         {home.holdings.length === 0 ? (
           <p className="mt-4 text-sm text-zinc-500">
-            No holdings yet. Search AAPL, review it, then buy a small paper amount.
+            No live paper positions yet. Start by comparing T-bills, Treasury notes,
+            FGN bonds, and cash-yield products.
           </p>
         ) : (
           <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">

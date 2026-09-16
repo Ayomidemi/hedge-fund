@@ -69,7 +69,7 @@ class InvestRouteTests(TestCase):
 class PaperBrokerSizingTests(TestCase):
     def test_notional_buy_converts_to_quantity(self) -> None:
         quantity, notional = _buy_size(
-            SubmitOrderRequest(symbol="AAPL", side="BUY", notional=Decimal("500")),
+            SubmitOrderRequest(symbol="TEST", side="BUY", notional=Decimal("500")),
             Decimal("250"),
         )
         self.assertEqual(quantity, Decimal("2.00000000"))
@@ -77,7 +77,7 @@ class PaperBrokerSizingTests(TestCase):
 
     def test_buy_requires_amount_or_quantity(self) -> None:
         with self.assertRaises(BrokerValidationError):
-            _buy_size(SubmitOrderRequest(symbol="AAPL", side="BUY"), Decimal("10"))
+            _buy_size(SubmitOrderRequest(symbol="TEST", side="BUY"), Decimal("10"))
 
 
 class FixedIncomeScopeTests(TestCase):
