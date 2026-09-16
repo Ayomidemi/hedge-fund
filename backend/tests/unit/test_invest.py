@@ -10,9 +10,12 @@ from app.core.config import settings
 from app.main import app
 from app.api.schemas.invest import InvestOrderCreate
 from app.models import Instrument, RetailAccount
-from app.services.brokerage.paper import _buy_size
+from app.services.brokerage.paper import _buy_size, _fixed_income_buy_size
 from app.services.brokerage.protocol import BrokerValidationError, SubmitOrderRequest
 from app.services.invest.fixed_income import (
+    fixed_income_cashflows,
+    fixed_income_quote,
+    fixed_income_response,
     get_fixed_income_product,
     search_fixed_income_products,
 )
@@ -56,6 +59,7 @@ class InvestRouteTests(TestCase):
         self.assertIn("/api/invest/paper/deposit", paths)
         self.assertIn("/api/invest/instruments/search", paths)
         self.assertIn("/api/invest/discover", paths)
+        self.assertIn("/api/news/overview", paths)
         self.assertIn("/api/invest/orders/{order_id}", paths)
         self.assertIn("/api/invest/orders/{order_id}/cancel", paths)
         self.assertIn("/api/invest/fixed-income", paths)
@@ -81,6 +85,19 @@ class PaperBrokerSizingTests(TestCase):
         with self.assertRaises(BrokerValidationError):
             _buy_size(SubmitOrderRequest(symbol="TEST", side="BUY"), Decimal("10"))
 
+    def test_fixed_income_notional_buy_rounds_to_face_increment(self) -> None:
+        quantity, notional = _fixed_income_buy_size(
+            SubmitOrderRequest(
+                symbol="US-TBILL-13W",
+                side="BUY",
+                notional=Decimal("500"),
+            ),
+            Decimal("0.987500"),
+            Decimal("100.00"),
+        )
+        self.assertEqual(quantity, Decimal("500.00000000"))
+        self.assertEqual(notional, Decimal("493.75"))
+
 
 class FixedIncomeScopeTests(TestCase):
     def test_fixed_income_catalog_includes_us_and_nigeria_products(self) -> None:
@@ -95,8 +112,34 @@ class FixedIncomeScopeTests(TestCase):
         assert product is not None
         self.assertEqual(product.currency, "NGN")
         self.assertGreaterEqual(product.minimum_order_amount, Decimal("100000.00"))
-        self.assertEqual(product.trade_status, "watch_only")
+        self.assertEqual(product.trade_status, "paper_tradable")
+        self.assertIsNotNone(product.indicative_yield_pct)
         self.assertIsNone(product.proxy_ticker)
+
+    def test_fixed_income_quote_models_price_settlement_and_cashflows(self) -> None:
+        bill = get_fixed_income_product("US-TBILL-13W")
+        bond = get_fixed_income_product("FGN-BOND-2029")
+        assert bill is not None
+        assert bond is not None
+
+        bill_quote = fixed_income_quote(bill)
+        self.assertLess(bill_quote.dirty_price_per_100, Decimal("100"))
+        self.assertEqual(bill_quote.accrued_interest_per_100, Decimal("0.0000"))
+        self.assertGreater(bill_quote.days_to_maturity, 0)
+
+        bond_flows = fixed_income_cashflows(bond)
+        self.assertGreater(len(bond_flows), 1)
+        self.assertEqual(bond_flows[-1].cashflow_type, "coupon_principal")
+
+    def test_fixed_income_response_exposes_retail_quote_fields(self) -> None:
+        product = get_fixed_income_product("US-TREASURY-2Y")
+        assert product is not None
+        response = fixed_income_response(product)
+        self.assertEqual(response.trade_status, "paper_tradable")
+        self.assertIsNotNone(response.clean_price)
+        self.assertIsNotNone(response.dirty_price)
+        self.assertIsNotNone(response.settlement_date)
+        self.assertTrue(response.cashflows)
 
     def test_us_cash_bills_point_to_listed_paper_proxy(self) -> None:
         bill = get_fixed_income_product("US-TBILL-13W")
@@ -106,7 +149,7 @@ class FixedIncomeScopeTests(TestCase):
         self.assertEqual(bill.proxy_ticker, "BIL")
         self.assertEqual(note.proxy_ticker, "SHY")
 
-    def test_retail_risk_blocks_watch_only_fixed_income_execution(self) -> None:
+    def test_retail_risk_allows_model_fixed_income_execution(self) -> None:
         account = RetailAccount(
             user_id="u1",
             account_number="PI-TEST",
@@ -135,7 +178,43 @@ class FixedIncomeScopeTests(TestCase):
             ),
         )
         blocker_codes = {check.code for check in assessment.blockers}
-        self.assertIn("fixed_income_execution", blocker_codes)
+        self.assertNotIn("fixed_income_execution", blocker_codes)
+        self.assertFalse(assessment.blockers)
+        self.assertIn(
+            "Paper fill uses an indicative fixed-income model price, including settlement and accrued-interest assumptions.",
+            assessment.warnings,
+        )
+
+    def test_retail_risk_blocks_below_fixed_income_minimum(self) -> None:
+        account = RetailAccount(
+            user_id="u1",
+            account_number="PI-TEST",
+            broker_provider="PAPER",
+            broker_account_id="paper-1",
+            status="active",
+            base_currency="USD",
+            cash_balance=Decimal("10000.00"),
+        )
+        instrument = Instrument(
+            ticker="NG-TBILL-182D",
+            name="Nigeria Treasury Bill 182 Day",
+            asset_class="cash_equivalent",
+            exchange="FMDQ",
+            currency="NGN",
+            sector="Fixed Income",
+            industry="treasury_bill",
+        )
+        assessment = evaluate_order_risk(
+            account=account,
+            instrument=instrument,
+            payload=InvestOrderCreate(
+                ticker="NG-TBILL-182D",
+                side="BUY",
+                amount=Decimal("500"),
+            ),
+        )
+        blocker_codes = {check.code for check in assessment.blockers}
+        self.assertIn("minimum_order", blocker_codes)
 
 
 class InvestMarketsBoardTests(TestCase):

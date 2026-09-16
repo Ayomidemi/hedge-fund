@@ -94,11 +94,16 @@ def evaluate_order_risk(
 
     product = get_fixed_income_product(instrument.ticker)
     if product is not None:
-        if notional is not None:
+        order_value = notional
+        if order_value is None and payload.quantity is not None and side == "BUY":
+            order_value = Decimal(str(payload.quantity)).quantize(
+                MONEY, rounding=ROUND_HALF_UP
+            )
+        if order_value is not None and side == "BUY":
             checks.append(
                 _check(
                     "minimum_order",
-                    notional >= product.minimum_order_amount,
+                    order_value >= product.minimum_order_amount,
                     "Fixed-income minimum order check passed.",
                     f"Minimum order for {product.ticker} is {product.currency} {product.minimum_order_amount}.",
                 )
@@ -108,9 +113,32 @@ def evaluate_order_risk(
                 "fixed_income_execution",
                 product.trade_status == "paper_tradable",
                 "Fixed-income paper execution is enabled.",
-                "Fixed-income products are watch-only until pricing, accrued-interest, settlement, and broker support are complete.",
+                "Fixed-income product is watch-only and cannot be paper-traded yet.",
             )
         )
+        checks.append(
+            RetailRiskCheck(
+                code="fixed_income_model_price",
+                level="review",
+                message=(
+                    "Paper fill uses an indicative fixed-income model price, including "
+                    "settlement and accrued-interest assumptions."
+                ),
+                passed=True,
+            )
+        )
+        if product.currency != account.base_currency:
+            checks.append(
+                RetailRiskCheck(
+                    code="fx_model_warning",
+                    level="warning",
+                    message=(
+                        f"{product.ticker} is denominated in {product.currency}; "
+                        f"paper cash remains recorded in {account.base_currency} without live FX conversion."
+                    ),
+                    passed=True,
+                )
+            )
 
     return RetailRiskAssessment(tuple(checks))
 

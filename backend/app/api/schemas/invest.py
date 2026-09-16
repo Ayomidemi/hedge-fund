@@ -113,6 +113,13 @@ class InvestRiskCheckResponse(BaseModel):
     passed: bool
 
 
+class InvestFixedIncomeCashflowResponse(BaseModel):
+    payment_date: str
+    cashflow_type: str
+    amount_per_100: Decimal
+    description: str
+
+
 class InvestFixedIncomeProductResponse(BaseModel):
     ticker: str
     name: str
@@ -123,6 +130,16 @@ class InvestFixedIncomeProductResponse(BaseModel):
     tenor: str
     maturity_date: str | None = None
     indicative_yield_pct: Decimal | None = None
+    coupon_rate_pct: Decimal | None = None
+    settlement_date: str | None = None
+    days_to_maturity: int | None = None
+    clean_price: Decimal | None = None
+    accrued_interest: Decimal | None = None
+    dirty_price: Decimal | None = None
+    yield_to_maturity_pct: Decimal | None = None
+    next_coupon_date: str | None = None
+    face_value_increment: Decimal | None = None
+    quote_status: str | None = None
     minimum_order_amount: Decimal
     liquidity: str
     risk_level: str
@@ -131,6 +148,7 @@ class InvestFixedIncomeProductResponse(BaseModel):
     proxy_ticker: str | None = None
     proxy_label: str | None = None
     retail_notes: list[str] = Field(default_factory=list)
+    cashflows: list[InvestFixedIncomeCashflowResponse] = Field(default_factory=list)
     risk_checks: list[InvestRiskCheckResponse] = Field(default_factory=list)
 
 

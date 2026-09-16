@@ -20,6 +20,10 @@ from app.services.brokerage.protocol import (
     CashRequest,
     SubmitOrderRequest,
 )
+from app.services.invest.fixed_income import (
+    fixed_income_price_per_face,
+    get_fixed_income_product,
+)
 from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
 
 CONCENTRATION_WARN_PCT = Decimal("0.25")
@@ -57,7 +61,12 @@ class PaperBrokerProvider:
         )
         positions: list[BrokerPosition] = []
         for row in rows:
-            mark = await get_cached_quote_price(self.session, row.instrument.ticker)
+            fixed_income_product = get_fixed_income_product(row.instrument.ticker)
+            mark = (
+                fixed_income_price_per_face(fixed_income_product)
+                if fixed_income_product is not None
+                else await get_cached_quote_price(self.session, row.instrument.ticker)
+            )
             price = mark if mark is not None else row.average_cost
             market_value = (row.quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
             unrealized = (market_value - row.cost_basis).quantize(
@@ -92,9 +101,15 @@ class PaperBrokerProvider:
             raise BrokerValidationError("Paper V1 only accepts market orders.")
 
         instrument = await self._load_instrument(request.symbol)
-        mark = await get_or_fetch_quote_price(
-            self.session, instrument.ticker, instrument_id=instrument.id
-        )
+        fixed_income_product = get_fixed_income_product(instrument.ticker)
+        if fixed_income_product is not None:
+            mark = fixed_income_price_per_face(fixed_income_product)
+            face_increment = fixed_income_product.face_value_increment
+        else:
+            mark = await get_or_fetch_quote_price(
+                self.session, instrument.ticker, instrument_id=instrument.id
+            )
+            face_increment = None
         if mark is None or mark <= 0:
             raise BrokerValidationError(
                 f"No live mark is available for {instrument.ticker}."
@@ -105,7 +120,17 @@ class PaperBrokerProvider:
         warnings: list[str] = []
 
         if side == "BUY":
-            quantity, notional = _buy_size(request, mark)
+            if fixed_income_product is not None:
+                quantity, notional = _fixed_income_buy_size(
+                    request,
+                    mark,
+                    face_increment,
+                )
+                warnings.append(
+                    "Fixed-income paper fill uses modeled dirty price; quantity is face value."
+                )
+            else:
+                quantity, notional = _buy_size(request, mark)
             if notional > account.cash_balance:
                 raise BrokerValidationError("Not enough buying power for this order.")
             equity = await self._equity(account)
@@ -116,7 +141,17 @@ class PaperBrokerProvider:
                 )
             await self._apply_buy(account, instrument, quantity, mark, now, broker_order_id)
         else:
-            quantity, notional = await self._sell_size(account, instrument, request, mark)
+            quantity, notional = await self._sell_size(
+                account,
+                instrument,
+                request,
+                mark,
+                quantity_increment=face_increment,
+            )
+            if fixed_income_product is not None:
+                warnings.append(
+                    "Fixed-income paper fill uses modeled dirty price; quantity is face value."
+                )
             await self._apply_sell(account, instrument, quantity, mark, now, broker_order_id)
 
         order = RetailOrder(
@@ -323,7 +358,7 @@ class PaperBrokerProvider:
                 occurred_at=now,
                 source="paper",
                 broker_reference=broker_order_id,
-                description=f"Bought {quantity} {instrument.ticker}.",
+                description=_transaction_description("Bought", quantity, instrument),
             )
         )
 
@@ -364,7 +399,7 @@ class PaperBrokerProvider:
                 occurred_at=now,
                 source="paper",
                 broker_reference=broker_order_id,
-                description=f"Sold {quantity} {instrument.ticker}.",
+                description=_transaction_description("Sold", quantity, instrument),
             )
         )
 
@@ -374,6 +409,8 @@ class PaperBrokerProvider:
         instrument: Instrument,
         request: SubmitOrderRequest,
         price: Decimal,
+        *,
+        quantity_increment: Decimal | None = None,
     ) -> tuple[Decimal, Decimal]:
         position = await self.session.scalar(
             select(RetailPosition)
@@ -382,9 +419,9 @@ class PaperBrokerProvider:
         )
         held = position.quantity if position is not None else Decimal("0")
         if request.quantity is not None:
-            quantity = request.quantity.quantize(QTY, rounding=ROUND_DOWN)
+            quantity = _order_quantity(request.quantity, quantity_increment)
         elif request.notional is not None:
-            quantity = (request.notional / price).quantize(QTY, rounding=ROUND_DOWN)
+            quantity = _order_quantity(request.notional / price, quantity_increment)
         else:
             raise BrokerValidationError("Sell orders need a quantity or amount.")
         if quantity <= 0:
@@ -409,6 +446,38 @@ def _buy_size(request: SubmitOrderRequest, price: Decimal) -> tuple[Decimal, Dec
             raise BrokerValidationError("Quantity must be greater than zero.")
         return quantity, (quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
     raise BrokerValidationError("Buy orders need an amount or quantity.")
+
+
+def _fixed_income_buy_size(
+    request: SubmitOrderRequest,
+    price_per_face: Decimal,
+    face_increment: Decimal,
+) -> tuple[Decimal, Decimal]:
+    if request.notional is not None:
+        cash_budget = _positive_money(request.notional)
+        quantity = _order_quantity(cash_budget / price_per_face, face_increment)
+        if quantity <= 0:
+            raise BrokerValidationError(
+                "Amount is too small to buy the minimum fixed-income face value."
+            )
+        actual = (quantity * price_per_face).quantize(MONEY, rounding=ROUND_HALF_UP)
+        return quantity, actual
+    if request.quantity is not None:
+        quantity = _order_quantity(request.quantity, face_increment)
+        if quantity <= 0:
+            raise BrokerValidationError("Face value must be greater than zero.")
+        return quantity, (quantity * price_per_face).quantize(
+            MONEY, rounding=ROUND_HALF_UP
+        )
+    raise BrokerValidationError("Buy orders need an amount or face value.")
+
+
+def _order_quantity(value: Decimal, increment: Decimal | None = None) -> Decimal:
+    quantity = Decimal(str(value))
+    if increment is not None and increment > 0:
+        units = (quantity / increment).to_integral_value(rounding=ROUND_DOWN)
+        return (units * increment).quantize(QTY, rounding=ROUND_DOWN)
+    return quantity.quantize(QTY, rounding=ROUND_DOWN)
 
 
 def _positive_money(amount: Decimal) -> Decimal:
@@ -454,3 +523,9 @@ def _order_snapshot(order: RetailOrder, symbol: str) -> BrokerOrder:
         reject_reason=order.reject_reason,
         warnings=list(order.warnings or []),
     )
+
+
+def _transaction_description(action: str, quantity: Decimal, instrument: Instrument) -> str:
+    if get_fixed_income_product(instrument.ticker) is not None:
+        return f"{action} {quantity} face value of {instrument.ticker}."
+    return f"{action} {quantity} {instrument.ticker}."

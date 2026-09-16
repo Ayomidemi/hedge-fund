@@ -83,9 +83,7 @@ function DiscoverCard({
         <div>
           <p className="font-semibold">{item.title}</p>
           {item.subtitle ? (
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              {item.subtitle}
-            </p>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{item.subtitle}</p>
           ) : null}
         </div>
         {item.badge ? (
@@ -133,12 +131,6 @@ function toneClass(tone: string) {
   }
   if (tone === "income") {
     return "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200";
-  }
-  if (tone === "watchlist") {
-    return "bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-200";
-  }
-  if (tone === "news") {
-    return "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-200";
   }
   return "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300";
 }

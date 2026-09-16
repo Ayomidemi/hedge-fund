@@ -2700,6 +2700,13 @@ export type InvestRiskCheck = {
   passed: boolean;
 };
 
+export type InvestFixedIncomeCashflow = {
+  payment_date: string;
+  cashflow_type: string;
+  amount_per_100: string;
+  description: string;
+};
+
 export type InvestFixedIncomeProduct = {
   ticker: string;
   name: string;
@@ -2710,6 +2717,16 @@ export type InvestFixedIncomeProduct = {
   tenor: string;
   maturity_date: string | null;
   indicative_yield_pct: string | null;
+  coupon_rate_pct: string | null;
+  settlement_date: string | null;
+  days_to_maturity: number | null;
+  clean_price: string | null;
+  accrued_interest: string | null;
+  dirty_price: string | null;
+  yield_to_maturity_pct: string | null;
+  next_coupon_date: string | null;
+  face_value_increment: string | null;
+  quote_status: string | null;
   minimum_order_amount: string;
   liquidity: string;
   risk_level: string;
@@ -2718,6 +2735,7 @@ export type InvestFixedIncomeProduct = {
   proxy_ticker?: string | null;
   proxy_label?: string | null;
   retail_notes: string[];
+  cashflows: InvestFixedIncomeCashflow[];
   risk_checks: InvestRiskCheck[];
 };
 

@@ -33,6 +33,7 @@ from app.services.brokerage.protocol import (
 )
 from app.services.invest.fixed_income import (
     ensure_fixed_income_instrument,
+    fixed_income_price_per_face,
     get_fixed_income_product,
     search_fixed_income_products,
 )
@@ -133,9 +134,9 @@ async def get_home(
         invested=invested,
         holdings=holdings,
         headlines=[
-            "Fixed-income products are watch-only until pricing, accrued interest, settlement, and broker support are complete.",
+            "Fixed-income paper products now model dirty price, accrued interest, settlement, and cashflows.",
             "Use Markets to compare T-bills, Treasury notes, FGN bonds, and cash-yield options first.",
-            "Listed market instruments remain available as a secondary paper-trading loop.",
+            "Listed market instruments remain available as the secondary paper-trading loop.",
         ],
     )
 
@@ -378,7 +379,12 @@ async def list_watchlist(
     )
     items: list[InvestWatchlistItemResponse] = []
     for row in rows:
-        price = await get_cached_quote_price(session, row.instrument.ticker)
+        product = get_fixed_income_product(row.instrument.ticker)
+        price = (
+            fixed_income_price_per_face(product)
+            if product is not None
+            else await get_cached_quote_price(session, row.instrument.ticker)
+        )
         items.append(
             InvestWatchlistItemResponse(
                 id=row.id,
@@ -403,13 +409,18 @@ async def add_watchlist_item(
         .where(RetailWatchlistItem.instrument_id == instrument.id)
     )
     if existing is not None:
+        existing_product = get_fixed_income_product(existing.instrument.ticker)
         return InvestWatchlistItemResponse(
             id=existing.id,
             ticker=existing.instrument.ticker,
             name=existing.instrument.name,
             notes=existing.notes,
             date_added=existing.date_added,
-            price=await get_cached_quote_price(session, existing.instrument.ticker),
+            price=(
+                fixed_income_price_per_face(existing_product)
+                if existing_product is not None
+                else await get_cached_quote_price(session, existing.instrument.ticker)
+            ),
         )
     item = RetailWatchlistItem(
         user_id=user.id,
@@ -420,13 +431,18 @@ async def add_watchlist_item(
     session.add(item)
     await session.commit()
     await session.refresh(item)
+    product = get_fixed_income_product(instrument.ticker)
     return InvestWatchlistItemResponse(
         id=item.id,
         ticker=instrument.ticker,
         name=instrument.name,
         notes=item.notes,
         date_added=item.date_added,
-        price=await get_cached_quote_price(session, instrument.ticker),
+        price=(
+            fixed_income_price_per_face(product)
+            if product is not None
+            else await get_cached_quote_price(session, instrument.ticker)
+        ),
     )
 
 
@@ -465,7 +481,7 @@ async def search_instruments(
                 currency=product.currency,
                 sector="Fixed Income",
                 industry=product.instrument_type,
-                price=None,
+                price=fixed_income_price_per_face(product),
             )
         )
         seen.add(product.ticker)
@@ -505,7 +521,7 @@ async def get_instrument(
             currency=instrument.currency,
             sector=instrument.sector,
             industry=instrument.industry,
-            price=None,
+            price=fixed_income_price_per_face(product),
         )
     price = await get_or_fetch_quote_price(
         session, instrument.ticker, instrument_id=instrument.id
@@ -544,14 +560,19 @@ async def _holdings(session: AsyncSession, positions) -> list[InvestHolding]:
         instrument = await session.scalar(
             select(Instrument).where(Instrument.ticker == item.symbol)
         )
+        product = None if instrument is None else get_fixed_income_product(instrument.ticker)
         holdings.append(
             InvestHolding(
                 ticker=item.symbol,
                 name=instrument.name if instrument is not None else item.symbol,
                 quantity=item.quantity,
                 average_cost=item.average_cost,
-                current_price=None if instrument is None else await get_cached_quote_price(
-                    session, item.symbol
+                current_price=(
+                    None
+                    if instrument is None
+                    else fixed_income_price_per_face(product)
+                    if product is not None
+                    else await get_cached_quote_price(session, item.symbol)
                 ),
                 market_value=item.market_value,
                 unrealized_pnl=item.unrealized_pnl,

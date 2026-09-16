@@ -53,15 +53,15 @@ export function InvestMarketsBoard({ markets }: { markets: InvestMarkets }) {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-wide text-zinc-500">Fixed income</p>
-            <h2 className="mt-1 text-lg font-semibold">Cash bills and bonds</h2>
+            <h2 className="mt-1 text-lg font-semibold">Yield shelf</h2>
           </div>
-          <p className="text-xs font-medium uppercase text-amber-700 dark:text-amber-300">
-            Watch-only
+          <p className="text-xs font-medium uppercase text-emerald-700 dark:text-emerald-300">
+            Modeled paper orders
           </p>
         </div>
         <p className="mt-2 text-sm text-zinc-500">
-          These products do not fill yet. Where a listed fund tracks the same risk,
-          paper that fund instead.
+          Bills and bonds show modeled yield, clean price, accrued interest, dirty
+          price, settlement, and projected payout before you place a paper order.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           {markets.fixed_income.map((product) => (
@@ -122,19 +122,56 @@ function FixedIncomeCard({ product }: { product: InvestFixedIncomeProduct }) {
             {product.market}
           </span>
         </div>
-        <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
-          {product.tenor} · minimum {product.currency} {product.minimum_order_amount}
-        </p>
+        <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-zinc-500">YTM</dt>
+            <dd className="mt-1 font-semibold tabular-nums">
+              {product.yield_to_maturity_pct
+                ? `${Number(product.yield_to_maturity_pct).toFixed(2)}%`
+                : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-zinc-500">
+              Dirty /100
+            </dt>
+            <dd className="mt-1 font-semibold tabular-nums">
+              {product.dirty_price ? money(product.dirty_price, product.currency) : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-zinc-500">
+              Maturity
+            </dt>
+            <dd className="mt-1 font-semibold tabular-nums">
+              {product.maturity_date ?? "Issue dependent"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-zinc-500">
+              Minimum
+            </dt>
+            <dd className="mt-1 font-semibold tabular-nums">
+              {money(product.minimum_order_amount, product.currency)}
+            </dd>
+          </div>
+        </dl>
+      </Link>
+      <Link
+        href={`/invest/fixed-income/${product.ticker}`}
+        className="mt-4 inline-block text-sm font-medium underline"
+      >
+        Open fixed-income order
       </Link>
       {product.proxy_ticker ? (
         <Link
           href={`/invest/instruments/${product.proxy_ticker}`}
-          className="mt-3 inline-block text-sm font-medium underline"
+          className="ml-4 mt-4 inline-block text-sm font-medium text-zinc-500 underline"
         >
           {product.proxy_label ?? `Paper with ${product.proxy_ticker}`}
         </Link>
       ) : (
-        <p className="mt-3 text-xs text-zinc-500">No listed paper proxy yet.</p>
+        <p className="mt-3 text-xs text-zinc-500">No listed ETF proxy on this board.</p>
       )}
     </div>
   );

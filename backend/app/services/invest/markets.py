@@ -68,25 +68,25 @@ MARKET_BOARD: tuple[MarketBoardRow, ...] = (
     MarketBoardRow(
         "BIL", "T-bills", "SPDR Bloomberg 1-3 Month T-Bill ETF", "US", "rates",
         "Rates proxies",
-        "Listed funds that move with US rates. Use these to paper-trade duration while cash T-bills stay watch-only.",
+        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
         "etf", "ARCX", "USD", "Bonds",
     ),
     MarketBoardRow(
         "SHY", "Short Treasuries", "iShares 1-3 Year Treasury Bond ETF", "US", "rates",
         "Rates proxies",
-        "Listed funds that move with US rates. Use these to paper-trade duration while cash T-bills stay watch-only.",
+        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
         "etf", "ARCX", "USD", "Bonds",
     ),
     MarketBoardRow(
         "IEF", "Intermediate Treasuries", "iShares 7-10 Year Treasury Bond ETF", "US", "rates",
         "Rates proxies",
-        "Listed funds that move with US rates. Use these to paper-trade duration while cash T-bills stay watch-only.",
+        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
         "etf", "ARCX", "USD", "Bonds",
     ),
     MarketBoardRow(
         "TLT", "Long Treasuries", "iShares 20+ Year Treasury Bond ETF", "US", "rates",
         "Rates proxies",
-        "Listed funds that move with US rates. Use these to paper-trade duration while cash T-bills stay watch-only.",
+        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
         "etf", "NASDAQ", "USD", "Bonds",
     ),
     MarketBoardRow(
@@ -226,12 +226,12 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
     if open_labels:
         summary = (
             f"{', '.join(open_labels)}. {live_count} live marks on the board. "
-            "Listed funds can be paper-traded; cash T-bills and FGN bonds stay watch-only."
+            "Fixed-income products use modeled yield and settlement; listed funds show live or last-close market context."
         )
     else:
         summary = (
             "US and NGX cash sessions are closed. Showing last marks where we have them. "
-            "Listed funds remain paper-tradable; cash T-bills and FGN bonds stay watch-only."
+            "Fixed-income products use modeled yield and settlement; listed funds show last-close market context."
         )
 
     return InvestMarketsResponse(
