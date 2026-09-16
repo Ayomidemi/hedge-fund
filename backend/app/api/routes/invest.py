@@ -11,6 +11,7 @@ from app.api.schemas.invest import (
     InvestHolding,
     InvestHomeResponse,
     InvestInstrumentResponse,
+    InvestMarketsResponse,
     InvestOrderCreate,
     InvestOrderResponse,
     InvestTransactionResponse,
@@ -27,6 +28,7 @@ from app.services.invest.fixed_income import (
     search_fixed_income_products,
 )
 from app.services.invest.discover import build_invest_discover
+from app.services.invest.markets import build_invest_markets
 
 router = APIRouter(prefix="/invest")
 
@@ -226,6 +228,16 @@ async def read_instrument(
     session: AsyncSession = Depends(get_session),
 ) -> InvestInstrumentResponse:
     response = await invest.get_instrument(session, ticker)
+    await session.commit()
+    return response
+
+
+@router.get("/markets", response_model=InvestMarketsResponse)
+async def read_markets(
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> InvestMarketsResponse:
+    response = await build_invest_markets(session)
     await session.commit()
     return response
 

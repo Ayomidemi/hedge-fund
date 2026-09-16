@@ -2715,8 +2715,40 @@ export type InvestFixedIncomeProduct = {
   risk_level: string;
   expected_payout: string;
   trade_status: string;
+  proxy_ticker?: string | null;
+  proxy_label?: string | null;
   retail_notes: string[];
   risk_checks: InvestRiskCheck[];
+};
+
+export type InvestMarketQuote = {
+  ticker: string;
+  label: string;
+  name: string;
+  market: string;
+  group: string;
+  trade_status: string;
+  currency: string;
+  price: string | null;
+  change_pct: string | null;
+  as_of: string | null;
+  quote_status: string;
+  href: string;
+};
+
+export type InvestMarketBoard = {
+  id: string;
+  title: string;
+  description: string;
+  items: InvestMarketQuote[];
+};
+
+export type InvestMarkets = {
+  generated_at: string;
+  summary: string;
+  sessions: { market: string; label: string; is_open: boolean }[];
+  boards: InvestMarketBoard[];
+  fixed_income: InvestFixedIncomeProduct[];
 };
 
 export type InvestDiscoverItem = {
@@ -2811,6 +2843,10 @@ export function getInvestInstrument(ticker: string, options?: ApiRequestOptions)
     `/api/invest/instruments/${encodeURIComponent(ticker)}`,
     options,
   );
+}
+
+export function getInvestMarkets(options?: ApiRequestOptions) {
+  return fetchApi<InvestMarkets>("/api/invest/markets", options);
 }
 
 export function getInvestFixedIncomeProducts(

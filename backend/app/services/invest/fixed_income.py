@@ -30,6 +30,8 @@ class FixedIncomeProduct:
     trade_status: str
     asset_class: str
     exchange: str | None
+    proxy_ticker: str | None
+    proxy_label: str | None
     retail_notes: tuple[str, ...]
 
 
@@ -51,9 +53,11 @@ FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
         trade_status="watch_only",
         asset_class="cash_equivalent",
         exchange="TREASURY",
+        proxy_ticker="BIL",
+        proxy_label="Paper the T-bill move with BIL",
         retail_notes=(
-            "Paper trading can model the position, but live T-bill execution needs a fixed-income broker adapter.",
-            "Yield changes before maturity can affect resale value.",
+            "Cash T-bill execution stays watch-only until a fixed-income broker exists.",
+            "BIL is the listed 1-3 month bill fund you can paper-trade today.",
         ),
     ),
     FixedIncomeProduct(
@@ -73,9 +77,11 @@ FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
         trade_status="watch_only",
         asset_class="bond",
         exchange="TREASURY",
+        proxy_ticker="SHY",
+        proxy_label="Paper short-duration Treasuries with SHY",
         retail_notes=(
             "Principal is backed by the US Treasury when held to maturity.",
-            "Market value can fall if rates rise.",
+            "SHY is the listed 1-3 year Treasury fund you can paper-trade while this note stays watch-only.",
         ),
     ),
     FixedIncomeProduct(
@@ -95,9 +101,11 @@ FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
         trade_status="watch_only",
         asset_class="cash_equivalent",
         exchange="FMDQ",
+        proxy_ticker=None,
+        proxy_label=None,
         retail_notes=(
             "Execution requires a Nigeria fixed-income broker or bank partner.",
-            "NGN inflation and currency risk matter for USD-based investors.",
+            "There is no honest listed ETF proxy for Nigerian T-bills on this board yet.",
         ),
     ),
     FixedIncomeProduct(
@@ -117,9 +125,11 @@ FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
         trade_status="watch_only",
         asset_class="bond",
         exchange="FMDQ",
+        proxy_ticker=None,
+        proxy_label=None,
         retail_notes=(
             "Coupon, clean price, accrued interest, and settlement rules must be modeled before live orders.",
-            "Secondary-market liquidity can vary by issue.",
+            "There is no honest listed ETF proxy for FGN bonds on this board yet.",
         ),
     ),
 )
@@ -189,5 +199,7 @@ def fixed_income_response(product: FixedIncomeProduct) -> InvestFixedIncomeProdu
         risk_level=product.risk_level,
         expected_payout=product.expected_payout,
         trade_status=product.trade_status,
+        proxy_ticker=product.proxy_ticker,
+        proxy_label=product.proxy_label,
         retail_notes=list(product.retail_notes),
     )

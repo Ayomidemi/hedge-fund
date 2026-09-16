@@ -128,8 +128,46 @@ class InvestFixedIncomeProductResponse(BaseModel):
     risk_level: str
     expected_payout: str
     trade_status: str
+    proxy_ticker: str | None = None
+    proxy_label: str | None = None
     retail_notes: list[str] = Field(default_factory=list)
     risk_checks: list[InvestRiskCheckResponse] = Field(default_factory=list)
+
+
+class InvestMarketSessionResponse(BaseModel):
+    market: str
+    label: str
+    is_open: bool
+
+
+class InvestMarketQuoteResponse(BaseModel):
+    ticker: str
+    label: str
+    name: str
+    market: str
+    group: str
+    trade_status: str
+    currency: str
+    price: Decimal | None = None
+    change_pct: Decimal | None = None
+    as_of: datetime | None = None
+    quote_status: str
+    href: str
+
+
+class InvestMarketBoardResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    items: list[InvestMarketQuoteResponse] = Field(default_factory=list)
+
+
+class InvestMarketsResponse(BaseModel):
+    generated_at: datetime
+    summary: str
+    sessions: list[InvestMarketSessionResponse] = Field(default_factory=list)
+    boards: list[InvestMarketBoardResponse] = Field(default_factory=list)
+    fixed_income: list[InvestFixedIncomeProductResponse] = Field(default_factory=list)
 
 
 class InvestDiscoverItemResponse(BaseModel):

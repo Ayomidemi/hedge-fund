@@ -16,6 +16,7 @@ from app.services.invest.fixed_income import (
     get_fixed_income_product,
     search_fixed_income_products,
 )
+from app.services.invest.markets import board_tickers
 from app.services.invest.risk import evaluate_order_risk
 
 
@@ -59,6 +60,7 @@ class InvestRouteTests(TestCase):
         self.assertIn("/api/invest/orders/{order_id}/cancel", paths)
         self.assertIn("/api/invest/fixed-income", paths)
         self.assertIn("/api/invest/fixed-income/{ticker}", paths)
+        self.assertIn("/api/invest/markets", paths)
 
     def test_operating_core_stays_on_capital_auth(self) -> None:
         spec = app.openapi()["paths"]["/api/operating-core/dashboard"]["get"]
@@ -94,6 +96,15 @@ class FixedIncomeScopeTests(TestCase):
         self.assertEqual(product.currency, "NGN")
         self.assertGreaterEqual(product.minimum_order_amount, Decimal("100000.00"))
         self.assertEqual(product.trade_status, "watch_only")
+        self.assertIsNone(product.proxy_ticker)
+
+    def test_us_cash_bills_point_to_listed_paper_proxy(self) -> None:
+        bill = get_fixed_income_product("US-TBILL-13W")
+        note = get_fixed_income_product("US-TREASURY-2Y")
+        assert bill is not None
+        assert note is not None
+        self.assertEqual(bill.proxy_ticker, "BIL")
+        self.assertEqual(note.proxy_ticker, "SHY")
 
     def test_retail_risk_blocks_watch_only_fixed_income_execution(self) -> None:
         account = RetailAccount(
@@ -125,3 +136,16 @@ class FixedIncomeScopeTests(TestCase):
         )
         blocker_codes = {check.code for check in assessment.blockers}
         self.assertIn("fixed_income_execution", blocker_codes)
+
+
+class InvestMarketsBoardTests(TestCase):
+    def test_board_covers_us_rates_and_nigeria_pulses(self) -> None:
+        tickers = board_tickers()
+        self.assertIn("SPY", tickers)
+        self.assertIn("DIA", tickers)
+        self.assertIn("BIL", tickers)
+        self.assertIn("SHY", tickers)
+        self.assertIn("TLT", tickers)
+        self.assertIn("XLK", tickers)
+        self.assertIn("GTCO.NG", tickers)
+        self.assertIn("SEPLAT.NG", tickers)

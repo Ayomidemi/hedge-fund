@@ -66,6 +66,14 @@ export default async function InvestFixedIncomeDetailPage({
           <span className="inline-flex items-center rounded-xl bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-200">
             {product.trade_status.replaceAll("_", " ")}
           </span>
+          {product.proxy_ticker ? (
+            <Link
+              href={`/invest/instruments/${product.proxy_ticker}`}
+              className="inline-flex items-center justify-center rounded-xl bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
+            >
+              {product.proxy_label ?? `Paper with ${product.proxy_ticker}`}
+            </Link>
+          ) : null}
           <Link
             href="/invest/markets"
             className="inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
