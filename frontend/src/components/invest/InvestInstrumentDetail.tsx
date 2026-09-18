@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -13,27 +13,49 @@ import {
   addInvestWatchlistItem,
   createInvestOrder,
   type InvestInstrument,
+  type InvestInstrumentResearch,
+  type InvestResearchSection,
 } from "@/lib/api";
 import { money } from "@/components/invest/format";
 
-export function InvestInstrumentDetail({ instrument }: { instrument: InvestInstrument }) {
+type DetailTab = "overview" | "research" | "order";
+
+export function InvestInstrumentDetail({
+  instrument,
+  research,
+}: {
+  instrument: InvestInstrument;
+  research: InvestInstrumentResearch | null;
+}) {
   const router = useRouter();
+  const [tab, setTab] = useState<DetailTab>("overview");
   const [amount, setAmount] = useState("500");
+  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState<"buy" | "watch" | null>(null);
   const price = instrument.price ? Number(instrument.price) : null;
-  const estimatedUnits =
-    price && Number(amount) > 0 ? (Number(amount) / price).toFixed(4) : "—";
+  const estimatedUnits = useMemo(() => {
+    const budget = Number(amount);
+    if (!price || !Number.isFinite(budget) || budget <= 0) {
+      return "--";
+    }
+    return (budget / price).toFixed(4);
+  }, [amount, price]);
 
-  async function handleBuy(event: FormEvent) {
+  async function handleOrder(event: FormEvent) {
     event.preventDefault();
+    if (!reviewing) {
+      setReviewing(true);
+      return;
+    }
     setPending("buy");
     try {
       const order = await createInvestOrder({
         ticker: instrument.ticker,
-        side: "BUY",
+        side,
         amount,
       });
-      toast.success(`Order filled for ${instrument.ticker} · ${order.status}`);
+      toast.success(`${side} order filled for ${instrument.ticker} - ${order.status}`);
       router.push("/invest/portfolio");
       router.refresh();
     } catch (error) {
@@ -55,59 +77,282 @@ export function InvestInstrumentDetail({ instrument }: { instrument: InvestInstr
     }
   }
 
-  return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-5">
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-sm text-zinc-500">{instrument.name}</p>
-        <p className="mt-1 text-3xl font-semibold">
-          {instrument.price ? money(instrument.price) : "Price unavailable"}
-        </p>
-        <p className="mt-2 text-sm text-zinc-500">
-          {instrument.sector ?? instrument.asset_class}
-          {instrument.exchange ? ` · ${instrument.exchange}` : ""}
-        </p>
-      </section>
+  const sections = research?.sections ?? [];
+  const overviewSections = sections.filter((section) =>
+    ["instrument_profile", "price_context"].includes(section.id),
+  );
+  const researchSections = sections.filter(
+    (section) => !["instrument_profile", "price_context"].includes(section.id),
+  );
 
-      <form
-        onSubmit={(event) => void handleBuy(event)}
-        className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950"
-      >
-        <h2 className="text-lg font-semibold">Listed-instrument paper order</h2>
-        <p className="mt-2 text-sm text-zinc-500">
-          This secondary flow is for exchange-listed instruments. Fixed-income
-          products use the dedicated bills and bonds detail page.
-        </p>
-        <label className="mt-4 block text-sm">
-          <span className="text-xs uppercase tracking-wide text-zinc-500">Amount</span>
-          <input
-            value={amount}
-            onChange={(event) => setAmount(event.target.value)}
-            className={inputClassName}
-            inputMode="decimal"
-          />
-        </label>
-        <p className="mt-2 text-sm text-zinc-500">Estimated units: {estimatedUnits}</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="submit"
-            disabled={pending !== null || !price}
-            className={buttonPrimaryClassName}
-          >
-            {pending === "buy" ? "Submitting..." : "Submit paper order"}
-          </button>
+  return (
+    <div className="mx-auto max-w-5xl space-y-5">
+      <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-sm text-zinc-500">{instrument.name}</p>
+            <h2 className="mt-1 text-3xl font-semibold">{instrument.ticker}</h2>
+            <p className="mt-2 text-sm text-zinc-500">
+              {instrument.sector ?? instrument.asset_class.replaceAll("_", " ")}
+              {instrument.exchange ? ` - ${instrument.exchange}` : ""}
+              {` - ${instrument.currency}`}
+            </p>
+          </div>
+          <div className="text-left sm:text-right">
+            <p className="text-xs uppercase tracking-wide text-zinc-500">Last price</p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums">
+              {instrument.price
+                ? money(instrument.price, instrument.currency)
+                : "Unavailable"}
+            </p>
+          </div>
+        </div>
+
+        {research ? (
+          <p className="mt-5 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
+            {research.overview}
+          </p>
+        ) : (
+          <p className="mt-5 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
+            Retail research context could not load, but the paper order ticket can
+            still use the instrument record if a price is available.
+          </p>
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={pending !== null}
             onClick={() => void handleWatch()}
+            disabled={pending !== null}
             className={buttonSecondaryClassName}
           >
-            {pending === "watch" ? "Saving…" : "Add to watchlist"}
+            {pending === "watch" ? "Saving..." : "Add to watchlist"}
           </button>
+          {research?.news_href ? (
+            <Link href={research.news_href} className={buttonSecondaryClassName}>
+              News
+            </Link>
+          ) : null}
           <Link href="/invest/search" className={buttonSecondaryClassName}>
-            Back to search
+            Search
           </Link>
         </div>
-      </form>
+      </section>
+
+      <div className="flex gap-2 overflow-x-auto rounded-2xl border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-950">
+        {([
+          ["overview", "Overview"],
+          ["research", "Retail research"],
+          ["order", "Paper order"],
+        ] as const).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setTab(value)}
+            className={`shrink-0 rounded-xl px-4 py-2 text-sm font-medium ${
+              tab === value
+                ? "bg-emerald-800 text-white"
+                : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "overview" ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {overviewSections.length > 0 ? (
+            overviewSections.map((section) => (
+              <ResearchSectionCard key={section.id} section={section} />
+            ))
+          ) : (
+            <FallbackOverview instrument={instrument} />
+          )}
+        </div>
+      ) : null}
+
+      {tab === "research" ? (
+        <div className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            {researchSections.length > 0 ? (
+              researchSections.map((section) => (
+                <ResearchSectionCard key={section.id} section={section} />
+              ))
+            ) : (
+              <section className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+                Retail research has not been generated for this instrument yet.
+              </section>
+            )}
+          </div>
+          {research?.withheld_capital_signals.length ? (
+            <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="text-lg font-semibold">Capital-only signals withheld</h3>
+              <p className="mt-2 text-sm text-zinc-500">
+                Invest shows retail-safe context only. These fund-workflow fields stay
+                inside Pease Capital.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {research.withheld_capital_signals.map((item) => (
+                  <span
+                    key={item}
+                    className="rounded-md bg-zinc-100 px-2 py-1 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
+                  >
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+
+      {tab === "order" ? (
+        <form
+          onSubmit={(event) => void handleOrder(event)}
+          className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950"
+        >
+          <h3 className="text-lg font-semibold">Listed-instrument paper order</h3>
+          <p className="mt-2 text-sm text-zinc-500">
+            This secondary flow is for exchange-listed instruments and ETF proxies.
+            Fixed-income bills and bonds use the dedicated fixed-income detail page.
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            {(["BUY", "SELL"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setSide(value);
+                  setReviewing(false);
+                }}
+                className={`rounded-xl border px-4 py-2 text-sm font-medium ${
+                  side === value
+                    ? "border-emerald-800 bg-emerald-800 text-white"
+                    : "border-zinc-200 bg-white text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300"
+                }`}
+              >
+                {value === "BUY" ? "Buy" : "Sell"}
+              </button>
+            ))}
+          </div>
+          <label className="mt-4 block text-sm">
+            <span className="text-xs uppercase tracking-wide text-zinc-500">Amount</span>
+            <input
+              value={amount}
+              onChange={(event) => {
+                setAmount(event.target.value);
+                setReviewing(false);
+              }}
+              className={inputClassName}
+              inputMode="decimal"
+            />
+          </label>
+          <p className="mt-2 text-sm text-zinc-500">Estimated units: {estimatedUnits}</p>
+          {reviewing ? (
+            <div className="mt-4 rounded-xl bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
+              <p className="font-medium">Review paper order</p>
+              <p className="mt-1 text-zinc-500">
+                {side} about {estimatedUnits} units of {instrument.ticker} for{" "}
+                {money(amount, instrument.currency)}.
+              </p>
+            </div>
+          ) : null}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="submit"
+              disabled={pending !== null || !price}
+              className={buttonPrimaryClassName}
+            >
+              {pending === "buy"
+                ? "Submitting..."
+                : reviewing
+                  ? "Confirm paper order"
+                  : "Review order"}
+            </button>
+            <button
+              type="button"
+              disabled={pending !== null}
+              onClick={() => void handleWatch()}
+              className={buttonSecondaryClassName}
+            >
+              {pending === "watch" ? "Saving..." : "Add to watchlist"}
+            </button>
+            <Link href="/invest/search" className={buttonSecondaryClassName}>
+              Back to search
+            </Link>
+          </div>
+        </form>
+      ) : null}
     </div>
   );
+}
+
+function ResearchSectionCard({ section }: { section: InvestResearchSection }) {
+  return (
+    <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <h3 className="text-lg font-semibold">{section.title}</h3>
+      <p className="mt-2 text-sm text-zinc-500">{section.summary}</p>
+      {section.metrics.length > 0 ? (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {section.metrics.map((metric) => (
+            <div
+              key={`${section.id}-${metric.label}`}
+              className="rounded-xl bg-zinc-50 p-3 dark:bg-zinc-900"
+            >
+              <p className="text-xs uppercase tracking-wide text-zinc-500">
+                {metric.label}
+              </p>
+              <p className={`mt-1 font-semibold ${toneClass(metric.tone)}`}>
+                {metric.value}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {section.notes.length > 0 ? (
+        <ul className="mt-4 space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+          {section.notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function FallbackOverview({ instrument }: { instrument: InvestInstrument }) {
+  return (
+    <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <h3 className="text-lg font-semibold">Instrument profile</h3>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <ProfileDetail label="Asset class" value={instrument.asset_class} />
+        <ProfileDetail label="Exchange" value={instrument.exchange ?? "Unavailable"} />
+        <ProfileDetail label="Currency" value={instrument.currency} />
+        <ProfileDetail label="Sector" value={instrument.sector ?? "Not classified"} />
+      </div>
+    </section>
+  );
+}
+
+function ProfileDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-zinc-50 p-3 dark:bg-zinc-900">
+      <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="mt-1 font-semibold capitalize">{value.replaceAll("_", " ")}</p>
+    </div>
+  );
+}
+
+function toneClass(tone: string) {
+  if (tone === "positive") {
+    return "text-emerald-700 dark:text-emerald-200";
+  }
+  if (tone === "negative") {
+    return "text-red-700 dark:text-red-200";
+  }
+  if (tone === "income") {
+    return "text-amber-800 dark:text-amber-200";
+  }
+  return "text-zinc-900 dark:text-zinc-100";
 }

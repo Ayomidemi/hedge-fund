@@ -19,7 +19,7 @@ export default async function InvestDiscoverPage() {
   if (!discover) {
     return (
       <div className="mx-auto max-w-4xl rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-        Discover could not load market context yet.
+        Unusual activity could not load yet. Refresh or try again shortly.
       </div>
     );
   }
@@ -30,20 +30,23 @@ export default async function InvestDiscoverPage() {
         <p className="text-xs uppercase tracking-wide text-zinc-500">
           Discover
         </p>
-        <h2 className="mt-1 text-2xl font-semibold">What deserves attention</h2>
+        <h2 className="mt-1 text-2xl font-semibold">What&apos;s moving</h2>
         <p className="mt-3 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
           {discover.summary}
         </p>
         <p className="mt-3 text-xs text-zinc-500">
-          Updated {new Date(discover.generated_at).toLocaleString()}
+          Updated {new Date(discover.generated_at).toLocaleString()}. Headlines
+          stay on News; bills and bonds stay on Markets.
         </p>
       </section>
 
-      <section className="grid gap-3 md:grid-cols-3">
-        {discover.next_actions.map((action) => (
-          <DiscoverCard key={action.title} item={action} compact />
-        ))}
-      </section>
+      {discover.next_actions.length > 0 ? (
+        <section className="grid gap-3 md:grid-cols-2">
+          {discover.next_actions.map((action) => (
+            <DiscoverCard key={action.title} item={action} compact />
+          ))}
+        </section>
+      ) : null}
 
       <div className="space-y-6">
         {discover.sections.map((section) => (

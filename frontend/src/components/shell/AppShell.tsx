@@ -24,6 +24,7 @@ const navigationItems = [
 
 type AppShellProps = {
   userOrgName: string | null;
+  canSwitchProducts?: boolean;
   children: React.ReactNode;
 };
 
@@ -43,7 +44,11 @@ const pageTitles: Record<string, string> = {
   Settings: "Account Settings",
 };
 
-export function AppShell({ children, userOrgName }: AppShellProps) {
+export function AppShell({
+  children,
+  userOrgName,
+  canSwitchProducts = false,
+}: AppShellProps) {
   const pathname = usePathname();
   const activeLabel =
     navigationItems.find((item) =>
@@ -71,7 +76,7 @@ export function AppShell({ children, userOrgName }: AppShellProps) {
             </div>
           </div>
           <div className="mt-4">
-            <ProductSwitcher active="capital" />
+            <ProductSwitcher active="capital" visible={canSwitchProducts} />
           </div>
         </div>
 
@@ -116,7 +121,7 @@ export function AppShell({ children, userOrgName }: AppShellProps) {
 
             <div className="flex items-center gap-4">
               <div className="lg:hidden">
-                <ProductSwitcher active="capital" />
+                <ProductSwitcher active="capital" visible={canSwitchProducts} />
               </div>
               <LiveStatusIndicator />
               <Link

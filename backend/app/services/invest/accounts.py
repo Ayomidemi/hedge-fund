@@ -10,19 +10,37 @@ from sqlalchemy.orm import selectinload
 
 from app.api.schemas.invest import (
     InvestAccountResponse,
+    InvestAllocationBucket,
     InvestCashRequest,
     InvestHolding,
     InvestHomeResponse,
+    InvestInstrumentResearchResponse,
     InvestInstrumentResponse,
     InvestOrderCreate,
     InvestOrderResponse,
+    InvestProfileActivityResponse,
+    InvestProfilePermissionResponse,
+    InvestProfileResponse,
+    InvestResearchMetricResponse,
+    InvestResearchSectionResponse,
     InvestTransactionResponse,
     InvestWatchlistItemResponse,
 )
 from app.api.schemas.operating_core import InstrumentCreate
-from app.core.auth import AuthenticatedUser
+from app.core.auth import (
+    AuthenticatedUser,
+    user_can_access_capital,
+    user_can_switch_products,
+)
 from app.core.config import settings
-from app.models import Instrument, RetailAccount, RetailOrder, RetailWatchlistItem
+from app.models import (
+    Instrument,
+    InstrumentQuote,
+    RetailAccount,
+    RetailOrder,
+    RetailWatchlistItem,
+    SystemLogEntry,
+)
 from app.services.administration.system_log import record_system_log
 from app.services.brokerage.gateway import get_broker_provider
 from app.services.brokerage.paper import PaperBrokerProvider
@@ -34,11 +52,15 @@ from app.services.brokerage.protocol import (
 from app.services.invest.fixed_income import (
     ensure_fixed_income_instrument,
     fixed_income_price_per_face,
+    fixed_income_quote,
     get_fixed_income_product,
     search_fixed_income_products,
 )
 from app.services.invest.risk import evaluate_order_risk
-from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
+from app.services.market_data.quote_cache import (
+    get_cached_quote_price,
+    get_or_fetch_quote_price,
+)
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.market_data import search_ticker_suggestions
 
@@ -114,7 +136,87 @@ async def get_account_response(
     account = await get_or_create_account(session, user)
     broker = get_broker_provider(session, account.broker_provider)
     snapshot = await broker.get_account(account.broker_account_id)
-    return _account_response(account, snapshot.balances.cash, snapshot.balances.buying_power)
+    return _account_response(
+        account,
+        snapshot.balances.cash,
+        snapshot.balances.buying_power,
+    )
+
+
+async def get_profile(
+    session: AsyncSession, user: AuthenticatedUser
+) -> InvestProfileResponse:
+    account = await get_or_create_account(session, user)
+    broker = get_broker_provider(session, account.broker_provider)
+    snapshot = await broker.get_account(account.broker_account_id)
+    activity = list(
+        await session.scalars(
+            select(SystemLogEntry)
+            .where(SystemLogEntry.owner_user_id == user.id)
+            .where(SystemLogEntry.category == "invest")
+            .order_by(SystemLogEntry.created_at.desc())
+            .limit(8)
+        )
+    )
+    return InvestProfileResponse(
+        user_id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        account=_account_response(
+            account,
+            snapshot.balances.cash,
+            snapshot.balances.buying_power,
+        ),
+        permissions=_profile_permissions(user),
+        product_boundary=[
+            "Invest cash stays separate.",
+            "Paper orders stay in Invest.",
+            "Capital signals stay in Capital.",
+            "Broker routing is isolated.",
+        ],
+        notification_settings=[
+            "Order fills",
+            "Cash events",
+            "Account events",
+            "Market alerts planned",
+        ],
+        recent_activity=[
+            InvestProfileActivityResponse(
+                event=row.event,
+                message=row.message,
+                occurred_at=row.created_at,
+                level=row.level,
+            )
+            for row in activity
+        ],
+    )
+
+
+async def list_activity(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    *,
+    limit: int = 100,
+) -> list[InvestProfileActivityResponse]:
+    rows = list(
+        await session.scalars(
+            select(SystemLogEntry)
+            .where(SystemLogEntry.owner_user_id == user.id)
+            .where(SystemLogEntry.category == "invest")
+            .order_by(SystemLogEntry.created_at.desc())
+            .limit(limit)
+        )
+    )
+    return [
+        InvestProfileActivityResponse(
+            event=row.event,
+            message=row.message,
+            occurred_at=row.created_at,
+            level=row.level,
+        )
+        for row in rows
+    ]
 
 
 async def get_home(
@@ -125,18 +227,40 @@ async def get_home(
     balances = await broker.get_balances(account.broker_account_id)
     broker_positions = await broker.get_positions(account.broker_account_id)
     holdings = await _holdings(session, broker_positions)
-    invested = sum((item.market_value for item in holdings), Decimal("0")).quantize(MONEY)
+    invested = sum((item.market_value for item in holdings), Decimal("0")).quantize(
+        MONEY
+    )
     portfolio_value = (balances.cash + invested).quantize(MONEY)
+    if portfolio_value > 0:
+        for holding in holdings:
+            holding.allocation_pct = (
+                (holding.market_value / portfolio_value) * Decimal("100")
+            ).quantize(Decimal("0.01"))
+    total_return = sum(
+        (item.unrealized_pnl for item in holdings), Decimal("0")
+    ).quantize(MONEY)
+    cost_basis = sum(
+        (item.market_value - item.unrealized_pnl for item in holdings), Decimal("0")
+    )
     return InvestHomeResponse(
         account=_account_response(account, balances.cash, balances.buying_power),
         portfolio_value=portfolio_value,
         cash=balances.cash,
         invested=invested,
+        total_return=total_return,
+        total_return_pct=(
+            ((total_return / cost_basis) * Decimal("100")).quantize(
+                Decimal("0.01")
+            )
+            if cost_basis > 0
+            else None
+        ),
+        allocation=_allocation_buckets(holdings, balances.cash, portfolio_value),
         holdings=holdings,
         headlines=[
-            "Fixed-income paper products now model dirty price, accrued interest, settlement, and cashflows.",
-            "Use Markets to compare T-bills, Treasury notes, FGN bonds, and cash-yield options first.",
-            "Listed market instruments remain available as the secondary paper-trading loop.",
+            "Discover shows unusual listed-name tape — not a recommendation.",
+            "Headlines for your book live on News. Bills and bonds stay on Markets.",
+            "Add watchlist names to see when something you follow starts to move.",
         ],
     )
 
@@ -187,7 +311,9 @@ async def submit_order(
     )
     if order is None or instrument is None:
         raise InvestError("Order could not be loaded after fill.")
-    merged_warnings = list(dict.fromkeys([*list(order.warnings or []), *risk_assessment.warnings]))
+    merged_warnings = list(
+        dict.fromkeys([*list(order.warnings or []), *risk_assessment.warnings])
+    )
     order.warnings = merged_warnings
     await record_system_log(
         session,
@@ -380,21 +506,12 @@ async def list_watchlist(
     items: list[InvestWatchlistItemResponse] = []
     for row in rows:
         product = get_fixed_income_product(row.instrument.ticker)
-        price = (
-            fixed_income_price_per_face(product)
+        quote = (
+            None
             if product is not None
-            else await get_cached_quote_price(session, row.instrument.ticker)
+            else await _quote_for_instrument(session, row.instrument)
         )
-        items.append(
-            InvestWatchlistItemResponse(
-                id=row.id,
-                ticker=row.instrument.ticker,
-                name=row.instrument.name,
-                notes=row.notes,
-                date_added=row.date_added,
-                price=price,
-            )
-        )
+        items.append(_watchlist_response(row, product=product, quote=quote))
     return items
 
 
@@ -410,17 +527,15 @@ async def add_watchlist_item(
     )
     if existing is not None:
         existing_product = get_fixed_income_product(existing.instrument.ticker)
-        return InvestWatchlistItemResponse(
-            id=existing.id,
-            ticker=existing.instrument.ticker,
-            name=existing.instrument.name,
-            notes=existing.notes,
-            date_added=existing.date_added,
-            price=(
-                fixed_income_price_per_face(existing_product)
-                if existing_product is not None
-                else await get_cached_quote_price(session, existing.instrument.ticker)
-            ),
+        existing_quote = (
+            None
+            if existing_product is not None
+            else await _quote_for_instrument(session, existing.instrument)
+        )
+        return _watchlist_response(
+            existing,
+            product=existing_product,
+            quote=existing_quote,
         )
     item = RetailWatchlistItem(
         user_id=user.id,
@@ -432,17 +547,28 @@ async def add_watchlist_item(
     await session.commit()
     await session.refresh(item)
     product = get_fixed_income_product(instrument.ticker)
+    quote = (
+        None
+        if product is not None
+        else await _quote_for_instrument(session, instrument)
+    )
     return InvestWatchlistItemResponse(
         id=item.id,
         ticker=instrument.ticker,
         name=instrument.name,
+        asset_class=instrument.asset_class,
+        currency=instrument.currency,
+        href=_instrument_href(instrument.ticker),
         notes=item.notes,
         date_added=item.date_added,
         price=(
             fixed_income_price_per_face(product)
             if product is not None
-            else await get_cached_quote_price(session, instrument.ticker)
+            else quote.price
+            if quote is not None
+            else None
         ),
+        change_pct=None if product is not None or quote is None else quote.change_pct,
     )
 
 
@@ -538,6 +664,237 @@ async def get_instrument(
     )
 
 
+async def get_instrument_research(
+    session: AsyncSession, ticker: str
+) -> InvestInstrumentResearchResponse:
+    instrument = await _require_instrument(session, ticker)
+    product = get_fixed_income_product(instrument.ticker)
+    if product is not None:
+        quote = fixed_income_quote(product)
+        return InvestInstrumentResearchResponse(
+            ticker=instrument.ticker,
+            name=instrument.name,
+            generated_at=datetime.now(timezone.utc),
+            overview=(
+                f"{product.name} is modeled as a retail fixed-income paper product. "
+                "The view focuses on yield, settlement, accrued interest, cashflows, "
+                "minimum order size, and liquidity rather than Capital portfolio alpha."
+            ),
+            sections=[
+                InvestResearchSectionResponse(
+                    id="income_profile",
+                    title="Income profile",
+                    summary=(
+                        "Core fixed-income terms used by the paper order and cashflow model."
+                    ),
+                    metrics=[
+                        InvestResearchMetricResponse(
+                            label="Issuer",
+                            value=product.issuer,
+                        ),
+                        InvestResearchMetricResponse(
+                            label="Instrument",
+                            value=product.instrument_type.replace("_", " "),
+                        ),
+                        InvestResearchMetricResponse(label="Tenor", value=product.tenor),
+                        InvestResearchMetricResponse(
+                            label="Risk level",
+                            value=product.risk_level,
+                            tone=_risk_tone(product.risk_level),
+                        ),
+                    ],
+                    notes=list(product.retail_notes),
+                ),
+                InvestResearchSectionResponse(
+                    id="pricing",
+                    title="Pricing and settlement",
+                    summary=(
+                        "Indicative modeled pricing for retail paper execution."
+                    ),
+                    metrics=[
+                        InvestResearchMetricResponse(
+                            label="Yield to maturity",
+                            value=_pct_text(quote.yield_to_maturity_pct),
+                            tone="income",
+                        ),
+                        InvestResearchMetricResponse(
+                            label="Dirty price / 100",
+                            value=_money_text(
+                                quote.dirty_price_per_100,
+                                product.currency,
+                                places="0.0001",
+                            ),
+                        ),
+                        InvestResearchMetricResponse(
+                            label="Accrued interest / 100",
+                            value=_money_text(
+                                quote.accrued_interest_per_100,
+                                product.currency,
+                                places="0.0001",
+                            ),
+                        ),
+                        InvestResearchMetricResponse(
+                            label="Settlement",
+                            value=quote.settlement_date,
+                        ),
+                    ],
+                    notes=[
+                        product.expected_payout,
+                        "The price is a deterministic model for paper trading, not a live auction quote.",
+                    ],
+                ),
+                InvestResearchSectionResponse(
+                    id="access",
+                    title="Retail access",
+                    summary=(
+                        "Tradeability and order sizing constraints for the Invest paper account."
+                    ),
+                    metrics=[
+                        InvestResearchMetricResponse(
+                            label="Trade status",
+                            value=product.trade_status.replace("_", " "),
+                            tone="positive"
+                            if product.trade_status == "paper_tradable"
+                            else "neutral",
+                        ),
+                        InvestResearchMetricResponse(
+                            label="Minimum order",
+                            value=_money_text(
+                                product.minimum_order_amount,
+                                product.currency,
+                            ),
+                        ),
+                        InvestResearchMetricResponse(
+                            label="Face increment",
+                            value=_money_text(
+                                product.face_value_increment,
+                                product.currency,
+                            ),
+                        ),
+                        InvestResearchMetricResponse(
+                            label="Liquidity",
+                            value=product.liquidity,
+                        ),
+                    ],
+                    notes=[
+                        "Face value and cash impact are isolated to the Invest paper brokerage ledger.",
+                        "Proxy ETFs are shown only when there is a clear retail-listed equivalent.",
+                    ],
+                ),
+            ],
+            withheld_capital_signals=_withheld_capital_signals(),
+            news_href=None,
+        )
+
+    price = await get_or_fetch_quote_price(
+        session, instrument.ticker, instrument_id=instrument.id
+    )
+    quote = await _quote_for_instrument(session, instrument)
+    return InvestInstrumentResearchResponse(
+        ticker=instrument.ticker,
+        name=instrument.name,
+        generated_at=datetime.now(timezone.utc),
+        overview=(
+            f"{instrument.ticker} is available in Pease Invest as a listed paper-trading instrument. "
+            "This view stays retail-safe: price context, instrument identity, and order readiness only."
+        ),
+        sections=[
+            InvestResearchSectionResponse(
+                id="instrument_profile",
+                title="Instrument profile",
+                summary="Identity and listing details from the shared instrument registry.",
+                metrics=[
+                    InvestResearchMetricResponse(
+                        label="Asset class",
+                        value=instrument.asset_class.replace("_", " ").title(),
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Exchange",
+                        value=instrument.exchange or "Unlisted registry item",
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Currency",
+                        value=instrument.currency,
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Sector",
+                        value=instrument.sector or "Not classified",
+                    ),
+                ],
+                notes=[
+                    "Unusual listed-name tape lives on Discover. Bills and bonds stay on Markets.",
+                    "Listed instruments remain available as paper orders or ETF proxies.",
+                ],
+            ),
+            InvestResearchSectionResponse(
+                id="price_context",
+                title="Price context",
+                summary="Latest quote state available to the paper order ticket.",
+                metrics=[
+                    InvestResearchMetricResponse(
+                        label="Last price",
+                        value=_money_text(price, instrument.currency),
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Daily move",
+                        value=_pct_text(quote.change_pct if quote is not None else None),
+                        tone=_change_tone(
+                            quote.change_pct if quote is not None else None
+                        ),
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Quote source",
+                        value=quote.source if quote is not None else "Unavailable",
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Quote status",
+                        value=_quote_status(quote),
+                        tone=(
+                            "negative"
+                            if quote is not None and quote.is_stale
+                            else "neutral"
+                        ),
+                    ),
+                ],
+                notes=[
+                    "A missing price blocks notional paper orders until quote data is available.",
+                    "This is market context only; it is not a Pease Capital recommendation.",
+                ],
+            ),
+            InvestResearchSectionResponse(
+                id="retail_readiness",
+                title="Retail readiness",
+                summary="What the Invest app can safely do with this instrument today.",
+                metrics=[
+                    InvestResearchMetricResponse(
+                        label="Paper order",
+                        value="Enabled" if price is not None else "Waiting for price",
+                        tone="positive" if price is not None else "neutral",
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Order model",
+                        value="Notional market fill",
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Research depth",
+                        value="Price and registry data",
+                    ),
+                    InvestResearchMetricResponse(
+                        label="Cash ledger",
+                        value="Invest only",
+                    ),
+                ],
+                notes=[
+                    "Fundamental factors, opportunity status, target weight, and approval workflow belong to Pease Capital.",
+                    "Open the dedicated News page for ticker-specific headlines without mixing watchlist or order state into Discover.",
+                ],
+            ),
+        ],
+        withheld_capital_signals=_withheld_capital_signals(),
+        news_href=f"/invest/news?ticker={instrument.ticker}",
+    )
+
+
 async def _require_instrument(session: AsyncSession, ticker: str) -> Instrument:
     normalized = ticker.strip().upper()
     product = get_fixed_income_product(normalized)
@@ -565,6 +922,8 @@ async def _holdings(session: AsyncSession, positions) -> list[InvestHolding]:
             InvestHolding(
                 ticker=item.symbol,
                 name=instrument.name if instrument is not None else item.symbol,
+                asset_class=instrument.asset_class if instrument is not None else None,
+                currency=instrument.currency if instrument is not None else "USD",
                 quantity=item.quantity,
                 average_cost=item.average_cost,
                 current_price=(
@@ -575,8 +934,10 @@ async def _holdings(session: AsyncSession, positions) -> list[InvestHolding]:
                     else await get_cached_quote_price(session, item.symbol)
                 ),
                 market_value=item.market_value,
+                allocation_pct=None,
                 unrealized_pnl=item.unrealized_pnl,
                 unrealized_pnl_pct=item.unrealized_pnl_pct,
+                href=_instrument_href(item.symbol),
             )
         )
     return holdings
@@ -602,6 +963,8 @@ def _order_response(order: RetailOrder, instrument: Instrument) -> InvestOrderRe
         id=order.id,
         ticker=instrument.ticker,
         name=instrument.name,
+        asset_class=instrument.asset_class,
+        currency=instrument.currency,
         side=order.side,
         order_type=order.order_type,
         quantity=order.quantity,
@@ -610,9 +973,190 @@ def _order_response(order: RetailOrder, instrument: Instrument) -> InvestOrderRe
         submitted_at=order.submitted_at,
         filled_at=order.filled_at,
         average_fill_price=order.average_fill_price,
+        filled_quantity=order.filled_quantity,
+        broker_provider=order.broker_provider,
+        broker_order_id=order.broker_order_id,
         warnings=list(order.warnings or []),
     )
 
 
+def _profile_permissions(user: AuthenticatedUser) -> list[InvestProfilePermissionResponse]:
+    return [
+        InvestProfilePermissionResponse(
+            code="paper_trading",
+            label="Paper trading",
+            enabled=True,
+            description="Simulated Invest orders.",
+        ),
+        InvestProfilePermissionResponse(
+            code="fixed_income",
+            label="Fixed income",
+            enabled=True,
+            description="Bills, notes, bonds, and cash-yield products.",
+        ),
+        InvestProfilePermissionResponse(
+            code="real_cash_movements",
+            label="Real cash movement",
+            enabled=False,
+            description="Live funding is off.",
+        ),
+        InvestProfilePermissionResponse(
+            code="capital_workspace",
+            label="Pease Capital workspace",
+            enabled=user_can_access_capital(user),
+            description="Fund books and PM workflow.",
+        ),
+        InvestProfilePermissionResponse(
+            code="product_switching",
+            label="Product switching",
+            enabled=user_can_switch_products(user),
+            description="Invest and Capital switcher.",
+        ),
+    ]
+
+
+def _withheld_capital_signals() -> list[str]:
+    return [
+        "Capital target weights",
+        "Expected alpha and model rank",
+        "Strategy pod assignment",
+        "PM approval state",
+        "Portfolio hedge recommendation",
+        "Fund-level risk budget",
+    ]
+
+
+def _money_text(
+    value: Decimal | None,
+    currency: str,
+    *,
+    places: str = "0.01",
+) -> str:
+    if value is None:
+        return "Unavailable"
+    return f"{currency} {value.quantize(Decimal(places))}"
+
+
+def _pct_text(value: Decimal | None) -> str:
+    if value is None:
+        return "Unavailable"
+    return f"{value.quantize(Decimal('0.01'))}%"
+
+
+def _change_tone(value: Decimal | None) -> str:
+    if value is None:
+        return "neutral"
+    if value > 0:
+        return "positive"
+    if value < 0:
+        return "negative"
+    return "neutral"
+
+
+def _risk_tone(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "low":
+        return "positive"
+    if normalized == "high":
+        return "negative"
+    return "neutral"
+
+
+def _quote_status(quote: InstrumentQuote | None) -> str:
+    if quote is None:
+        return "Unavailable"
+    if quote.is_stale:
+        return f"Stale as of {quote.as_of.isoformat()}"
+    return f"Fresh as of {quote.as_of.isoformat()}"
+
+
 def _account_number() -> str:
     return f"PI-{uuid4().hex[:8].upper()}"
+
+
+async def _quote_for_instrument(
+    session: AsyncSession, instrument: Instrument
+) -> InstrumentQuote | None:
+    return await session.scalar(
+        select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument.id)
+    )
+
+
+def _watchlist_response(
+    row: RetailWatchlistItem,
+    *,
+    product,
+    quote: InstrumentQuote | None,
+) -> InvestWatchlistItemResponse:
+    instrument = row.instrument
+    return InvestWatchlistItemResponse(
+        id=row.id,
+        ticker=instrument.ticker,
+        name=instrument.name,
+        asset_class=instrument.asset_class,
+        currency=instrument.currency,
+        href=_instrument_href(instrument.ticker),
+        notes=row.notes,
+        date_added=row.date_added,
+        price=(
+            fixed_income_price_per_face(product)
+            if product is not None
+            else quote.price
+            if quote is not None
+            else None
+        ),
+        change_pct=None if product is not None or quote is None else quote.change_pct,
+    )
+
+
+def _instrument_href(ticker: str) -> str:
+    return (
+        f"/invest/fixed-income/{ticker}"
+        if get_fixed_income_product(ticker) is not None
+        else f"/invest/instruments/{ticker}"
+    )
+
+
+def _allocation_buckets(
+    holdings: list[InvestHolding],
+    cash: Decimal,
+    portfolio_value: Decimal,
+) -> list[InvestAllocationBucket]:
+    buckets: dict[str, Decimal] = {"Cash": cash}
+    for holding in holdings:
+        name = _allocation_name(holding.asset_class)
+        buckets[name] = buckets.get(name, Decimal("0")) + holding.market_value
+
+    if portfolio_value <= 0:
+        return [
+            InvestAllocationBucket(
+                name=name,
+                value=value.quantize(MONEY),
+                allocation_pct=Decimal("0.00"),
+            )
+            for name, value in buckets.items()
+            if value > 0
+        ]
+
+    return [
+        InvestAllocationBucket(
+            name=name,
+            value=value.quantize(MONEY),
+            allocation_pct=((value / portfolio_value) * Decimal("100")).quantize(
+                Decimal("0.01")
+            ),
+        )
+        for name, value in buckets.items()
+        if value > 0
+    ]
+
+
+def _allocation_name(asset_class: str | None) -> str:
+    normalized = (asset_class or "Other").strip().lower()
+    if normalized in {"cash_equivalent", "bond"}:
+        return "Fixed income"
+    if normalized == "etf":
+        return "ETFs"
+    if normalized == "equity":
+        return "Stocks"
+    return normalized.replace("_", " ").title()

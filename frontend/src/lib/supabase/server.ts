@@ -54,14 +54,20 @@ export async function getServerUserProfile(): Promise<{
   email: string | null;
   fullName: string | null;
   orgName: string | null;
+  role: string | null;
+  canSwitchProducts: boolean;
 }> {
   const supabase = await createClient();
   const { data } = await supabase.auth.getUser();
+  const { resolvePeaseRole, canSwitchProducts } = await import("@/lib/pease-role");
   const metadata = data.user?.user_metadata ?? {};
+  const role = resolvePeaseRole(data.user);
 
   return {
     email: data.user?.email ?? null,
     fullName: typeof metadata.full_name === "string" ? metadata.full_name : null,
     orgName: typeof metadata.org_name === "string" ? metadata.org_name : null,
+    role,
+    canSwitchProducts: canSwitchProducts(role),
   };
 }

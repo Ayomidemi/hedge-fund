@@ -14,6 +14,7 @@ const navigationItems = [
   { label: "Portfolio", href: "/invest/portfolio" },
   { label: "Orders", href: "/invest/orders" },
   { label: "Cash", href: "/invest/cash" },
+  { label: "Activity", href: "/invest/activity" },
   { label: "Profile", href: "/invest/profile" },
 ];
 
@@ -21,20 +22,25 @@ const pageTitles: Record<string, string> = {
   Home: "Your investing",
   Discover: "What's happening",
   Markets: "Markets",
-  News: "News",
+  News: "Headlines for your book",
   Search: "Search",
   Watchlist: "Watchlist",
   Portfolio: "Portfolio",
   Orders: "Orders",
   Cash: "Cash",
+  Activity: "Activity",
   Profile: "Profile",
 };
 
 type InvestShellProps = {
   children: React.ReactNode;
+  canSwitchProducts?: boolean;
 };
 
-export function InvestShell({ children }: InvestShellProps) {
+export function InvestShell({
+  children,
+  canSwitchProducts = false,
+}: InvestShellProps) {
   const pathname = usePathname();
   const instrumentMatch = pathname.match(/^\/invest\/instruments\/([^/]+)/i);
   const activeLabel =
@@ -58,11 +64,11 @@ export function InvestShell({ children }: InvestShellProps) {
             </div>
             <div>
               <p className="text-sm font-semibold">Pease Invest</p>
-              <p className="text-xs text-zinc-500">You decide the trades</p>
+              <p className="text-xs text-zinc-500">Operating System</p>
             </div>
           </div>
           <div className="mt-4">
-            <ProductSwitcher active="invest" />
+            <ProductSwitcher active="invest" visible={canSwitchProducts} />
           </div>
         </div>
         <nav className="space-y-1 px-3 py-4">
@@ -95,7 +101,7 @@ export function InvestShell({ children }: InvestShellProps) {
               <h1 className="mt-1 text-2xl font-semibold tracking-normal">{headerTitle}</h1>
             </div>
             <div className="lg:hidden">
-              <ProductSwitcher active="invest" />
+              <ProductSwitcher active="invest" visible={canSwitchProducts} />
             </div>
           </div>
           <nav className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:hidden">

@@ -4,9 +4,14 @@ import Link from "next/link";
 
 type ProductSwitcherProps = {
   active: "capital" | "invest";
+  visible?: boolean;
 };
 
-export function ProductSwitcher({ active }: ProductSwitcherProps) {
+export function ProductSwitcher({ active, visible = true }: ProductSwitcherProps) {
+  if (!visible) {
+    return null;
+  }
+
   const base =
     "rounded-md px-2.5 py-1 text-xs font-semibold tracking-wide transition";
   const on = "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950";
@@ -15,7 +20,7 @@ export function ProductSwitcher({ active }: ProductSwitcherProps) {
 
   return (
     <div className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-950">
-      <Link href="/capital" className={`${base} ${active === "capital" ? on : off}`}>
+      <Link href="/" className={`${base} ${active === "capital" ? on : off}`}>
         Capital
       </Link>
       <Link href="/invest" className={`${base} ${active === "invest" ? on : off}`}>

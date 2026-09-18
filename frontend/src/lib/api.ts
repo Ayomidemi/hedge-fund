@@ -2638,12 +2638,22 @@ export type InvestAccount = {
 export type InvestHolding = {
   ticker: string;
   name: string;
+  asset_class: string | null;
+  currency: string;
   quantity: string;
   average_cost: string;
   current_price: string | null;
   market_value: string;
+  allocation_pct: string | null;
   unrealized_pnl: string;
   unrealized_pnl_pct: string | null;
+  href: string | null;
+};
+
+export type InvestAllocationBucket = {
+  name: string;
+  value: string;
+  allocation_pct: string;
 };
 
 export type InvestHome = {
@@ -2651,8 +2661,11 @@ export type InvestHome = {
   portfolio_value: string;
   cash: string;
   invested: string;
+  total_return: string;
+  total_return_pct: string | null;
   today_change: string | null;
   today_change_pct: string | null;
+  allocation: InvestAllocationBucket[];
   holdings: InvestHolding[];
   headlines: string[];
 };
@@ -2661,6 +2674,8 @@ export type InvestOrder = {
   id: string;
   ticker: string;
   name: string;
+  asset_class: string | null;
+  currency: string;
   side: string;
   order_type: string;
   quantity: string | null;
@@ -2669,6 +2684,9 @@ export type InvestOrder = {
   submitted_at: string;
   filled_at: string | null;
   average_fill_price: string | null;
+  filled_quantity: string | null;
+  broker_provider: string | null;
+  broker_order_id: string | null;
   warnings: string[];
 };
 
@@ -2676,6 +2694,9 @@ export type InvestWatchlistItem = {
   id: string;
   ticker: string;
   name: string;
+  asset_class: string | null;
+  currency: string;
+  href: string;
   notes: string | null;
   date_added: string;
   price: string | null;
@@ -2691,6 +2712,30 @@ export type InvestInstrument = {
   sector: string | null;
   industry: string | null;
   price: string | null;
+};
+
+export type InvestResearchMetric = {
+  label: string;
+  value: string;
+  tone: string;
+};
+
+export type InvestResearchSection = {
+  id: string;
+  title: string;
+  summary: string;
+  metrics: InvestResearchMetric[];
+  notes: string[];
+};
+
+export type InvestInstrumentResearch = {
+  ticker: string;
+  name: string;
+  generated_at: string;
+  overview: string;
+  sections: InvestResearchSection[];
+  withheld_capital_signals: string[];
+  news_href: string | null;
 };
 
 export type InvestRiskCheck = {
@@ -2792,6 +2837,50 @@ export type InvestDiscover = {
   next_actions: InvestDiscoverItem[];
 };
 
+export type InvestNewsItem = {
+  id: string;
+  provider: string;
+  provider_id: string;
+  source_name: string | null;
+  title: string;
+  summary: string | null;
+  url: string | null;
+  published_at: string | null;
+  crawled_at: string | null;
+  jurisdiction: string | null;
+  event_type: string | null;
+  sentiment_label: string | null;
+  sentiment_score: string | null;
+  tickers: string[];
+  starred: boolean;
+};
+
+export type InvestNewsPagination = {
+  page: number;
+  page_size: number;
+  total: number;
+  has_next: boolean;
+  has_previous: boolean;
+};
+
+export type InvestNewsOverview = {
+  generated_at: string;
+  summary: string;
+  portfolio_tickers: string[];
+  watchlist_tickers: string[];
+  markets_tickers: string[];
+  for_you: InvestNewsItem[];
+  portfolio_items: InvestNewsItem[];
+  watchlist_items: InvestNewsItem[];
+  markets_items: InvestNewsItem[];
+  headlines: InvestNewsItem[];
+  headlines_page: InvestNewsPagination;
+  ticker: string | null;
+  ticker_items: InvestNewsItem[];
+  ticker_page?: InvestNewsPagination | null;
+  saved_items: InvestNewsItem[];
+};
+
 export type InvestTransaction = {
   id: string;
   entry_type: string;
@@ -2802,12 +2891,49 @@ export type InvestTransaction = {
   description: string | null;
 };
 
+export type InvestProfilePermission = {
+  code: string;
+  label: string;
+  enabled: boolean;
+  description: string;
+};
+
+export type InvestProfileActivity = {
+  event: string;
+  message: string;
+  occurred_at: string;
+  level: string;
+};
+
+export type InvestProfile = {
+  user_id: string;
+  email: string | null;
+  full_name: string | null;
+  role: string | null;
+  account: InvestAccount;
+  permissions: InvestProfilePermission[];
+  product_boundary: string[];
+  notification_settings: string[];
+  recent_activity: InvestProfileActivity[];
+};
+
 export function getInvestHome(options?: ApiRequestOptions) {
   return fetchApi<InvestHome>("/api/invest/home", options);
 }
 
 export function getInvestAccount(options?: ApiRequestOptions) {
   return fetchApi<InvestAccount>("/api/invest/account", options);
+}
+
+export function getInvestProfile(options?: ApiRequestOptions) {
+  return fetchApi<InvestProfile>("/api/invest/profile", options);
+}
+
+export function getInvestActivity(limit = 100, options?: ApiRequestOptions) {
+  return fetchApi<InvestProfileActivity[]>(
+    `/api/invest/activity?limit=${encodeURIComponent(String(limit))}`,
+    options,
+  );
 }
 
 export function getInvestOrders(options?: ApiRequestOptions) {
@@ -2863,6 +2989,13 @@ export function getInvestInstrument(ticker: string, options?: ApiRequestOptions)
   );
 }
 
+export function getInvestInstrumentResearch(ticker: string, options?: ApiRequestOptions) {
+  return fetchApi<InvestInstrumentResearch>(
+    `/api/invest/instruments/${encodeURIComponent(ticker)}/research`,
+    options,
+  );
+}
+
 export function getInvestMarkets(options?: ApiRequestOptions) {
   return fetchApi<InvestMarkets>("/api/invest/markets", options);
 }
@@ -2906,4 +3039,35 @@ export function getInvestTransactions(options?: ApiRequestOptions) {
 
 export function getInvestDiscover(options?: ApiRequestOptions) {
   return fetchApi<InvestDiscover>("/api/invest/discover", options);
+}
+
+export function getInvestNews(
+  params?: {
+    ticker?: string;
+    market?: "US" | "NG";
+    jurisdiction?: "US" | "NG" | "all";
+    page?: number;
+    page_size?: number;
+    ticker_page?: number;
+    ticker_page_size?: number;
+  },
+  options?: ApiRequestOptions,
+) {
+  const search = new URLSearchParams();
+  if (params?.ticker) search.set("ticker", params.ticker);
+  if (params?.market) search.set("market", params.market);
+  if (params?.jurisdiction && params.jurisdiction !== "all") {
+    search.set("jurisdiction", params.jurisdiction);
+  }
+  if (params?.page) search.set("page", String(params.page));
+  if (params?.page_size) search.set("page_size", String(params.page_size));
+  if (params?.ticker_page) search.set("ticker_page", String(params.ticker_page));
+  if (params?.ticker_page_size) {
+    search.set("ticker_page_size", String(params.ticker_page_size));
+  }
+  const query = search.toString();
+  return fetchApi<InvestNewsOverview>(
+    `/api/invest/news${query ? `?${query}` : ""}`,
+    options,
+  );
 }

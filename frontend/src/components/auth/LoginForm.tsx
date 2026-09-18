@@ -4,9 +4,15 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { FormField } from "@/components/ui/FormField";
-import { buttonPrimaryClassName } from "@/components/ui/form-styles";
+import { buttonPrimaryClassName, inputControlClassName } from "@/components/ui/form-styles";
 import { toast } from "@/components/ui/ToastProvider";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import {
+  SIGNUP_PRODUCT_ROLES,
+  homePathForRole,
+  normalizePeaseRole,
+  type PeaseProductRole,
+} from "@/lib/pease-role";
 
 type AuthMode = "sign-in" | "sign-up";
 
@@ -17,6 +23,9 @@ export function LoginForm() {
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [fullName, setFullName] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [productRole, setProductRole] = useState<"CAPITAL_PM" | "RETAIL_USER">(
+    "CAPITAL_PM",
+  );
   const [startingCapital, setStartingCapital] = useState("1000");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -37,22 +46,36 @@ export function LoginForm() {
       const supabase = createClient();
 
       if (mode === "sign-in") {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
           password,
         });
         if (error) {
           throw error;
         }
-        router.replace(nextPath);
+        const role = normalizePeaseRole(
+          data.user?.app_metadata?.pease_role ??
+            data.user?.app_metadata?.role ??
+            data.user?.user_metadata?.pease_role,
+        );
+        const destination =
+          nextPath.startsWith("/") && !nextPath.startsWith("//")
+            ? nextPath
+            : homePathForRole(role);
+        router.replace(destination);
         router.refresh();
         return;
       }
 
-      const capital = Number(startingCapital);
-      if (!Number.isFinite(capital) || capital < 1000) {
-        toast.error("Starting capital must be at least 1,000.");
-        return;
+      const isCapital = productRole === "CAPITAL_PM";
+      let capitalValue: string | undefined;
+      if (isCapital) {
+        const capital = Number(startingCapital);
+        if (!Number.isFinite(capital) || capital < 1000) {
+          toast.error("Starting capital must be at least 1,000.");
+          return;
+        }
+        capitalValue = capital.toFixed(2);
       }
 
       const { error } = await supabase.auth.signUp({
@@ -62,7 +85,8 @@ export function LoginForm() {
           data: {
             full_name: fullName.trim(),
             org_name: orgName.trim(),
-            starting_capital: capital.toFixed(2),
+            pease_role: productRole as PeaseProductRole,
+            ...(capitalValue ? { starting_capital: capitalValue } : {}),
           },
         },
       });
@@ -143,17 +167,45 @@ export function LoginForm() {
               onChange={setOrgName}
             />
 
-            <FormField
-              label="Starting capital"
-              type="number"
-              required
-              min={1000}
-              step={100}
-              inputMode="decimal"
-              helper="Minimum 1,000."
-              value={startingCapital}
-              onChange={setStartingCapital}
-            />
+            <div className="block space-y-1.5">
+              <label className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                Product
+              </label>
+              <select
+                required
+                value={productRole}
+                onChange={(event) =>
+                  setProductRole(event.target.value as "CAPITAL_PM" | "RETAIL_USER")
+                }
+                className={inputControlClassName}
+              >
+                {SIGNUP_PRODUCT_ROLES.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-zinc-500">
+                {
+                  SIGNUP_PRODUCT_ROLES.find((option) => option.value === productRole)
+                    ?.hint
+                }
+              </p>
+            </div>
+
+            {productRole === "CAPITAL_PM" ? (
+              <FormField
+                label="Starting capital"
+                type="number"
+                required
+                min={1000}
+                step={100}
+                inputMode="decimal"
+                helper="Minimum 1,000."
+                value={startingCapital}
+                onChange={setStartingCapital}
+              />
+            ) : null}
           </>
         ) : null}
 

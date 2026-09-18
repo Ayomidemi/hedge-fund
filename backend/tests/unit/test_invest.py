@@ -8,10 +8,16 @@ from app.core.auth import (
 )
 from app.core.config import settings
 from app.main import app
-from app.api.schemas.invest import InvestOrderCreate
+from app.api.schemas.invest import InvestHolding, InvestOrderCreate
 from app.models import Instrument, RetailAccount
 from app.services.brokerage.paper import _buy_size, _fixed_income_buy_size
 from app.services.brokerage.protocol import BrokerValidationError, SubmitOrderRequest
+from app.services.invest.accounts import (
+    _allocation_buckets,
+    _instrument_href,
+    _profile_permissions,
+    _withheld_capital_signals,
+)
 from app.services.invest.fixed_income import (
     fixed_income_cashflows,
     fixed_income_quote,
@@ -29,15 +35,23 @@ class InvestPermissionTests(TestCase):
         self.assertTrue(user_can_access_invest(user))
         self.assertFalse(user_can_access_capital(user))
 
-    def test_capital_pm_can_access_both(self) -> None:
+    def test_capital_pm_can_access_capital_only(self) -> None:
         user = AuthenticatedUser(id="u2", email="pm@example.com", role="CAPITAL_PM")
-        self.assertTrue(user_can_access_invest(user))
+        self.assertFalse(user_can_access_invest(user))
         self.assertTrue(user_can_access_capital(user))
 
-    def test_default_authenticated_user_is_not_capital_by_default(self) -> None:
+    def test_admin_can_access_both_and_switch(self) -> None:
+        from app.core.auth import user_can_switch_products
+
+        user = AuthenticatedUser(id="u4", email="a@example.com", role="ADMIN")
+        self.assertTrue(user_can_access_invest(user))
+        self.assertTrue(user_can_access_capital(user))
+        self.assertTrue(user_can_switch_products(user))
+
+    def test_default_authenticated_user_can_access_both(self) -> None:
         user = AuthenticatedUser(id="u3", email="a@example.com", role="authenticated")
         self.assertTrue(user_can_access_invest(user))
-        self.assertFalse(user_can_access_capital(user))
+        self.assertTrue(user_can_access_capital(user))
 
     def test_auth_disabled_anonymous_user_keeps_local_capital_access(self) -> None:
         user = AuthenticatedUser(id="anonymous", email=None, role="anonymous")
@@ -48,16 +62,62 @@ class InvestPermissionTests(TestCase):
         self.assertIsInstance(settings.invest_paper_starting_cash, Decimal)
         self.assertGreaterEqual(settings.invest_paper_starting_cash, Decimal("100.00"))
 
+    def test_profile_permissions_keep_retail_out_of_capital_controls(self) -> None:
+        user = AuthenticatedUser(id="u1", email="r@example.com", role="RETAIL_USER")
+        permissions = {item.code: item.enabled for item in _profile_permissions(user)}
+        self.assertTrue(permissions["paper_trading"])
+        self.assertTrue(permissions["fixed_income"])
+        self.assertFalse(permissions["real_cash_movements"])
+        self.assertFalse(permissions["capital_workspace"])
+        self.assertFalse(permissions["product_switching"])
+
+    def test_invest_research_withholds_capital_signals(self) -> None:
+        withheld = _withheld_capital_signals()
+        self.assertIn("Capital target weights", withheld)
+        self.assertIn("PM approval state", withheld)
+
+    def test_payload_prefers_pease_role_over_jwt_authenticated(self) -> None:
+        from app.core.auth import _user_from_payload
+
+        user = _user_from_payload(
+            {
+                "sub": "11111111-2222-3333-4444-555555555555",
+                "email": "retail@example.com",
+                "role": "authenticated",
+                "user_metadata": {"pease_role": "RETAIL_USER"},
+            }
+        )
+        self.assertEqual(user.role, "RETAIL_USER")
+        self.assertFalse(user_can_access_capital(user))
+
+    def test_payload_app_metadata_admin_wins(self) -> None:
+        from app.core.auth import _user_from_payload, user_can_switch_products
+
+        user = _user_from_payload(
+            {
+                "sub": "11111111-2222-3333-4444-555555555555",
+                "email": "admin@example.com",
+                "role": "authenticated",
+                "app_metadata": {"pease_role": "ADMIN"},
+                "user_metadata": {"pease_role": "RETAIL_USER"},
+            }
+        )
+        self.assertEqual(user.role, "ADMIN")
+        self.assertTrue(user_can_switch_products(user))
+
 
 class InvestRouteTests(TestCase):
     def test_invest_routes_are_registered(self) -> None:
         paths = app.openapi()["paths"]
         self.assertIn("/api/invest/account", paths)
+        self.assertIn("/api/invest/profile", paths)
+        self.assertIn("/api/invest/activity", paths)
         self.assertIn("/api/invest/home", paths)
         self.assertIn("/api/invest/orders", paths)
         self.assertIn("/api/invest/watchlist", paths)
         self.assertIn("/api/invest/paper/deposit", paths)
         self.assertIn("/api/invest/instruments/search", paths)
+        self.assertIn("/api/invest/instruments/{ticker}/research", paths)
         self.assertIn("/api/invest/discover", paths)
         self.assertIn("/api/news/overview", paths)
         self.assertIn("/api/invest/orders/{order_id}", paths)
@@ -228,3 +288,135 @@ class InvestMarketsBoardTests(TestCase):
         self.assertIn("XLK", tickers)
         self.assertIn("GTCO.NG", tickers)
         self.assertIn("SEPLAT.NG", tickers)
+
+
+class InvestNewsTickerTests(TestCase):
+    def test_fixed_income_symbols_expand_to_listed_proxy(self) -> None:
+        from app.services.invest.news import _news_tickers_for_symbol, _unique
+
+        self.assertEqual(
+            _news_tickers_for_symbol("US-TBILL-13W"),
+            ["US-TBILL-13W", "BIL"],
+        )
+        self.assertEqual(_news_tickers_for_symbol("SPY"), ["SPY"])
+        self.assertEqual(
+            _unique(["SPY", "spy", "BIL", "SPY"]),
+            ["SPY", "BIL"],
+        )
+
+    def test_summary_personalizes_when_user_has_names(self) -> None:
+        from app.services.invest.news import _summary
+
+        personal = _summary(
+            portfolio_count=2, watchlist_count=1, for_you_count=4
+        )
+        empty = _summary(portfolio_count=0, watchlist_count=0, for_you_count=0)
+        self.assertIn("holding", personal)
+        self.assertIn("watchlist", personal)
+        self.assertIn("boards", empty)
+
+
+class InvestDiscoverCopyTests(TestCase):
+    def test_move_copy_is_plain_language(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.invest.discover import (
+            _move_copy,
+            _retail_badge,
+            uses_desk_language,
+        )
+
+        item = SimpleNamespace(
+            ticker="NVDA",
+            name="NVIDIA",
+            change_pct=Decimal("4.20"),
+            volume_ratio=Decimal("2.10"),
+            industry="Semiconductors",
+            sector="Technology",
+            flags=["unusual_volume", "price_move"],
+        )
+        copy = _move_copy(item)
+        self.assertIn("NVDA is up 4.20%", copy)
+        self.assertIn("2.1× volume", copy)
+        self.assertFalse(uses_desk_language(copy))
+        self.assertEqual(_retail_badge(item), "Heavy volume")
+
+    def test_sector_copy_describes_a_group(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.invest.discover import _sector_copy, uses_desk_language
+
+        industry = SimpleNamespace(
+            name="Semiconductors",
+            status="industry_event",
+            jurisdiction="US",
+            flagged_count=6,
+            name_count=12,
+            median_change_pct=Decimal("3.10"),
+        )
+        copy = _sector_copy(industry)
+        self.assertIn("Semiconductors", copy)
+        self.assertIn("6 of 12", copy)
+        self.assertFalse(uses_desk_language(copy))
+
+    def test_summary_and_empty_watchlist_actions(self) -> None:
+        from app.services.invest.discover import _next_actions, _summary
+
+        quiet = _summary(
+            unusual_count=0,
+            sector_count=0,
+            watchlist_hits=0,
+            watchlist_count=0,
+        )
+        live = _summary(
+            unusual_count=4,
+            sector_count=1,
+            watchlist_hits=2,
+            watchlist_count=3,
+        )
+        self.assertIn("quiet", quiet.lower())
+        self.assertIn("watched names", live.lower())
+        self.assertTrue(_next_actions(set()))
+        self.assertEqual(_next_actions({"AAPL"}), [])
+
+    def test_unusual_section_omits_fixed_income_catalog(self) -> None:
+        from app.services.invest.discover import _unusual_section
+
+        section = _unusual_section([], screened=80)
+        self.assertEqual(section.id, "unusual_activity")
+        self.assertNotIn("fixed_income", section.id)
+        self.assertIn("quiet", section.items[0].title.lower())
+
+
+class InvestPortfolioResponseTests(TestCase):
+    def test_fixed_income_hrefs_route_to_fixed_income_detail(self) -> None:
+        self.assertEqual(
+            _instrument_href("US-TBILL-13W"),
+            "/invest/fixed-income/US-TBILL-13W",
+        )
+        self.assertEqual(_instrument_href("SPY"), "/invest/instruments/SPY")
+
+    def test_allocation_buckets_include_cash_and_fixed_income(self) -> None:
+        holdings = [
+            InvestHolding(
+                ticker="US-TBILL-13W",
+                name="US Treasury Bill 13 Week",
+                asset_class="cash_equivalent",
+                currency="USD",
+                quantity=Decimal("1000"),
+                average_cost=Decimal("0.99"),
+                current_price=Decimal("0.99"),
+                market_value=Decimal("990.00"),
+                unrealized_pnl=Decimal("0.00"),
+                unrealized_pnl_pct=None,
+                href="/invest/fixed-income/US-TBILL-13W",
+            )
+        ]
+        buckets = _allocation_buckets(
+            holdings,
+            cash=Decimal("10.00"),
+            portfolio_value=Decimal("1000.00"),
+        )
+        by_name = {bucket.name: bucket for bucket in buckets}
+        self.assertEqual(by_name["Cash"].allocation_pct, Decimal("1.00"))
+        self.assertEqual(by_name["Fixed income"].allocation_pct, Decimal("99.00"))

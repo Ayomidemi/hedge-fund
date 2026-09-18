@@ -11,7 +11,12 @@ export default async function PlatformLayout({
 
   return (
     <LiveDataProvider>
-      <AppShell userOrgName={user.orgName}>{children}</AppShell>
+      <AppShell
+        userOrgName={user.orgName}
+        canSwitchProducts={user.canSwitchProducts}
+      >
+        {children}
+      </AppShell>
     </LiveDataProvider>
   );
 }

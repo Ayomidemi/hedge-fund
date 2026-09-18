@@ -54,13 +54,15 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
             {home.holdings.map((holding) => (
               <li key={holding.ticker} className="flex items-center justify-between py-3">
                 <Link
-                  href={`/invest/instruments/${holding.ticker}`}
+                  href={holding.href ?? `/invest/instruments/${holding.ticker}`}
                   className="font-semibold hover:underline"
                 >
                   {holding.ticker}
                 </Link>
                 <div className="text-right text-sm">
-                  <p className="tabular-nums">{money(holding.market_value)}</p>
+                  <p className="tabular-nums">
+                    {money(holding.market_value, holding.currency)}
+                  </p>
                   <p
                     className={
                       Number(holding.unrealized_pnl) >= 0

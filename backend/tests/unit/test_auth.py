@@ -33,7 +33,7 @@ class AuthPayloadTests(TestCase):
 
         self.assertEqual(user.id, "11111111-2222-3333-4444-555555555555")
         self.assertEqual(user.email, "analyst@example.com")
-        self.assertEqual(user.role, "authenticated")
+        self.assertIsNone(user.role)
         self.assertEqual(user.starting_capital, Decimal("2500.50"))
 
     def test_user_from_payload_enforces_minimum_starting_capital(self) -> None:

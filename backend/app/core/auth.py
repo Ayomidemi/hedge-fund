@@ -94,6 +94,12 @@ def _decode_supabase_token(token: str) -> dict:
     )
 
 
+RETAIL_ONLY_ROLES = {"RETAIL_USER"}
+CAPITAL_ROLES = {"CAPITAL_ANALYST", "CAPITAL_PM", "CAPITAL_RISK"}
+ADMIN_ROLES = {"ADMIN"}
+PEASE_PRODUCT_ROLES = RETAIL_ONLY_ROLES | CAPITAL_ROLES | ADMIN_ROLES
+
+
 def _user_from_payload(payload: dict) -> AuthenticatedUser:
     user_id = payload.get("sub")
     if not user_id:
@@ -105,7 +111,7 @@ def _user_from_payload(payload: dict) -> AuthenticatedUser:
     app_metadata = payload.get("app_metadata") or {}
     user_metadata = payload.get("user_metadata") or {}
     email = payload.get("email") or user_metadata.get("email")
-    role = app_metadata.get("role") or payload.get("role")
+    role = _pease_role_from_metadata(app_metadata, user_metadata, payload)
     full_name = user_metadata.get("full_name")
     org_name = user_metadata.get("org_name")
     starting_capital = _starting_capital_from_metadata(user_metadata)
@@ -115,9 +121,32 @@ def _user_from_payload(payload: dict) -> AuthenticatedUser:
         email=str(email) if email else None,
         full_name=str(full_name) if full_name else None,
         org_name=str(org_name) if org_name else None,
-        role=str(role) if role else None,
+        role=role,
         starting_capital=starting_capital,
     )
+
+
+def _pease_role_from_metadata(
+    app_metadata: dict, user_metadata: dict, payload: dict
+) -> str | None:
+    """Resolve Pease product role. Ignore Supabase JWT role=authenticated."""
+    for candidate in (
+        app_metadata.get("pease_role"),
+        app_metadata.get("role"),
+        user_metadata.get("pease_role"),
+        user_metadata.get("role"),
+    ):
+        normalized = _normalize_role_value(candidate)
+        if normalized in PEASE_PRODUCT_ROLES:
+            return normalized
+    jwt_role = _normalize_role_value(payload.get("role"))
+    if jwt_role in PEASE_PRODUCT_ROLES:
+        return jwt_role
+    return None
+
+
+def _normalize_role_value(value: object) -> str:
+    return str(value or "").strip().upper()
 
 
 def _starting_capital_from_metadata(metadata: dict) -> Decimal | None:
@@ -182,33 +211,26 @@ async def require_authenticated_user(
     return _user_from_payload(payload)
 
 
-RETAIL_ONLY_ROLES = {"RETAIL_USER"}
-CAPITAL_ROLES = {"CAPITAL_ANALYST", "CAPITAL_PM", "CAPITAL_RISK"}
-ADMIN_ROLES = {"ADMIN"}
-
-
 def _normalized_role(user: AuthenticatedUser) -> str:
-    return (user.role or "").strip().upper()
+    return _normalize_role_value(user.role)
 
 
 def user_can_access_invest(user: AuthenticatedUser) -> bool:
     role = _normalized_role(user)
-    if role in RETAIL_ONLY_ROLES or role in ADMIN_ROLES:
-        return True
     if role in CAPITAL_ROLES:
-        return True
-    if role == "ANONYMOUS":
-        return True
+        return False
     return True
 
 
 def user_can_access_capital(user: AuthenticatedUser) -> bool:
     role = _normalized_role(user)
-    if role == "ANONYMOUS":
-        return True
     if role in RETAIL_ONLY_ROLES:
         return False
-    return role in CAPITAL_ROLES or role in ADMIN_ROLES
+    return True
+
+
+def user_can_switch_products(user: AuthenticatedUser) -> bool:
+    return _normalized_role(user) in ADMIN_ROLES
 
 
 async def require_invest_user(

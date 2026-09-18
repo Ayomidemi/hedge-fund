@@ -38,15 +38,25 @@ export default async function InvestOrderDetailPage({
           {order.status} · {order.order_type.toUpperCase()}
         </p>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <Detail label="Notional" value={order.notional ? money(order.notional) : "-"} />
-          <Detail label="Quantity" value={order.quantity ?? "-"} />
+          <Detail
+            label="Notional"
+            value={order.notional ? money(order.notional, order.currency) : "-"}
+          />
+          <Detail label="Requested quantity" value={order.quantity ?? "-"} />
+          <Detail label="Filled quantity" value={order.filled_quantity ?? "-"} />
           <Detail
             label="Average fill"
-            value={order.average_fill_price ? money(order.average_fill_price) : "-"}
+            value={order.average_fill_price ? money(order.average_fill_price, order.currency) : "-"}
           />
+          <Detail label="Broker" value={order.broker_provider ?? "-"} />
+          <Detail label="Broker ref" value={order.broker_order_id ?? "-"} />
           <Detail
             label="Submitted"
             value={new Date(order.submitted_at).toLocaleString()}
+          />
+          <Detail
+            label="Filled"
+            value={order.filled_at ? new Date(order.filled_at).toLocaleString() : "-"}
           />
         </div>
         {order.warnings.length > 0 ? (
@@ -59,7 +69,7 @@ export default async function InvestOrderDetailPage({
         <div className="mt-5 flex flex-wrap gap-2">
           <InvestOrderActions orderId={order.id} status={order.status} />
           <Link
-            href={`/invest/instruments/${order.ticker}`}
+            href={hrefForOrder(order)}
             className="inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             Open asset
@@ -68,6 +78,13 @@ export default async function InvestOrderDetailPage({
       </section>
     </div>
   );
+}
+
+function hrefForOrder(order: InvestOrder) {
+  if (order.asset_class === "bond" || order.asset_class === "cash_equivalent") {
+    return `/invest/fixed-income/${order.ticker}`;
+  }
+  return `/invest/instruments/${order.ticker}`;
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

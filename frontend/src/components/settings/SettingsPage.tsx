@@ -171,143 +171,163 @@ export function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="mx-auto max-w-[720px]">
-        <p className="text-sm text-zinc-500">Loading settings...</p>
+      <div className="min-h-screen bg-[#f7f8f5] px-4 py-6 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50 sm:px-6">
+        <div className="mx-auto max-w-[720px]">
+          <p className="text-sm text-zinc-500">Loading settings...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-[720px]">
-      <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap gap-2 border-b border-zinc-200 p-4 dark:border-zinc-800">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
-                activeTab === tab.key
-                  ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
-                  : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+    <div className="min-h-screen bg-[#f7f8f5] px-4 py-6 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50 sm:px-6">
+      <div className="mx-auto max-w-[720px]">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Account
+            </p>
+            <h1 className="mt-1 text-2xl font-semibold">Settings</h1>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className={buttonSecondaryClassName}
+          >
+            Back
+          </button>
         </div>
 
-        <div className="p-6">
-          {activeTab === "profile" && (
-            <div>
-              <h2 className="text-lg font-semibold">Profile</h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Your account details for this organization.
-              </p>
-
-              <form className="mt-5 space-y-4" onSubmit={handleProfileSubmit}>
-                <FormField
-                  label="Your name"
-                  autoComplete="name"
-                  required
-                  value={profile.fullName}
-                  onChange={(value) =>
-                    setProfile((current) => ({ ...current, fullName: value }))
-                  }
-                />
-
-                <FormField
-                  label="Organization"
-                  autoComplete="organization"
-                  required
-                  value={profile.orgName}
-                  onChange={(value) =>
-                    setProfile((current) => ({ ...current, orgName: value }))
-                  }
-                />
-
-                <FormField
-                  label="Email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  helper="Changing email sends a confirmation link."
-                  value={profile.email}
-                  onChange={(value) =>
-                    setProfile((current) => ({ ...current, email: value }))
-                  }
-                />
-
-                <button
-                  type="submit"
-                  disabled={profilePending}
-                  className={buttonPrimaryClassName}
-                >
-                  {profilePending ? "Saving..." : "Save profile"}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {activeTab === "password" && (
-            <div>
-              <h2 className="text-lg font-semibold">Password</h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Set a new password for your account.
-              </p>
-
-              <form className="mt-5 space-y-4" onSubmit={handlePasswordSubmit}>
-                <FormField
-                  label="New password"
-                  type="password"
-                  autoComplete="new-password"
-                  required
-                  minLength={8}
-                  helper="Use at least 8 characters."
-                  value={password}
-                  onChange={setPassword}
-                />
-
-                <FormField
-                  label="Confirm password"
-                  type="password"
-                  autoComplete="new-password"
-                  required
-                  minLength={8}
-                  value={confirmPassword}
-                  onChange={setConfirmPassword}
-                />
-
-                <button
-                  type="submit"
-                  disabled={passwordPending}
-                  className={buttonPrimaryClassName}
-                >
-                  {passwordPending ? "Updating..." : "Change password"}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {activeTab === "session" && (
-            <div>
-              <h2 className="text-lg font-semibold">Session</h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Sign out of Pease Capital on this device.
-              </p>
-
+        <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="flex flex-wrap gap-2 border-b border-zinc-200 p-4 dark:border-zinc-800">
+            {tabs.map((tab) => (
               <button
+                key={tab.key}
                 type="button"
-                onClick={handleLogout}
-                disabled={logoutPending}
-                className={`${buttonSecondaryClassName} mt-5`}
+                onClick={() => setActiveTab(tab.key)}
+                className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
+                  activeTab === tab.key
+                    ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
+                    : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+                }`}
               >
-                {logoutPending ? "Signing out..." : "Log out"}
+                {tab.label}
               </button>
-            </div>
-          )}
-        </div>
-      </section>
+            ))}
+          </div>
+
+          <div className="p-6">
+            {activeTab === "profile" && (
+              <div>
+                <h2 className="text-lg font-semibold">Profile</h2>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Your account details for this organization.
+                </p>
+
+                <form className="mt-5 space-y-4" onSubmit={handleProfileSubmit}>
+                  <FormField
+                    label="Your name"
+                    autoComplete="name"
+                    required
+                    value={profile.fullName}
+                    onChange={(value) =>
+                      setProfile((current) => ({ ...current, fullName: value }))
+                    }
+                  />
+
+                  <FormField
+                    label="Organization"
+                    autoComplete="organization"
+                    required
+                    value={profile.orgName}
+                    onChange={(value) =>
+                      setProfile((current) => ({ ...current, orgName: value }))
+                    }
+                  />
+
+                  <FormField
+                    label="Email"
+                    type="email"
+                    autoComplete="email"
+                    required
+                    helper="Changing email sends a confirmation link."
+                    value={profile.email}
+                    onChange={(value) =>
+                      setProfile((current) => ({ ...current, email: value }))
+                    }
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={profilePending}
+                    className={buttonPrimaryClassName}
+                  >
+                    {profilePending ? "Saving..." : "Save profile"}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {activeTab === "password" && (
+              <div>
+                <h2 className="text-lg font-semibold">Password</h2>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Set a new password for your account.
+                </p>
+
+                <form className="mt-5 space-y-4" onSubmit={handlePasswordSubmit}>
+                  <FormField
+                    label="New password"
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    minLength={8}
+                    helper="Use at least 8 characters."
+                    value={password}
+                    onChange={setPassword}
+                  />
+
+                  <FormField
+                    label="Confirm password"
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    minLength={8}
+                    value={confirmPassword}
+                    onChange={setConfirmPassword}
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={passwordPending}
+                    className={buttonPrimaryClassName}
+                  >
+                    {passwordPending ? "Updating..." : "Change password"}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {activeTab === "session" && (
+              <div>
+                <h2 className="text-lg font-semibold">Session</h2>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Sign out on this device.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  disabled={logoutPending}
+                  className={`${buttonSecondaryClassName} mt-5`}
+                >
+                  {logoutPending ? "Signing out..." : "Log out"}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
     </div>
   );
 }

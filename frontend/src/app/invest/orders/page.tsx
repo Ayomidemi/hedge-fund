@@ -21,17 +21,33 @@ export default async function InvestOrdersPage() {
   }
 
   return (
-    <ul className="mx-auto max-w-3xl divide-y divide-zinc-100 rounded-2xl border border-zinc-200 bg-white dark:divide-zinc-900 dark:border-zinc-800 dark:bg-zinc-950">
+    <ul className="mx-auto max-w-4xl divide-y divide-zinc-100 rounded-2xl border border-zinc-200 bg-white dark:divide-zinc-900 dark:border-zinc-800 dark:bg-zinc-950">
       {orders.map((order) => (
-        <li key={order.id} className="p-4">
-          <Link href={`/invest/orders/${order.id}`} className="font-semibold hover:underline">
-            {order.side} {order.ticker}
-          </Link>
-          <p className="mt-1 text-sm text-zinc-500">
-            {order.status}
-            {order.average_fill_price ? ` · filled at ${money(order.average_fill_price)}` : ""}
-            {order.notional ? ` · ${money(order.notional)}` : ""}
-          </p>
+        <li
+          key={order.id}
+          className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div>
+            <Link href={`/invest/orders/${order.id}`} className="font-semibold hover:underline">
+              {order.side} {order.ticker}
+            </Link>
+            <p className="mt-1 text-sm text-zinc-500">{order.name}</p>
+            <p className="mt-1 text-xs capitalize text-zinc-500">
+              {order.status.toLowerCase()} · {order.order_type} ·{" "}
+              {new Date(order.submitted_at).toLocaleString()}
+            </p>
+          </div>
+          <div className="text-sm tabular-nums sm:text-right">
+            <p className="font-medium">
+              {order.notional ? money(order.notional, order.currency) : "-"}
+            </p>
+            <p className="text-zinc-500">
+              {order.filled_quantity ?? order.quantity ?? "-"} units
+              {order.average_fill_price
+                ? ` at ${money(order.average_fill_price, order.currency)}`
+                : ""}
+            </p>
+          </div>
         </li>
       ))}
     </ul>

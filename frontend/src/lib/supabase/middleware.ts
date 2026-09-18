@@ -1,6 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+import {
+  canAccessCapital,
+  canAccessInvest,
+  homePathForRole,
+  resolvePeaseRole,
+} from "@/lib/pease-role";
+
 export async function updateSession(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -43,18 +50,39 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  if (user && pathname === "/login") {
+  if (user && (pathname === "/login" || pathname.startsWith("/login/forgot-password"))) {
+    const role = resolvePeaseRole(user);
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/";
+    redirectUrl.pathname = homePathForRole(role);
     redirectUrl.search = "";
     return NextResponse.redirect(redirectUrl);
   }
 
-  if (user && pathname.startsWith("/login/forgot-password")) {
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/";
-    redirectUrl.search = "";
-    return NextResponse.redirect(redirectUrl);
+  if (user && !isAuthRoute) {
+    const role = resolvePeaseRole(user);
+    const onInvest = pathname === "/invest" || pathname.startsWith("/invest/");
+    const onShared =
+      pathname === "/settings" || pathname.startsWith("/settings/");
+    const onCapital =
+      !onInvest &&
+      !onShared &&
+      pathname !== "/login" &&
+      !pathname.startsWith("/auth/") &&
+      !pathname.startsWith("/_next");
+
+    if (onInvest && !canAccessInvest(role)) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/";
+      redirectUrl.search = "";
+      return NextResponse.redirect(redirectUrl);
+    }
+
+    if (onCapital && !canAccessCapital(role)) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/invest";
+      redirectUrl.search = "";
+      return NextResponse.redirect(redirectUrl);
+    }
   }
 
   return supabaseResponse;

@@ -1,5 +1,5 @@
-import { NewsCentre } from "@/components/news/NewsCentre";
-import { getNewsOverview, type NewsOverview } from "@/lib/api";
+import { InvestNews } from "@/components/invest/InvestNews";
+import { getInvestNews, type InvestNewsOverview } from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
 
 type NewsPageProps = {
@@ -12,7 +12,7 @@ type NewsPageProps = {
 };
 
 export default async function InvestNewsPage({ searchParams }: NewsPageProps) {
-  let overview: NewsOverview | null = null;
+  let overview: InvestNewsOverview | null = null;
   let unavailable = false;
   const accessToken = await getServerAccessToken();
   const params = (await searchParams) ?? {};
@@ -26,7 +26,7 @@ export default async function InvestNewsPage({ searchParams }: NewsPageProps) {
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
   try {
-    overview = await getNewsOverview(
+    overview = await getInvestNews(
       {
         ticker,
         market,
@@ -42,10 +42,10 @@ export default async function InvestNewsPage({ searchParams }: NewsPageProps) {
     unavailable = true;
   }
 
-  const overviewKey = ["invest-news", jurisdiction].join(":");
+  const overviewKey = ["invest-news", jurisdiction, ticker ?? ""].join(":");
 
   return (
-    <NewsCentre
+    <InvestNews
       key={overviewKey}
       initialOverview={overview}
       initialJurisdiction={jurisdiction}

@@ -10,10 +10,14 @@ from app.api.schemas.invest import (
     InvestFixedIncomeProductResponse,
     InvestHolding,
     InvestHomeResponse,
+    InvestInstrumentResearchResponse,
     InvestInstrumentResponse,
     InvestMarketsResponse,
+    InvestNewsOverviewResponse,
     InvestOrderCreate,
     InvestOrderResponse,
+    InvestProfileActivityResponse,
+    InvestProfileResponse,
     InvestTransactionResponse,
     InvestWatchlistCreate,
     InvestWatchlistItemResponse,
@@ -29,6 +33,7 @@ from app.services.invest.fixed_income import (
 )
 from app.services.invest.discover import build_invest_discover
 from app.services.invest.markets import build_invest_markets
+from app.services.invest.news import build_invest_news_overview
 
 router = APIRouter(prefix="/invest")
 
@@ -62,6 +67,25 @@ async def create_account(
     response = await invest.get_account_response(session, user)
     await session.commit()
     return response
+
+
+@router.get("/profile", response_model=InvestProfileResponse)
+async def read_profile(
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> InvestProfileResponse:
+    response = await invest.get_profile(session, user)
+    await session.commit()
+    return response
+
+
+@router.get("/activity", response_model=list[InvestProfileActivityResponse])
+async def read_activity(
+    limit: int = Query(default=100, ge=1, le=200),
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[InvestProfileActivityResponse]:
+    return await invest.list_activity(session, user, limit=limit)
 
 
 @router.get("/home", response_model=InvestHomeResponse)
@@ -221,6 +245,20 @@ async def search_instruments(
     return await invest.search_instruments(session, query, market)
 
 
+@router.get(
+    "/instruments/{ticker}/research",
+    response_model=InvestInstrumentResearchResponse,
+)
+async def read_instrument_research(
+    ticker: str,
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> InvestInstrumentResearchResponse:
+    response = await invest.get_instrument_research(session, ticker)
+    await session.commit()
+    return response
+
+
 @router.get("/instruments/{ticker}", response_model=InvestInstrumentResponse)
 async def read_instrument(
     ticker: str,
@@ -280,3 +318,29 @@ async def read_discover(
     session: AsyncSession = Depends(get_session),
 ) -> InvestDiscoverResponse:
     return await build_invest_discover(session, user)
+
+
+@router.get("/news", response_model=InvestNewsOverviewResponse)
+async def read_invest_news(
+    ticker: str | None = Query(default=None),
+    market: str | None = Query(default=None),
+    jurisdiction: str | None = Query(default="all"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=5, le=50),
+    ticker_page: int = Query(default=1, ge=1),
+    ticker_page_size: int = Query(default=8, ge=5, le=20),
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> InvestNewsOverviewResponse:
+    normalized_market = (market or "").strip().upper()
+    return await build_invest_news_overview(
+        session,
+        user,
+        ticker=ticker,
+        market=normalized_market if normalized_market in {"US", "NG"} else None,
+        jurisdiction=jurisdiction,
+        page=page,
+        page_size=page_size,
+        ticker_page=ticker_page,
+        ticker_page_size=ticker_page_size,
+    )

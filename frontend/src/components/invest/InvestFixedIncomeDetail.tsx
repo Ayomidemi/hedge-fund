@@ -23,6 +23,7 @@ export function InvestFixedIncomeDetail({
 }) {
   const router = useRouter();
   const [amount, setAmount] = useState(product.minimum_order_amount);
+  const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState<"buy" | "watch" | null>(null);
   const dirtyPrice = Number(product.dirty_price ?? 0);
   const faceIncrement = Number(product.face_value_increment ?? 1);
@@ -45,6 +46,10 @@ export function InvestFixedIncomeDetail({
     event.preventDefault();
     if (!canTrade) {
       toast.error("This fixed-income product is not paper-tradable yet.");
+      return;
+    }
+    if (!reviewing) {
+      setReviewing(true);
       return;
     }
     setPending("buy");
@@ -160,7 +165,10 @@ export function InvestFixedIncomeDetail({
             </span>
             <input
               value={amount}
-              onChange={(event) => setAmount(event.target.value)}
+              onChange={(event) => {
+                setAmount(event.target.value);
+                setReviewing(false);
+              }}
               className={inputClassName}
               inputMode="decimal"
             />
@@ -173,13 +181,29 @@ export function InvestFixedIncomeDetail({
                 : "Enter an amount"}
             </p>
           </div>
+          {reviewing ? (
+            <div className="mt-3 rounded-xl bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
+              <p className="font-medium">Review paper order</p>
+              <p className="mt-1 text-zinc-500">
+                Buy about{" "}
+                {estimatedFaceValue
+                  ? money(estimatedFaceValue, product.currency)
+                  : "0"}{" "}
+                face value of {product.ticker} for {money(amount, product.currency)}.
+              </p>
+            </div>
+          ) : null}
           <div className="mt-4 flex flex-col gap-2">
             <button
               type="submit"
               disabled={pending !== null || !canTrade}
               className={buttonPrimaryClassName}
             >
-              {pending === "buy" ? "Submitting..." : "Submit paper order"}
+              {pending === "buy"
+                ? "Submitting..."
+                : reviewing
+                  ? "Confirm paper order"
+                  : "Review order"}
             </button>
             <button
               type="button"

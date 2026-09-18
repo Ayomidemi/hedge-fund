@@ -1,5 +1,10 @@
 import { InvestInstrumentDetail } from "@/components/invest/InvestInstrumentDetail";
-import { getInvestInstrument, type InvestInstrument } from "@/lib/api";
+import {
+  getInvestInstrument,
+  getInvestInstrumentResearch,
+  type InvestInstrument,
+  type InvestInstrumentResearch,
+} from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
 
 export default async function InvestInstrumentPage({
@@ -9,11 +14,16 @@ export default async function InvestInstrumentPage({
 }) {
   const { ticker } = await params;
   let instrument: InvestInstrument | null = null;
+  let research: InvestInstrumentResearch | null = null;
   const accessToken = await getServerAccessToken();
   try {
-    instrument = await getInvestInstrument(ticker, { accessToken });
+    [instrument, research] = await Promise.all([
+      getInvestInstrument(ticker, { accessToken }),
+      getInvestInstrumentResearch(ticker, { accessToken }),
+    ]);
   } catch {
     instrument = null;
+    research = null;
   }
 
   if (!instrument) {
@@ -24,5 +34,5 @@ export default async function InvestInstrumentPage({
     );
   }
 
-  return <InvestInstrumentDetail instrument={instrument} />;
+  return <InvestInstrumentDetail instrument={instrument} research={research} />;
 }

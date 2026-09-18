@@ -1,9 +1,13 @@
 import { InvestShell } from "@/components/shell/InvestShell";
+import { getServerUserProfile } from "@/lib/supabase/server";
 
-export default function InvestLayout({
+export default async function InvestLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return <InvestShell>{children}</InvestShell>;
+  const user = await getServerUserProfile();
+  return (
+    <InvestShell canSwitchProducts={user.canSwitchProducts}>{children}</InvestShell>
+  );
 }
