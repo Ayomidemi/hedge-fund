@@ -48,7 +48,7 @@ async def build_listed_research(
     metrics: TickerMetricsInput | None = None
 
     try:
-        prefill = await prefill_ticker(instrument.ticker, scope="triage")
+        prefill = await prefill_ticker(instrument.ticker, scope="analysis")
         instrument = await upsert_instrument(session, prefill.instrument)
         metrics = prefill.metrics
         if live_price is not None:

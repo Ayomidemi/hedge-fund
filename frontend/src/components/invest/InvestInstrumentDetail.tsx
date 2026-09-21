@@ -356,6 +356,18 @@ function PeaseViewCard({ view }: { view: InvestPeaseView }) {
       {view.radar_note ? (
         <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">{view.radar_note}</p>
       ) : null}
+      {view.warnings.length > 0 ? (
+        <div className="mt-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Data gaps
+          </p>
+          <ul className="mt-2 space-y-1 text-xs text-zinc-500">
+            {view.warnings.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </section>
   );
 }
