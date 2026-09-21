@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,17 +15,57 @@ from app.api.schemas.invest import (
     InvestNewsPaginationResponse,
 )
 from app.core.auth import AuthenticatedUser
-from app.models import Instrument, RetailWatchlistItem
+from app.models import Instrument, NewsItem, RetailWatchlistItem
 from app.services.invest import accounts as invest_accounts
-from app.services.invest.fixed_income import get_fixed_income_product
-from app.services.invest.markets import board_tickers
+from app.services.invest.fixed_income import (
+    FIXED_INCOME_PRODUCTS,
+    get_fixed_income_product,
+)
+from app.services.invest.markets import active_board_tickers, rates_board_tickers
 from app.services.news import centre as news_centre
-from app.services.news.providers import normalize_ticker
+from app.services.news.providers import _fetch_tiingo_news, normalize_ticker
+
+logger = logging.getLogger(__name__)
 
 FOR_YOU_LIMIT = 24
 SECTION_LIMIT = 16
+INCOME_LIMIT = 20
 HEADLINES_DEFAULT_PAGE_SIZE = 20
 TICKER_PAGE_SIZE = 8
+INCOME_REFRESH_MIN_ITEMS = 5
+INCOME_REFRESH_TIMEOUT_SECONDS = 6.0
+
+US_INCOME_KEYWORDS = (
+    "treasury",
+    "treasuries",
+    "t-bill",
+    "t bill",
+    "tbill",
+    "t-note",
+    "t-bond",
+    "yield curve",
+    "bond yield",
+    "treasury yield",
+    "fed funds",
+    "rate cut",
+    "rate hike",
+    "duration risk",
+    "money market",
+    "fomc",
+)
+NG_INCOME_KEYWORDS = (
+    "fgn",
+    "cbn",
+    "naira",
+    "dmo",
+    "fmdq",
+    "nigerian treasury",
+    "nigeria treasury",
+    "ntb",
+    "treasury bill",
+    "bond auction",
+    "open market operation",
+)
 
 
 async def build_invest_news_overview(
@@ -38,16 +81,38 @@ async def build_invest_news_overview(
     ticker_page_size: int = TICKER_PAGE_SIZE,
 ) -> InvestNewsOverviewResponse:
     generated_at = datetime.now(timezone.utc)
+    income_tickers = INCOME_TICKERS
     portfolio_tickers = await _portfolio_news_tickers(session, user)
     watchlist_tickers = await _retail_watchlist_news_tickers(session, user.id)
-    markets = list(board_tickers())
+    active_board = await active_board_tickers(session)
+    listed_board = [
+        symbol for symbol in active_board if symbol not in INCOME_TICKER_SET
+    ]
     for_you_tickers = _unique([*portfolio_tickers, *watchlist_tickers])
+    normalized_jurisdiction = news_centre._normalize_jurisdiction(jurisdiction)
+
+    await _refresh_income_news_if_needed(session, income_tickers)
 
     headlines, headlines_total = await news_centre._current_items(
         session,
-        jurisdiction=news_centre._normalize_jurisdiction(jurisdiction),
+        jurisdiction=normalized_jurisdiction,
         page=max(page, 1),
         page_size=min(max(page_size, 5), news_centre.CURRENT_NEWS_MAX_PAGE_SIZE),
+    )
+    income_window, _ = await news_centre._current_items(
+        session,
+        jurisdiction=normalized_jurisdiction,
+        page=1,
+        page_size=80,
+    )
+    ticker_income, _ = await news_centre._items_for_tickers(
+        session, income_tickers, page=1, page_size=INCOME_LIMIT
+    )
+    income_items = _merge_income_stories(
+        ticker_income,
+        income_window,
+        jurisdiction=normalized_jurisdiction,
+        limit=INCOME_LIMIT,
     )
     portfolio_items, _ = await news_centre._items_for_tickers(
         session, portfolio_tickers, page=1, page_size=SECTION_LIMIT
@@ -59,7 +124,7 @@ async def build_invest_news_overview(
         session, for_you_tickers, page=1, page_size=FOR_YOU_LIMIT
     )
     markets_items, _ = await news_centre._items_for_tickers(
-        session, markets, page=1, page_size=SECTION_LIMIT
+        session, listed_board, page=1, page_size=SECTION_LIMIT
     )
     saved_items = await news_centre._saved_items(
         session, user.id, limit=news_centre.WATCHLIST_NEWS_LIMIT
@@ -85,6 +150,7 @@ async def build_invest_news_overview(
         session,
         user.id,
         [
+            *(item.id for item in income_items),
             *(item.id for item in for_you_items),
             *(item.id for item in portfolio_items),
             *(item.id for item in watchlist_items),
@@ -101,17 +167,19 @@ async def build_invest_news_overview(
     return InvestNewsOverviewResponse(
         generated_at=generated_at,
         summary=_summary(
+            income_count=len(income_items),
             portfolio_count=len(portfolio_tickers),
             watchlist_count=len(watchlist_tickers),
-            for_you_count=len(for_you_items),
         ),
         portfolio_tickers=portfolio_tickers,
         watchlist_tickers=watchlist_tickers,
-        markets_tickers=markets,
+        markets_tickers=listed_board,
         for_you=[_item_response(item, starred_ids) for item in for_you_items],
         portfolio_items=[_item_response(item, starred_ids) for item in portfolio_items],
         watchlist_items=[_item_response(item, starred_ids) for item in watchlist_items],
         markets_items=[_item_response(item, starred_ids) for item in markets_items],
+        income_tickers=income_tickers,
+        income_items=[_item_response(item, starred_ids) for item in income_items],
         headlines=[_item_response(item, starred_ids) for item in headlines],
         headlines_page=InvestNewsPaginationResponse(
             page=current_page,
@@ -135,6 +203,108 @@ async def build_invest_news_overview(
         ),
         saved_items=[_item_response(item, starred_ids) for item in saved_items],
     )
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        key = (value or "").strip().upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
+
+
+def income_proxy_tickers() -> list[str]:
+    tickers = list(rates_board_tickers())
+    for product in FIXED_INCOME_PRODUCTS:
+        tickers.append(product.ticker)
+        if product.proxy_ticker:
+            tickers.append(product.proxy_ticker)
+    return _unique(tickers)
+
+
+INCOME_TICKERS = income_proxy_tickers()
+INCOME_TICKER_SET = set(INCOME_TICKERS)
+
+
+def is_income_story(
+    *,
+    title: str,
+    summary: str | None,
+    tickers: list[str],
+    jurisdiction: str | None = None,
+) -> bool:
+    ticker_set = {ticker.upper() for ticker in tickers if ticker}
+    if ticker_set & INCOME_TICKER_SET:
+        return True
+    text = f"{title} {summary or ''}".lower()
+    return any(keyword in text for keyword in _keywords_for(jurisdiction))
+
+
+async def _refresh_income_news_if_needed(
+    session: AsyncSession, tickers: list[str]
+) -> None:
+    listed_proxies = [
+        ticker
+        for ticker in tickers
+        if get_fixed_income_product(ticker) is None and not ticker.endswith(".NG")
+    ]
+    _, total = await news_centre._items_for_tickers(
+        session, listed_proxies, page=1, page_size=INCOME_LIMIT
+    )
+    if total >= INCOME_REFRESH_MIN_ITEMS or not listed_proxies:
+        return
+    try:
+        result = await asyncio.wait_for(
+            _fetch_tiingo_news(listed_proxies),
+            timeout=INCOME_REFRESH_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning("invest_income_news_refresh_timed_out")
+        return
+    except Exception:
+        logger.warning("invest_income_news_refresh_failed", exc_info=True)
+        return
+    if result.items:
+        await news_centre._upsert_provider_items(session, result.items)
+
+
+def _merge_income_stories(
+    ticker_items: list[NewsItem],
+    window: list[NewsItem],
+    *,
+    jurisdiction: str | None,
+    limit: int,
+) -> list[NewsItem]:
+    merged: list[NewsItem] = []
+    seen: set[UUID] = set()
+    for item in [*ticker_items, *window]:
+        if item.id in seen:
+            continue
+        tickers = [link.ticker for link in (item.ticker_links or [])]
+        if not is_income_story(
+            title=item.title,
+            summary=item.summary,
+            tickers=tickers,
+            jurisdiction=jurisdiction,
+        ):
+            continue
+        seen.add(item.id)
+        merged.append(item)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _keywords_for(jurisdiction: str | None) -> tuple[str, ...]:
+    if jurisdiction == "US":
+        return US_INCOME_KEYWORDS
+    if jurisdiction == "NG":
+        return NG_INCOME_KEYWORDS
+    return US_INCOME_KEYWORDS + NG_INCOME_KEYWORDS
 
 
 async def _portfolio_news_tickers(
@@ -182,40 +352,28 @@ def _item_response(item, starred_ids: set) -> InvestNewsItemResponse:
 
 
 def _summary(
-    *, portfolio_count: int, watchlist_count: int, for_you_count: int
+    *,
+    income_count: int,
+    portfolio_count: int = 0,
+    watchlist_count: int = 0,
+    for_you_count: int = 0,
 ) -> str:
-    if portfolio_count or watchlist_count:
-        parts = []
-        if portfolio_count:
-            parts.append(
-                f"{portfolio_count} holding{'s' if portfolio_count != 1 else ''}"
-            )
-        if watchlist_count:
-            parts.append(
-                f"{watchlist_count} watchlist name{'s' if watchlist_count != 1 else ''}"
-            )
-        focus = " and ".join(parts)
-        if for_you_count:
-            return (
-                f"Headlines tied to {focus}, plus market tape from the Invest boards."
-            )
+    _ = for_you_count
+    if income_count:
+        personal = ""
+        if portfolio_count or watchlist_count:
+            personal = " Personal holdings and watchlist follow after the rates tape."
         return (
-            f"Tracking {focus}. Add names or take positions to personalize this feed; "
-            "market board headlines stay available below."
+            f"{income_count} rates and income headline"
+            f"{'s' if income_count != 1 else ''} from Treasuries, bills, "
+            f"FGN context, and listed duration proxies.{personal}"
+        )
+    if portfolio_count or watchlist_count:
+        return (
+            "No fresh rates headlines yet. Tracking your book below; "
+            "Treasuries and bills stay the lead when Tiingo has copy."
         )
     return (
-        "Market headlines for the Invest boards. Add watchlist names or build a "
-        "portfolio to personalize what shows first."
+        "Rates and income lead this page — T-bills, Treasuries, FGN context, "
+        "and listed proxies (BIL, SHY, IEF, TLT). Listed equity tape stays below."
     )
-
-
-def _unique(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for value in values:
-        key = (value or "").strip().upper()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        ordered.append(key)
-    return ordered

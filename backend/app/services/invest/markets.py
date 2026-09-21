@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import csv
+import io
+import logging
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +19,7 @@ from app.api.schemas.invest import (
     InvestMarketsResponse,
 )
 from app.api.schemas.operating_core import InstrumentCreate
-from app.models import Instrument, InstrumentQuote
+from app.models import Instrument, InstrumentQuote, InvestMarketBoardItem
 from app.services.invest.fixed_income import (
     fixed_income_response,
     search_fixed_income_products,
@@ -28,6 +33,13 @@ from app.services.market_data.sessions import (
 )
 from app.services.portfolio.operating_core import upsert_instrument
 
+logger = logging.getLogger(__name__)
+
+TIINGO_SUPPORTED_TICKERS_URL = (
+    "https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip"
+)
+TIINGO_SUPPORTED_TICKERS_TIMEOUT_SECONDS = 8.0
+
 
 @dataclass(frozen=True)
 class MarketBoardRow:
@@ -39,12 +51,12 @@ class MarketBoardRow:
     group_title: str
     group_description: str
     asset_class: str
-    exchange: str
+    exchange: str | None
     currency: str
-    sector: str
+    sector: str | None
 
 
-MARKET_BOARD: tuple[MarketBoardRow, ...] = (
+DEFAULT_MARKET_BOARD_RULES: tuple[MarketBoardRow, ...] = (
     MarketBoardRow(
         "SPY", "S&P 500", "SPDR S&P 500 ETF", "US", "us_indices",
         "United States", "Listed index funds. Paper-tradable.",
@@ -183,14 +195,16 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
                 is_open=state.is_open,
             )
         )
-    instruments = await _ensure_board_instruments(session)
+
+    board_rows = await market_board_rows(session)
+    instruments = await _ensure_board_instruments(session, board_rows)
     quotes = await _quotes_by_ticker(session, list(instruments.values()))
     await _fill_missing_quotes(session, instruments, quotes)
     quotes = await _quotes_by_ticker(session, list(instruments.values()))
 
     boards: dict[str, InvestMarketBoardResponse] = {}
     live_count = 0
-    for row in MARKET_BOARD:
+    for row in board_rows:
         instrument = instruments[row.ticker]
         quote = quotes.get(row.ticker)
         quote_status = _quote_status(quote, row.ticker, now)
@@ -245,21 +259,213 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
     )
 
 
+async def market_board_rows(session: AsyncSession) -> list[MarketBoardRow]:
+    await _ensure_market_board_seed_rows(session)
+    records = await session.scalars(
+        select(InvestMarketBoardItem)
+        .where(InvestMarketBoardItem.is_active.is_(True))
+        .order_by(
+            InvestMarketBoardItem.display_order.asc(),
+            InvestMarketBoardItem.ticker.asc(),
+        )
+    )
+    return [_board_row_from_record(record) for record in records]
+
+
+async def active_board_tickers(session: AsyncSession) -> tuple[str, ...]:
+    return tuple(row.ticker for row in await market_board_rows(session))
+
+
 def board_tickers() -> tuple[str, ...]:
-    return tuple(row.ticker for row in MARKET_BOARD)
+    """Default board tickers before tenant-specific DB state is available."""
+    return tuple(row.ticker for row in DEFAULT_MARKET_BOARD_RULES)
+
+
+def rates_board_tickers() -> tuple[str, ...]:
+    return tuple(
+        row.ticker for row in DEFAULT_MARKET_BOARD_RULES if row.group == "rates"
+    )
+
+
+async def _ensure_market_board_seed_rows(session: AsyncSession) -> None:
+    default_tickers = [row.ticker for row in DEFAULT_MARKET_BOARD_RULES]
+    existing = set(
+        await session.scalars(
+            select(InvestMarketBoardItem.ticker).where(
+                InvestMarketBoardItem.ticker.in_(default_tickers)
+            )
+        )
+    )
+    missing = [
+        (index, rule)
+        for index, rule in enumerate(DEFAULT_MARKET_BOARD_RULES, start=1)
+        if rule.ticker not in existing
+    ]
+    if not missing:
+        return
+
+    tiingo_metadata = await _tiingo_supported_metadata(
+        [rule.ticker for _, rule in missing if rule.market == "US"]
+    )
+    now = datetime.now(timezone.utc)
+    for index, rule in missing:
+        session.add(
+            _board_item_from_rule(
+                rule,
+                display_order=index * 10,
+                tiingo_metadata=tiingo_metadata.get(rule.ticker),
+                seeded_at=now,
+            )
+        )
+    await session.flush()
+
+
+def _board_item_from_rule(
+    rule: MarketBoardRow,
+    *,
+    display_order: int,
+    tiingo_metadata: dict | None,
+    seeded_at: datetime,
+) -> InvestMarketBoardItem:
+    source = "tiingo_supported_tickers" if tiingo_metadata else "board_rule"
+    return InvestMarketBoardItem(
+        ticker=rule.ticker,
+        label=rule.label,
+        name=_first_metadata_text(tiingo_metadata, "name", "description") or rule.name,
+        market=rule.market,
+        board_group=rule.group,
+        group_title=rule.group_title,
+        group_description=rule.group_description,
+        display_order=display_order,
+        asset_class=(
+            _asset_class_from_tiingo(tiingo_metadata.get("assetType"))
+            if tiingo_metadata
+            else rule.asset_class
+        ),
+        exchange=_first_metadata_text(tiingo_metadata, "exchange") or rule.exchange,
+        currency=(
+            _first_metadata_text(tiingo_metadata, "priceCurrency", "currency")
+            or rule.currency
+        ).upper(),
+        sector=rule.sector,
+        source=source,
+        source_as_of=seeded_at if tiingo_metadata else None,
+        source_metadata=_compact_tiingo_metadata(tiingo_metadata),
+        is_active=True,
+    )
+
+
+def _board_row_from_record(record: InvestMarketBoardItem) -> MarketBoardRow:
+    return MarketBoardRow(
+        ticker=record.ticker,
+        label=record.label,
+        name=record.name,
+        market=record.market,
+        group=record.board_group,
+        group_title=record.group_title,
+        group_description=record.group_description,
+        asset_class=record.asset_class,
+        exchange=record.exchange,
+        currency=record.currency,
+        sector=record.sector,
+    )
+
+
+async def _tiingo_supported_metadata(tickers: list[str]) -> dict[str, dict]:
+    wanted = {ticker.upper() for ticker in tickers}
+    if not wanted:
+        return {}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(TIINGO_SUPPORTED_TICKERS_TIMEOUT_SECONDS)
+        ) as client:
+            response = await client.get(TIINGO_SUPPORTED_TICKERS_URL)
+            response.raise_for_status()
+        return _parse_tiingo_supported_tickers(response.content, wanted)
+    except (httpx.HTTPError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+        logger.warning(
+            "tiingo_supported_tickers_seed_failed",
+            extra={"error": str(exc)},
+        )
+        return {}
+
+
+def _parse_tiingo_supported_tickers(
+    payload: bytes, wanted: set[str]
+) -> dict[str, dict]:
+    found: dict[str, dict] = {}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        csv_name = next(
+            (name for name in archive.namelist() if name.endswith(".csv")),
+            None,
+        )
+        if csv_name is None:
+            return {}
+        with archive.open(csv_name) as raw_file:
+            reader = csv.DictReader(io.TextIOWrapper(raw_file, encoding="utf-8"))
+            for row in reader:
+                ticker = str(row.get("ticker") or "").strip().upper()
+                if ticker not in wanted:
+                    continue
+                found[ticker] = dict(row)
+                if len(found) == len(wanted):
+                    break
+    return found
+
+
+def _first_metadata_text(payload: dict | None, *keys: str) -> str | None:
+    if not payload:
+        return None
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _asset_class_from_tiingo(asset_type: object) -> str:
+    normalized = str(asset_type or "").strip().lower()
+    if normalized == "etf":
+        return "etf"
+    if normalized == "stock":
+        return "equity"
+    if normalized == "mutual fund":
+        return "other"
+    return "other"
+
+
+def _compact_tiingo_metadata(payload: dict | None) -> dict:
+    if not payload:
+        return {}
+    keys = [
+        "ticker",
+        "exchange",
+        "assetType",
+        "priceCurrency",
+        "startDate",
+        "endDate",
+    ]
+    return {key: payload[key] for key in keys if payload.get(key)}
 
 
 async def _ensure_board_instruments(
     session: AsyncSession,
+    board_rows: list[MarketBoardRow],
 ) -> dict[str, Instrument]:
-    tickers = [row.ticker for row in MARKET_BOARD]
+    tickers = [row.ticker for row in board_rows]
+    if not tickers:
+        return {}
     existing = {
         instrument.ticker: instrument
         for instrument in await session.scalars(
             select(Instrument).where(Instrument.ticker.in_(tickers))
         )
     }
-    for row in MARKET_BOARD:
+    for row in board_rows:
         if row.ticker in existing:
             continue
         existing[row.ticker] = await upsert_instrument(

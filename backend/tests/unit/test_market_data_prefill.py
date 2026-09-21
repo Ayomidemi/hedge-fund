@@ -11,6 +11,7 @@ from app.services.ticker_intelligence.market_data import (
     _load_ngn_triage_sources,
     _load_us_identity_sources,
     _load_us_triage_sources,
+    _search_tiingo_suggestions,
     normalize_massive_base_url,
     prefill_ticker,
     resolve_prefill_scope,
@@ -216,6 +217,42 @@ class MarketDataPrefillTests(TestCase):
 
 
 class MarketDataPrefillRoutingTests(IsolatedAsyncioTestCase):
+    async def test_tiingo_search_maps_active_assets(self) -> None:
+        with (
+            patch(
+                "app.services.ticker_intelligence.market_data.settings.hf_tiingo_api_key",
+                "tiingo-key",
+            ),
+            patch(
+                "app.services.ticker_intelligence.market_data._safe_get",
+                new_callable=AsyncMock,
+            ) as safe_get,
+        ):
+            safe_get.return_value = ProviderResult(
+                payload=[
+                    {
+                        "ticker": "spy",
+                        "name": "SPDR S&P 500 ETF Trust",
+                        "assetType": "ETF",
+                        "isActive": True,
+                    },
+                    {
+                        "ticker": "dead",
+                        "name": "Delisted Corp",
+                        "assetType": "Stock",
+                        "isActive": False,
+                    },
+                ]
+            )
+
+            suggestions = await _search_tiingo_suggestions("spy", limit=4)
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0].ticker, "SPY")
+        self.assertEqual(suggestions[0].asset_class, "etf")
+        self.assertEqual(suggestions[0].currency, "USD")
+        safe_get.assert_awaited_once()
+
     async def test_ng_market_hint_only_calls_ngn_sources(self) -> None:
         with (
             patch(

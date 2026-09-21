@@ -209,21 +209,53 @@ export function InvestNews({
   const personalEmpty =
     overview.portfolio_tickers.length === 0 &&
     overview.watchlist_tickers.length === 0;
+  const incomeTickers = overview.income_tickers ?? [];
+  const incomeItems = overview.income_items ?? [];
+  const shelfTickers = incomeTickers.filter(isIncomeShelfSymbol);
+  const ratesTickers = incomeTickers.filter(
+    (symbol) => !isIncomeShelfSymbol(symbol),
+  );
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
         <p className="text-xs uppercase tracking-wide text-zinc-500">News</p>
-        <h2 className="mt-1 text-2xl font-semibold">Headlines for your book</h2>
+        <h2 className="mt-1 text-2xl font-semibold">Rates and income</h2>
         <p className="mt-3 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
           {overview.summary}
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
+          {ratesTickers.map((symbol) => (
+            <ContextChip
+              key={`r-${symbol}`}
+              href={instrumentHref(symbol)}
+              label={symbol}
+              kind="Rates"
+            />
+          ))}
+          {shelfTickers.map((symbol) => (
+            <ContextChip
+              key={`s-${symbol}`}
+              href={instrumentHref(symbol)}
+              label={symbol}
+              kind="Shelf"
+            />
+          ))}
           {overview.portfolio_tickers.slice(0, 8).map((symbol) => (
-            <ContextChip key={`p-${symbol}`} href={`/invest/instruments/${symbol}`} label={symbol} kind="Holding" />
+            <ContextChip
+              key={`p-${symbol}`}
+              href={instrumentHref(symbol)}
+              label={symbol}
+              kind="Holding"
+            />
           ))}
           {overview.watchlist_tickers.slice(0, 8).map((symbol) => (
-            <ContextChip key={`w-${symbol}`} href={`/invest/instruments/${symbol}`} label={symbol} kind="Watch" />
+            <ContextChip
+              key={`w-${symbol}`}
+              href={instrumentHref(symbol)}
+              label={symbol}
+              kind="Watch"
+            />
           ))}
         </div>
         <div className="mt-5 flex flex-wrap items-end gap-3">
@@ -259,7 +291,7 @@ export function InvestNews({
                   void handleTickerFocus();
                 }
               }}
-              placeholder="AAPL, SPY, BIL…"
+              placeholder="BIL, SHY, US-TBILL-13W…"
               className={`mt-1.5 ${inputControlClassName}`}
             />
           </div>
@@ -283,9 +315,20 @@ export function InvestNews({
           ) : null}
         </div>
         <p className="mt-3 text-xs text-zinc-500">
-          Discover is unusual tape. This page is article headlines only.
+          T-bills, Treasuries, FGN context, and listed duration proxies lead.
+          Discover stays unusual-price tape. This page is article headlines only.
         </p>
       </section>
+
+      <NewsSection
+        title="Rates and income"
+        description="Treasury, bill, FGN, and listed duration-proxy headlines from Tiingo."
+        items={incomeItems}
+        emptyLabel="No rates or income headlines stored yet. Tiingo is queried for BIL, SHY, IEF, and TLT when this tape is thin."
+        savingStars={savingStars}
+        onOpen={setSelectedArticle}
+        onToggleStar={handleToggleStar}
+      />
 
       {overview.ticker ? (
         <NewsSection
@@ -317,7 +360,7 @@ export function InvestNews({
         description={
           personalEmpty
             ? "Add names on Watchlist or take paper positions to fill this section."
-            : "Stories linked to your holdings and watchlist (including fixed-income proxies)."
+            : "Stories linked to your holdings and watchlist, including T-bill and Treasury proxies."
         }
         items={overview.for_you}
         emptyLabel={
@@ -366,18 +409,18 @@ export function InvestNews({
       </div>
 
       <NewsSection
-        title="On the boards"
-        description="Headlines for tickers on the Invest markets board — indices, rates proxies, and listed names."
+        title="Listed equity tape"
+        description="Index and sector headlines from the markets board. Rates proxies sit in the section above."
         items={overview.markets_items}
-        emptyLabel="No board headlines stored yet."
+        emptyLabel="No listed-equity board headlines stored yet."
         savingStars={savingStars}
         onOpen={setSelectedArticle}
         onToggleStar={handleToggleStar}
       />
 
       <NewsSection
-        title="Market tape"
-        description={paginationLabel(overview.headlines_page)}
+        title="All headlines"
+        description={`Broader tape after rates. ${paginationLabel(overview.headlines_page)}`}
         items={overview.headlines}
         emptyLabel="No market headlines in this filter."
         savingStars={savingStars}
@@ -551,7 +594,7 @@ function NewsRow({
         {item.tickers.slice(0, compact ? 4 : 6).map((symbol) => (
           <Link
             key={symbol}
-            href={`/invest/instruments/${encodeURIComponent(symbol)}`}
+            href={instrumentHref(symbol)}
             className="rounded-md border border-zinc-200 px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             {symbol}
@@ -672,6 +715,7 @@ function updateStar(
   const updateItems = (items: InvestNewsItem[]) =>
     items.map((item) => (item.id === itemId ? { ...item, starred } : item));
   const sourceItem = [
+    ...overview.income_items ?? [],
     ...overview.for_you,
     ...overview.portfolio_items,
     ...overview.watchlist_items,
@@ -687,6 +731,7 @@ function updateStar(
     : overview.saved_items.filter((item) => item.id !== itemId);
   return {
     ...overview,
+    income_items: updateItems(overview.income_items ?? []),
     for_you: updateItems(overview.for_you),
     portfolio_items: updateItems(overview.portfolio_items),
     watchlist_items: updateItems(overview.watchlist_items),
@@ -695,6 +740,17 @@ function updateStar(
     ticker_items: updateItems(overview.ticker_items),
     saved_items: savedItems,
   };
+}
+
+function isIncomeShelfSymbol(symbol: string) {
+  return /TBILL|TREASURY|FGN-/i.test(symbol);
+}
+
+function instrumentHref(symbol: string) {
+  if (isIncomeShelfSymbol(symbol)) {
+    return `/invest/fixed-income/${encodeURIComponent(symbol)}`;
+  }
+  return `/invest/instruments/${encodeURIComponent(symbol)}`;
 }
 
 function formatDate(value: string | null | undefined) {

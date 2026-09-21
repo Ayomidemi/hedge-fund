@@ -1,5 +1,8 @@
-from unittest import TestCase
+import io
+import zipfile
+from datetime import datetime, timezone
 from decimal import Decimal
+from unittest import TestCase
 
 from app.core.auth import (
     AuthenticatedUser,
@@ -25,7 +28,13 @@ from app.services.invest.fixed_income import (
     get_fixed_income_product,
     search_fixed_income_products,
 )
-from app.services.invest.markets import board_tickers
+from app.services.invest.markets import (
+    DEFAULT_MARKET_BOARD_RULES,
+    _board_item_from_rule,
+    _parse_tiingo_supported_tickers,
+    board_tickers,
+    rates_board_tickers,
+)
 from app.services.invest.risk import evaluate_order_risk
 
 
@@ -340,6 +349,53 @@ class InvestMarketsBoardTests(TestCase):
         self.assertIn("GTCO.NG", tickers)
         self.assertIn("SEPLAT.NG", tickers)
 
+    def test_rates_board_tickers_cover_fixed_income_proxies(self) -> None:
+        self.assertEqual(
+            rates_board_tickers(),
+            ("BIL", "SHY", "IEF", "TLT"),
+        )
+
+    def test_tiingo_supported_tickers_parser_filters_requested_symbols(self) -> None:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "supported_tickers.csv",
+                "\n".join(
+                    [
+                        "ticker,exchange,assetType,priceCurrency,startDate,endDate",
+                        "SPY,NYSE Arca,ETF,USD,1993-01-29,",
+                        "AAPL,NASDAQ,Stock,USD,1980-12-12,",
+                    ]
+                ),
+            )
+
+        parsed = _parse_tiingo_supported_tickers(buffer.getvalue(), {"SPY"})
+
+        self.assertEqual(set(parsed), {"SPY"})
+        self.assertEqual(parsed["SPY"]["assetType"], "ETF")
+        self.assertEqual(parsed["SPY"]["priceCurrency"], "USD")
+
+    def test_seed_item_uses_tiingo_metadata_when_available(self) -> None:
+        spy_rule = next(row for row in DEFAULT_MARKET_BOARD_RULES if row.ticker == "SPY")
+        seeded = _board_item_from_rule(
+            spy_rule,
+            display_order=10,
+            seeded_at=datetime(2026, 9, 21, tzinfo=timezone.utc),
+            tiingo_metadata={
+                "ticker": "SPY",
+                "exchange": "NYSE Arca",
+                "assetType": "ETF",
+                "priceCurrency": "USD",
+                "startDate": "1993-01-29",
+            },
+        )
+
+        self.assertEqual(seeded.ticker, "SPY")
+        self.assertEqual(seeded.asset_class, "etf")
+        self.assertEqual(seeded.exchange, "NYSE Arca")
+        self.assertEqual(seeded.source, "tiingo_supported_tickers")
+        self.assertEqual(seeded.source_metadata["assetType"], "ETF")
+
 
 class InvestNewsTickerTests(TestCase):
     def test_fixed_income_symbols_expand_to_listed_proxy(self) -> None:
@@ -355,16 +411,59 @@ class InvestNewsTickerTests(TestCase):
             ["SPY", "BIL"],
         )
 
-    def test_summary_personalizes_when_user_has_names(self) -> None:
+    def test_income_universe_covers_shelf_and_listed_proxies(self) -> None:
+        from app.services.invest.news import INCOME_TICKERS
+
+        self.assertIn("BIL", INCOME_TICKERS)
+        self.assertIn("SHY", INCOME_TICKERS)
+        self.assertIn("IEF", INCOME_TICKERS)
+        self.assertIn("TLT", INCOME_TICKERS)
+        self.assertIn("US-TBILL-13W", INCOME_TICKERS)
+        self.assertIn("FGN-BOND-2029", INCOME_TICKERS)
+
+    def test_income_story_matches_rates_copy_and_proxies(self) -> None:
+        from app.services.invest.news import is_income_story
+
+        self.assertTrue(
+            is_income_story(
+                title="Treasury yields jump after FOMC",
+                summary="The 10-year Treasury yield rose 8 basis points.",
+                tickers=["SPY"],
+            )
+        )
+        self.assertTrue(
+            is_income_story(
+                title="BIL tracks short bills",
+                summary=None,
+                tickers=["BIL"],
+            )
+        )
+        self.assertTrue(
+            is_income_story(
+                title="DMO clears FGN bond auction",
+                summary="Naira demand stayed firm at the latest stop rate.",
+                tickers=[],
+                jurisdiction="NG",
+            )
+        )
+        self.assertFalse(
+            is_income_story(
+                title="NVDA earnings beat lifts semiconductor names",
+                summary="Data-center demand remains the main driver.",
+                tickers=["NVDA"],
+            )
+        )
+
+    def test_summary_leads_with_rates(self) -> None:
         from app.services.invest.news import _summary
 
-        personal = _summary(
-            portfolio_count=2, watchlist_count=1, for_you_count=4
-        )
-        empty = _summary(portfolio_count=0, watchlist_count=0, for_you_count=0)
-        self.assertIn("holding", personal)
-        self.assertIn("watchlist", personal)
-        self.assertIn("boards", empty)
+        rates = _summary(income_count=6, portfolio_count=2, watchlist_count=1)
+        personal = _summary(income_count=0, portfolio_count=2, watchlist_count=1)
+        empty = _summary(income_count=0, portfolio_count=0, watchlist_count=0)
+        self.assertIn("rates and income", rates)
+        self.assertIn("holdings", rates)
+        self.assertIn("rates headlines", personal)
+        self.assertIn("T-bills", empty)
 
 
 class InvestDiscoverCopyTests(TestCase):

@@ -213,6 +213,16 @@ async def search_ticker_suggestions(
         if len(suggestions) >= limit:
             break
 
+    remaining = limit - len(suggestions)
+    if remaining > 0 and market == "US":
+        for item in await _search_tiingo_suggestions(query, limit=remaining * 2):
+            if item.ticker in seen:
+                continue
+            suggestions.append(item)
+            seen.add(item.ticker)
+            if len(suggestions) >= limit:
+                break
+
     return suggestions
 
 
@@ -437,6 +447,64 @@ async def _load_tiingo_identity_sources(context: PrefillBuildContext) -> None:
 
     context.tiingo_meta = meta.payload if isinstance(meta.payload, dict) else {}
     _record_provider(context, "tiingo", [meta])
+
+
+async def _search_tiingo_suggestions(
+    query: str,
+    *,
+    limit: int,
+) -> list[TickerSuggestionResponse]:
+    if not settings.hf_tiingo_api_key:
+        return []
+
+    async with httpx.AsyncClient(
+        base_url=settings.tiingo_base_url,
+        timeout=httpx.Timeout(10.0),
+        headers={"Authorization": f"Token {settings.hf_tiingo_api_key}"},
+    ) as client:
+        result = await _safe_get(
+            client,
+            "/tiingo/utilities/search",
+            params={"query": query.strip()},
+        )
+
+    if result.warning:
+        logger.warning("tiingo_search_failed", extra={"warning": result.warning})
+        return []
+
+    suggestions: list[TickerSuggestionResponse] = []
+    for item in _list_payload(result.payload):
+        if not isinstance(item, dict):
+            continue
+        if item.get("isActive") is False:
+            continue
+        ticker = str(item.get("ticker") or "").strip().upper()
+        name = str(item.get("name") or ticker).strip()
+        if not ticker or not name:
+            continue
+        suggestions.append(
+            TickerSuggestionResponse(
+                ticker=ticker,
+                name=name,
+                asset_class=_tiingo_search_asset_class(item.get("assetType")),
+                exchange=None,
+                currency="USD",
+                sector=None,
+                industry=str(item.get("assetType") or "").strip() or None,
+            )
+        )
+        if len(suggestions) >= limit:
+            break
+    return suggestions
+
+
+def _tiingo_search_asset_class(asset_type: object) -> str:
+    normalized = str(asset_type or "").strip().lower()
+    if normalized == "etf":
+        return "etf"
+    if normalized == "stock":
+        return "equity"
+    return "other"
 
 
 async def _load_tiingo_sources(context: PrefillBuildContext) -> None:

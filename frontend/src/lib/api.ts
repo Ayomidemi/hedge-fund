@@ -2895,6 +2895,8 @@ export type InvestNewsOverview = {
   portfolio_items: InvestNewsItem[];
   watchlist_items: InvestNewsItem[];
   markets_items: InvestNewsItem[];
+  income_tickers?: string[];
+  income_items?: InvestNewsItem[];
   headlines: InvestNewsItem[];
   headlines_page: InvestNewsPagination;
   ticker: string | null;

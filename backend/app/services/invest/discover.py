@@ -15,7 +15,7 @@ from app.api.schemas.invest import (
 from app.core.auth import AuthenticatedUser
 from app.core.market_constants import RADAR_PULSE_TICKERS
 from app.models import RetailWatchlistItem
-from app.services.invest.markets import board_tickers
+from app.services.invest.markets import active_board_tickers
 from app.services.market_radar.overview import build_radar_overview
 
 UNUSUAL_LIMIT = 10
@@ -44,7 +44,7 @@ async def build_invest_discover(
     generated_at = datetime.now(timezone.utc)
     radar = await build_radar_overview(session, jurisdiction="all")
     watchlist_tickers = await _retail_watchlist_tickers(session, user.id)
-    board = {ticker.upper() for ticker in board_tickers()}
+    board = {ticker.upper() for ticker in await active_board_tickers(session)}
     flagged = list(radar.flagged)
     unusual = [
         item

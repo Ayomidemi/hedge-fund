@@ -27,6 +27,7 @@ from app.api.schemas.invest import (
     InvestWatchlistItemResponse,
 )
 from app.api.schemas.operating_core import InstrumentCreate
+from app.api.schemas.ticker_intelligence import TickerSuggestionResponse
 from app.core.auth import (
     AuthenticatedUser,
     user_can_access_capital,
@@ -616,6 +617,7 @@ async def search_instruments(
     for item in suggestions:
         if item.ticker in seen:
             continue
+        await _ensure_search_instrument(session, item)
         price = await get_cached_quote_price(session, item.ticker)
         results.append(
             InvestInstrumentResponse(
@@ -631,6 +633,29 @@ async def search_instruments(
         )
         seen.add(item.ticker)
     return results
+
+
+async def _ensure_search_instrument(
+    session: AsyncSession,
+    item: TickerSuggestionResponse,
+) -> Instrument:
+    instrument = await session.scalar(
+        select(Instrument).where(Instrument.ticker == item.ticker)
+    )
+    if instrument is not None:
+        return instrument
+    return await upsert_instrument(
+        session,
+        InstrumentCreate(
+            ticker=item.ticker,
+            name=item.name,
+            asset_class=item.asset_class,
+            exchange=item.exchange,
+            currency=item.currency,
+            sector=item.sector,
+            industry=item.industry,
+        ),
+    )
 
 
 async def get_instrument(

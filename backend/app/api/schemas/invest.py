@@ -314,6 +314,8 @@ class InvestNewsOverviewResponse(BaseModel):
     portfolio_items: list[InvestNewsItemResponse] = Field(default_factory=list)
     watchlist_items: list[InvestNewsItemResponse] = Field(default_factory=list)
     markets_items: list[InvestNewsItemResponse] = Field(default_factory=list)
+    income_tickers: list[str] = Field(default_factory=list)
+    income_items: list[InvestNewsItemResponse] = Field(default_factory=list)
     headlines: list[InvestNewsItemResponse] = Field(default_factory=list)
     headlines_page: InvestNewsPaginationResponse
     ticker: str | None = None

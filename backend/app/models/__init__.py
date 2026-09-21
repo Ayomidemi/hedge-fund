@@ -1504,6 +1504,44 @@ class SystemLogEntry(Base, TimestampMixin):
     )
 
 
+class InvestMarketBoardItem(Base, TimestampMixin):
+    __tablename__ = "invest_market_board_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    label: Mapped[str] = mapped_column(String(96), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    board_group: Mapped[str] = mapped_column(String(64), nullable=False)
+    group_title: Mapped[str] = mapped_column(String(128), nullable=False)
+    group_description: Mapped[str] = mapped_column(Text, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    asset_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    exchange: Mapped[str | None] = mapped_column(String(64))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    sector: Mapped[str | None] = mapped_column(String(128))
+    source: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="board_rule"
+    )
+    source_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        UniqueConstraint("ticker", name="uq_invest_market_board_items_ticker"),
+        Index("ix_invest_market_board_items_ticker", "ticker"),
+        Index(
+            "ix_invest_market_board_active_order",
+            "is_active",
+            "market",
+            "board_group",
+            "display_order",
+        ),
+    )
+
+
 class RetailAccount(Base, TimestampMixin):
     """Pease Invest brokerage account. Separate book from Capital portfolios."""
 

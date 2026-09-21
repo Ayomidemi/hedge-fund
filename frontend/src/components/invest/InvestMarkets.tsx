@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { InvestFixedIncomeProduct, InvestMarketQuote, InvestMarkets } from "@/lib/api";
 import { money, signedPercent } from "@/components/invest/format";
+import { InvestSearch } from "@/components/invest/InvestSearch";
 
 export function InvestMarketsBoard({ markets }: { markets: InvestMarkets }) {
   return (
@@ -11,6 +12,9 @@ export function InvestMarketsBoard({ markets }: { markets: InvestMarkets }) {
         <p className="mt-3 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
           {markets.summary}
         </p>
+        <div className="mt-5">
+          <InvestSearch initialQuery="" variant="embedded" />
+        </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {markets.sessions.map((session) => (
             <span

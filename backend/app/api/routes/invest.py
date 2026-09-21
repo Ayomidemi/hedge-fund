@@ -242,7 +242,9 @@ async def search_instruments(
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[InvestInstrumentResponse]:
-    return await invest.search_instruments(session, query, market)
+    response = await invest.search_instruments(session, query, market)
+    await session.commit()
+    return response
 
 
 @router.get(
@@ -317,7 +319,9 @@ async def read_discover(
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
 ) -> InvestDiscoverResponse:
-    return await build_invest_discover(session, user)
+    response = await build_invest_discover(session, user)
+    await session.commit()
+    return response
 
 
 @router.get("/news", response_model=InvestNewsOverviewResponse)
@@ -333,7 +337,7 @@ async def read_invest_news(
     session: AsyncSession = Depends(get_session),
 ) -> InvestNewsOverviewResponse:
     normalized_market = (market or "").strip().upper()
-    return await build_invest_news_overview(
+    response = await build_invest_news_overview(
         session,
         user,
         ticker=ticker,
@@ -344,3 +348,5 @@ async def read_invest_news(
         ticker_page=ticker_page,
         ticker_page_size=ticker_page_size,
     )
+    await session.commit()
+    return response
