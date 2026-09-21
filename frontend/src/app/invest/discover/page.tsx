@@ -42,8 +42,12 @@ export default async function InvestDiscoverPage() {
 
       {discover.next_actions.length > 0 ? (
         <section className="grid gap-3 md:grid-cols-2">
-          {discover.next_actions.map((action) => (
-            <DiscoverCard key={action.title} item={action} compact />
+          {discover.next_actions.map((action, index) => (
+            <DiscoverCard
+              key={discoverItemKey("next_actions", action, index)}
+              item={action}
+              compact
+            />
           ))}
         </section>
       ) : null}
@@ -58,8 +62,11 @@ export default async function InvestDiscoverPage() {
               </div>
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
-              {section.items.map((item) => (
-                <DiscoverCard key={`${section.id}-${item.title}`} item={item} />
+              {section.items.map((item, index) => (
+                <DiscoverCard
+                  key={discoverItemKey(section.id, item, index)}
+                  item={item}
+                />
               ))}
             </div>
           </section>
@@ -97,9 +104,9 @@ function DiscoverCard({
       </div>
       {item.metadata.length > 0 ? (
         <div className={`mt-4 flex flex-wrap gap-2 ${compact ? "text-[11px]" : "text-xs"}`}>
-          {item.metadata.filter(Boolean).map((value) => (
+          {item.metadata.filter(Boolean).map((value, index) => (
             <span
-              key={value}
+              key={`${value}-${index}`}
               className="rounded-md bg-zinc-100 px-2 py-1 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
             >
               {value}
@@ -123,6 +130,16 @@ function DiscoverCard({
   }
 
   return <Link href={item.href}>{content}</Link>;
+}
+
+function discoverItemKey(sectionId: string, item: InvestDiscoverItem, index: number) {
+  return [
+    sectionId,
+    item.href ?? "no-href",
+    item.title,
+    item.badge ?? "no-badge",
+    index,
+  ].join("|");
 }
 
 function toneClass(tone: string) {

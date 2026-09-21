@@ -14,11 +14,12 @@ import {
   createInvestOrder,
   type InvestInstrument,
   type InvestInstrumentResearch,
+  type InvestPeaseView,
   type InvestResearchSection,
 } from "@/lib/api";
 import { money } from "@/components/invest/format";
 
-type DetailTab = "overview" | "research" | "order";
+type DetailTab = "overview" | "analysis" | "order";
 
 export function InvestInstrumentDetail({
   instrument,
@@ -81,9 +82,11 @@ export function InvestInstrumentDetail({
   const overviewSections = sections.filter((section) =>
     ["instrument_profile", "price_context"].includes(section.id),
   );
-  const researchSections = sections.filter(
-    (section) => !["instrument_profile", "price_context"].includes(section.id),
+  const analysisSections = sections.filter(
+    (section) =>
+      !["instrument_profile", "price_context", "pease_view"].includes(section.id),
   );
+  const peaseView = research?.pease_view ?? null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
@@ -142,7 +145,7 @@ export function InvestInstrumentDetail({
       <div className="flex gap-2 overflow-x-auto rounded-2xl border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-950">
         {([
           ["overview", "Overview"],
-          ["research", "Retail research"],
+          ["analysis", "Analysis"],
           ["order", "Paper order"],
         ] as const).map(([value, label]) => (
           <button
@@ -172,25 +175,26 @@ export function InvestInstrumentDetail({
         </div>
       ) : null}
 
-      {tab === "research" ? (
+      {tab === "analysis" ? (
         <div className="space-y-4">
+          {peaseView ? <PeaseViewCard view={peaseView} /> : null}
           <div className="grid gap-4 lg:grid-cols-2">
-            {researchSections.length > 0 ? (
-              researchSections.map((section) => (
+            {analysisSections.length > 0 ? (
+              analysisSections.map((section) => (
                 <ResearchSectionCard key={section.id} section={section} />
               ))
-            ) : (
+            ) : peaseView ? null : (
               <section className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
-                Retail research has not been generated for this instrument yet.
+                Live factor scores have not been generated for this instrument yet.
               </section>
             )}
           </div>
           {research?.withheld_capital_signals.length ? (
             <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-              <h3 className="text-lg font-semibold">Capital-only signals withheld</h3>
+              <h3 className="text-lg font-semibold">Not shown on Invest</h3>
               <p className="mt-2 text-sm text-zinc-500">
-                Invest shows retail-safe context only. These fund-workflow fields stay
-                inside Pease Capital.
+                Fund-desk fields stay inside Pease Capital. This page is a factor
+                snapshot, not a recommendation.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 {research.withheld_capital_signals.map((item) => (
@@ -288,6 +292,74 @@ export function InvestInstrumentDetail({
   );
 }
 
+function PeaseViewCard({ view }: { view: InvestPeaseView }) {
+  return (
+    <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-zinc-500">Pease View</p>
+          <h3 className="mt-1 text-lg font-semibold">{view.stance_label}</h3>
+          <p className="mt-2 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
+            {view.summary}
+          </p>
+        </div>
+        <span className={`rounded-md px-2 py-1 text-xs font-medium ${stanceClass(view.stance)}`}>
+          {Number(view.coverage_pct).toFixed(0)}% coverage
+        </span>
+      </div>
+      <div className="mt-5 space-y-3">
+        {view.factors.map((factor) => {
+          const score = factor.score == null ? null : Number(factor.score);
+          return (
+            <div key={factor.id}>
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-medium">{factor.label}</span>
+                <span className={toneClass(factor.tone)}>
+                  {score == null ? "Unavailable" : `${Math.round(score)}/100`}
+                </span>
+              </div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-900">
+                <div
+                  className={`h-full rounded-full ${barClass(factor.tone)}`}
+                  style={{ width: `${score == null ? 0 : Math.max(4, Math.min(100, score))}%` }}
+                />
+              </div>
+              <p className="mt-1 text-xs text-zinc-500">{factor.notes}</p>
+            </div>
+          );
+        })}
+      </div>
+      {view.looks_good.length > 0 ? (
+        <div className="mt-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            What looks good
+          </p>
+          <ul className="mt-2 space-y-1 text-sm text-zinc-600 dark:text-zinc-400">
+            {view.looks_good.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {view.watch_outs.length > 0 ? (
+        <div className="mt-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            What to watch
+          </p>
+          <ul className="mt-2 space-y-1 text-sm text-zinc-600 dark:text-zinc-400">
+            {view.watch_outs.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {view.radar_note ? (
+        <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">{view.radar_note}</p>
+      ) : null}
+    </section>
+  );
+}
+
 function ResearchSectionCard({ section }: { section: InvestResearchSection }) {
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
@@ -342,6 +414,25 @@ function ProfileDetail({ label, value }: { label: string; value: string }) {
       <p className="mt-1 font-semibold capitalize">{value.replaceAll("_", " ")}</p>
     </div>
   );
+}
+
+function barClass(tone: string) {
+  if (tone === "positive") return "bg-emerald-700";
+  if (tone === "negative") return "bg-red-700";
+  return "bg-zinc-400";
+}
+
+function stanceClass(stance: string) {
+  if (stance === "constructive") {
+    return "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200";
+  }
+  if (stance === "caution") {
+    return "bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200";
+  }
+  if (stance === "incomplete") {
+    return "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200";
+  }
+  return "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300";
 }
 
 function toneClass(tone: string) {

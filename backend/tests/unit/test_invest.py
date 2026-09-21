@@ -76,6 +76,57 @@ class InvestPermissionTests(TestCase):
         self.assertIn("Capital target weights", withheld)
         self.assertIn("PM approval state", withheld)
 
+    def test_pease_view_uses_factor_scores_without_fund_outputs(self) -> None:
+        from app.api.schemas.ticker_intelligence import TickerMetricsInput
+        from app.services.invest.research import pease_view_from_scorecard, retail_stance
+        from app.services.ticker_intelligence.scoring import score_ticker
+
+        strong = score_ticker(
+            TickerMetricsInput(
+                revenue_growth_pct=Decimal("18"),
+                earnings_growth_pct=Decimal("16"),
+                net_margin_pct=Decimal("22"),
+                free_cash_flow_yield_pct=Decimal("5"),
+                pe_ratio=Decimal("18"),
+                debt_to_equity=Decimal("0.3"),
+                price_vs_200d_pct=Decimal("8"),
+                relative_strength_6m_pct=Decimal("12"),
+                volatility_30d_pct=Decimal("18"),
+            ),
+            "equity",
+        )
+        view = pease_view_from_scorecard(strong)
+        stance, label = retail_stance(strong)
+        dumped = view.model_dump_json().lower()
+        self.assertEqual(stance, "constructive")
+        self.assertEqual(label, "Looks constructive")
+        self.assertTrue(view.looks_good)
+        self.assertNotIn("recommended_weight", dumped)
+        self.assertNotIn("high-conviction", dumped)
+        self.assertNotIn("target weight", dumped)
+        factor_ids = {factor.id for factor in view.factors}
+        self.assertEqual(
+            factor_ids,
+            {"quality", "growth", "valuation", "risk", "momentum"},
+        )
+
+    def test_pease_view_caution_on_leverage_blockers(self) -> None:
+        from app.api.schemas.ticker_intelligence import TickerMetricsInput
+        from app.services.invest.research import pease_view_from_scorecard
+        from app.services.ticker_intelligence.scoring import score_ticker
+
+        stressed = score_ticker(
+            TickerMetricsInput(
+                net_margin_pct=Decimal("-2"),
+                free_cash_flow_yield_pct=Decimal("-9"),
+                debt_to_equity=Decimal("6.5"),
+            ),
+            "equity",
+        )
+        view = pease_view_from_scorecard(stressed)
+        self.assertEqual(view.stance, "caution")
+        self.assertTrue(view.watch_outs)
+
     def test_payload_prefers_pease_role_over_jwt_authenticated(self) -> None:
         from app.core.auth import _user_from_payload
 

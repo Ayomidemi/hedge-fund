@@ -141,12 +141,34 @@ class InvestResearchSectionResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class InvestPeaseFactorResponse(BaseModel):
+    id: str
+    label: str
+    score: Decimal | None = None
+    notes: str
+    tone: str = "neutral"
+
+
+class InvestPeaseViewResponse(BaseModel):
+    stance: str
+    stance_label: str
+    summary: str
+    coverage_pct: Decimal
+    looks_good: list[str] = Field(default_factory=list)
+    watch_outs: list[str] = Field(default_factory=list)
+    factors: list[InvestPeaseFactorResponse] = Field(default_factory=list)
+    radar_note: str | None = None
+    source: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class InvestInstrumentResearchResponse(BaseModel):
     ticker: str
     name: str
     generated_at: datetime
     overview: str
     sections: list[InvestResearchSectionResponse] = Field(default_factory=list)
+    pease_view: InvestPeaseViewResponse | None = None
     withheld_capital_signals: list[str] = Field(default_factory=list)
     news_href: str | None = None
 

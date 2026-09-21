@@ -2728,12 +2728,34 @@ export type InvestResearchSection = {
   notes: string[];
 };
 
+export type InvestPeaseFactor = {
+  id: string;
+  label: string;
+  score: string | null;
+  notes: string;
+  tone: string;
+};
+
+export type InvestPeaseView = {
+  stance: string;
+  stance_label: string;
+  summary: string;
+  coverage_pct: string;
+  looks_good: string[];
+  watch_outs: string[];
+  factors: InvestPeaseFactor[];
+  radar_note: string | null;
+  source: string | null;
+  warnings: string[];
+};
+
 export type InvestInstrumentResearch = {
   ticker: string;
   name: string;
   generated_at: string;
   overview: string;
   sections: InvestResearchSection[];
+  pease_view?: InvestPeaseView | null;
   withheld_capital_signals: string[];
   news_href: string | null;
 };
