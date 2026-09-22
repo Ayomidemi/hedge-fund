@@ -2701,6 +2701,9 @@ export type InvestWatchlistItem = {
   date_added: string;
   price: string | null;
   change_pct?: string | null;
+  headline?: string | null;
+  unusual?: boolean;
+  unusual_label?: string | null;
 };
 
 export type InvestInstrument = {
@@ -2794,6 +2797,9 @@ export type InvestFixedIncomeProduct = {
   next_coupon_date: string | null;
   face_value_increment: string | null;
   quote_status: string | null;
+  quote_source: string | null;
+  quote_as_of: string | null;
+  quote_stale: boolean;
   minimum_order_amount: string;
   liquidity: string;
   risk_level: string;
@@ -2802,6 +2808,7 @@ export type InvestFixedIncomeProduct = {
   proxy_ticker?: string | null;
   proxy_label?: string | null;
   retail_notes: string[];
+  pricing_assumptions: string[];
   cashflows: InvestFixedIncomeCashflow[];
   risk_checks: InvestRiskCheck[];
 };
@@ -2855,6 +2862,7 @@ export type InvestDiscoverSection = {
 export type InvestDiscover = {
   generated_at: string;
   summary: string;
+  narrative?: string | null;
   sections: InvestDiscoverSection[];
   next_actions: InvestDiscoverItem[];
 };
@@ -3016,6 +3024,17 @@ export function getInvestInstrument(ticker: string, options?: ApiRequestOptions)
 export function getInvestInstrumentResearch(ticker: string, options?: ApiRequestOptions) {
   return fetchApi<InvestInstrumentResearch>(
     `/api/invest/instruments/${encodeURIComponent(ticker)}/research`,
+    options,
+  );
+}
+
+export function getInvestInstrumentChart(
+  ticker: string,
+  range = "3m",
+  options?: ApiRequestOptions,
+) {
+  return fetchApi<RadarWatchlistChart>(
+    `/api/invest/instruments/${encodeURIComponent(ticker)}/chart?range=${encodeURIComponent(range)}`,
     options,
   );
 }

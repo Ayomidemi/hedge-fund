@@ -1,7 +1,8 @@
 import Link from "next/link";
-import type { InvestFixedIncomeProduct, InvestMarketQuote, InvestMarkets } from "@/lib/api";
+import type { InvestMarketQuote, InvestMarkets } from "@/lib/api";
 import { money, signedPercent } from "@/components/invest/format";
 import { InvestSearch } from "@/components/invest/InvestSearch";
+import { InvestFixedIncomeShelf } from "@/components/invest/InvestFixedIncomeShelf";
 
 export function InvestMarketsBoard({ markets }: { markets: InvestMarkets }) {
   return (
@@ -67,10 +68,8 @@ export function InvestMarketsBoard({ markets }: { markets: InvestMarkets }) {
           Bills and bonds show modeled yield, clean price, accrued interest, dirty
           price, settlement, and projected payout before you place a paper order.
         </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          {markets.fixed_income.map((product) => (
-            <FixedIncomeCard key={product.ticker} product={product} />
-          ))}
+        <div className="mt-4">
+          <InvestFixedIncomeShelf products={markets.fixed_income} />
         </div>
       </section>
     </div>
@@ -108,76 +107,6 @@ function MarketRow({ item }: { item: InvestMarketQuote }) {
         </div>
       </Link>
     </li>
-  );
-}
-
-function FixedIncomeCard({ product }: { product: InvestFixedIncomeProduct }) {
-  return (
-    <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-      <Link href={`/invest/fixed-income/${product.ticker}`} className="block">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="font-semibold">{product.name}</p>
-            <p className="mt-1 text-sm text-zinc-500">
-              {product.issuer} · {product.currency}
-            </p>
-          </div>
-          <span className="rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
-            {product.market}
-          </span>
-        </div>
-        <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-zinc-500">YTM</dt>
-            <dd className="mt-1 font-semibold tabular-nums">
-              {product.yield_to_maturity_pct
-                ? `${Number(product.yield_to_maturity_pct).toFixed(2)}%`
-                : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-zinc-500">
-              Dirty /100
-            </dt>
-            <dd className="mt-1 font-semibold tabular-nums">
-              {product.dirty_price ? money(product.dirty_price, product.currency) : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-zinc-500">
-              Maturity
-            </dt>
-            <dd className="mt-1 font-semibold tabular-nums">
-              {product.maturity_date ?? "Issue dependent"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-zinc-500">
-              Minimum
-            </dt>
-            <dd className="mt-1 font-semibold tabular-nums">
-              {money(product.minimum_order_amount, product.currency)}
-            </dd>
-          </div>
-        </dl>
-      </Link>
-      <Link
-        href={`/invest/fixed-income/${product.ticker}`}
-        className="mt-4 inline-block text-sm font-medium underline"
-      >
-        Open fixed-income order
-      </Link>
-      {product.proxy_ticker ? (
-        <Link
-          href={`/invest/instruments/${product.proxy_ticker}`}
-          className="ml-4 mt-4 inline-block text-sm font-medium text-zinc-500 underline"
-        >
-          {product.proxy_label ?? `Paper with ${product.proxy_ticker}`}
-        </Link>
-      ) : (
-        <p className="mt-3 text-xs text-zinc-500">No listed ETF proxy on this board.</p>
-      )}
-    </div>
   );
 }
 

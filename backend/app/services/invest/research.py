@@ -16,6 +16,7 @@ from app.api.schemas.invest import (
 )
 from app.api.schemas.ticker_intelligence import TickerMetricsInput
 from app.models import Instrument, InstrumentQuote, RadarSnapshot
+from app.services.invest.markets import rates_board_tickers
 from app.services.market_data.quote_cache import get_or_fetch_quote_price
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.market_data import (
@@ -33,22 +34,31 @@ _FACTOR_MAP = {
     "Balance Sheet Risk": ("risk", "Balance sheet"),
     "Momentum": ("momentum", "Momentum"),
 }
+_PRICE_SNAPSHOT_CLASSES = {"etf", "bond", "cash_equivalent"}
+_RATES_TICKERS = set(rates_board_tickers())
 
 
 async def build_listed_research(
     session: AsyncSession, instrument: Instrument
 ) -> InvestInstrumentResearchResponse:
     generated_at = datetime.now(timezone.utc)
-    quote = await _quote(session, instrument)
-    live_price = await get_or_fetch_quote_price(
-        session, instrument.ticker, instrument_id=instrument.id
+    ticker = instrument.ticker
+    instrument_id = instrument.id
+    quote = await session.scalar(
+        select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument_id)
     )
-    radar_note = await _radar_note(session, instrument.ticker)
+    live_price = await get_or_fetch_quote_price(
+        session, ticker, instrument_id=instrument_id
+    )
+    refreshed = await session.get(Instrument, instrument_id)
+    if refreshed is not None:
+        instrument = refreshed
+    radar_note = await _radar_note(session, ticker)
     pease_view: InvestPeaseViewResponse | None = None
     metrics: TickerMetricsInput | None = None
 
     try:
-        prefill = await prefill_ticker(instrument.ticker, scope="analysis")
+        prefill = await prefill_ticker(ticker, scope="invest")
         instrument = await upsert_instrument(session, prefill.instrument)
         metrics = prefill.metrics
         if live_price is not None:
@@ -59,9 +69,12 @@ async def build_listed_research(
             radar_note=radar_note,
             source=prefill.provider,
             warnings=list(prefill.source_warnings),
+            asset_class=instrument.asset_class,
+            ticker=instrument.ticker,
+            metrics=metrics,
         )
     except (MarketDataUnavailableError, Exception) as exc:
-        logger.warning("invest_research_prefill_failed ticker=%s error=%s", instrument.ticker, exc)
+        logger.warning("invest_research_prefill_failed ticker=%s error=%s", ticker, exc)
         pease_view = None
         metrics = None
 
@@ -83,11 +96,31 @@ def pease_view_from_scorecard(
     radar_note: str | None = None,
     source: str | None = None,
     warnings: list[str] | None = None,
+    asset_class: str = "equity",
+    ticker: str | None = None,
+    metrics: TickerMetricsInput | None = None,
 ) -> InvestPeaseViewResponse:
-    stance, stance_label = retail_stance(scorecard)
-    factors = [
-        _factor(score) for score in scorecard.scores if score.name in _FACTOR_MAP
-    ]
+    price_snapshot = is_price_snapshot(asset_class, ticker)
+    stance, stance_label = retail_stance(
+        scorecard, price_snapshot=price_snapshot
+    )
+    if price_snapshot and metrics is not None:
+        factors = price_snapshot_factors(metrics)
+        coverage = scorecard.timing_coverage
+        summary = (
+            f"{stance_label}. Price-path snapshot from listed marks — "
+            f"{coverage:.0f}% of trend inputs are filled. "
+            "This is not a recommendation to buy or sell."
+        )
+    else:
+        factors = [
+            _factor(score) for score in scorecard.scores if score.name in _FACTOR_MAP
+        ]
+        coverage = scorecard.capital_coverage
+        summary = (
+            f"{stance_label}. {coverage:.0f}% of the fundamental inputs are filled. "
+            "This is a factor snapshot, not a recommendation to buy or sell."
+        )
     looks_good = [
         f"{factor.label} looks relatively strong ({_score_text(factor.score)})."
         for factor in factors
@@ -98,11 +131,6 @@ def pease_view_from_scorecard(
         f"{factor.label} is a weak spot ({_score_text(factor.score)})."
         for factor in factors
         if factor.score is not None and factor.score <= Decimal("40")
-    )
-    coverage = scorecard.capital_coverage
-    summary = (
-        f"{stance_label}. {coverage:.0f}% of the fundamental inputs are filled. "
-        "This is a factor snapshot, not a recommendation to buy or sell."
     )
     return InvestPeaseViewResponse(
         stance=stance,
@@ -118,24 +146,97 @@ def pease_view_from_scorecard(
     )
 
 
-def retail_stance(scorecard: TickerScorecard) -> tuple[str, str]:
-    if scorecard.hard_blockers:
+def retail_stance(
+    scorecard: TickerScorecard, *, price_snapshot: bool = False
+) -> tuple[str, str]:
+    if scorecard.hard_blockers and not price_snapshot:
         return "caution", "Caution"
-    if (
-        scorecard.capital_coverage < Decimal("40")
-        or scorecard.confidence_score < Decimal("45")
-    ):
-        return "incomplete", "Not enough data"
-    capital = (
-        scorecard.capital_score
-        if scorecard.capital_score is not None
-        else scorecard.composite_score
-    )
+    if price_snapshot:
+        if scorecard.timing_coverage < Decimal("40"):
+            return "incomplete", "Not enough data"
+        capital = (
+            scorecard.timing_score
+            if scorecard.timing_score is not None
+            else scorecard.composite_score
+        )
+    else:
+        if (
+            scorecard.capital_coverage < Decimal("40")
+            or scorecard.confidence_score < Decimal("45")
+        ):
+            return "incomplete", "Not enough data"
+        capital = (
+            scorecard.capital_score
+            if scorecard.capital_score is not None
+            else scorecard.composite_score
+        )
     if capital >= Decimal("65"):
         return "constructive", "Looks constructive"
     if capital >= Decimal("50"):
         return "mixed", "Mixed"
     return "caution", "Caution"
+
+
+def is_price_snapshot(asset_class: str | None, ticker: str | None = None) -> bool:
+    if (asset_class or "").lower() in _PRICE_SNAPSHOT_CLASSES:
+        return True
+    return (ticker or "").upper() in _RATES_TICKERS
+
+
+def price_snapshot_factors(metrics: TickerMetricsInput) -> list[InvestPeaseFactorResponse]:
+    return [
+        _banded_factor(
+            "momentum",
+            "Vs 200-day",
+            metrics.price_vs_200d_pct,
+            notes="Listed funds are scored on the price path, not company earnings.",
+        ),
+        _banded_factor(
+            "growth",
+            "6-month strength",
+            metrics.relative_strength_6m_pct,
+            notes="Relative move over about six months of daily marks.",
+        ),
+        _banded_factor(
+            "risk",
+            "30-day volatility",
+            metrics.volatility_30d_pct,
+            invert=True,
+            notes="Lower realized volatility scores as calmer duration/market risk.",
+        ),
+    ]
+
+
+def _banded_factor(
+    factor_id: str,
+    label: str,
+    value: Decimal | None,
+    *,
+    invert: bool = False,
+    notes: str,
+) -> InvestPeaseFactorResponse:
+    score = _band_score(value, invert=invert)
+    return InvestPeaseFactorResponse(
+        id=factor_id,
+        label=label,
+        score=score,
+        notes=notes if value is not None else f"{notes} Not enough history yet.",
+        tone=_score_tone(score),
+    )
+
+
+def _band_score(value: Decimal | None, *, invert: bool = False) -> Decimal | None:
+    if value is None:
+        return None
+    if invert:
+        score = Decimal("80") - (value * Decimal("2"))
+    else:
+        score = Decimal("50") + (value * Decimal("2.5"))
+    if score < Decimal("5"):
+        return Decimal("5")
+    if score > Decimal("95"):
+        return Decimal("95")
+    return score.quantize(Decimal("1"))
 
 
 def ratio_metrics(metrics: TickerMetricsInput) -> list[InvestResearchMetricResponse]:
@@ -164,6 +265,27 @@ def ratio_metrics(metrics: TickerMetricsInput) -> list[InvestResearchMetricRespo
                 and metrics.debt_to_equity >= Decimal("2")
                 else "neutral"
             ),
+        ),
+        _signed_metric(
+            "Vs 200-day", _pct(metrics.price_vs_200d_pct), metrics.price_vs_200d_pct
+        ),
+        _signed_metric(
+            "6m relative strength",
+            _pct(metrics.relative_strength_6m_pct),
+            metrics.relative_strength_6m_pct,
+        ),
+        InvestResearchMetricResponse(
+            label="30d volatility",
+            value=_pct(metrics.volatility_30d_pct),
+        ),
+    ]
+
+
+def price_path_metrics(metrics: TickerMetricsInput) -> list[InvestResearchMetricResponse]:
+    return [
+        InvestResearchMetricResponse(
+            label="Last price",
+            value=_number(metrics.current_price),
         ),
         _signed_metric(
             "Vs 200-day", _pct(metrics.price_vs_200d_pct), metrics.price_vs_200d_pct
@@ -281,9 +403,21 @@ def _sections(
         sections.append(
             InvestResearchSectionResponse(
                 id="financials",
-                title="Financials",
-                summary="Inputs that fed the Pease View. Gaps show as unavailable.",
-                metrics=ratio_metrics(metrics),
+                title=(
+                    "Price path"
+                    if is_price_snapshot(instrument.asset_class, instrument.ticker)
+                    else "Financials"
+                ),
+                summary=(
+                    "Trend inputs from listed daily marks."
+                    if is_price_snapshot(instrument.asset_class, instrument.ticker)
+                    else "Inputs that fed the Pease View. Gaps show as unavailable."
+                ),
+                metrics=(
+                    price_path_metrics(metrics)
+                    if is_price_snapshot(instrument.asset_class, instrument.ticker)
+                    else ratio_metrics(metrics)
+                ),
             )
         )
     if view.radar_note:
@@ -317,16 +451,16 @@ def _overview(instrument: Instrument, view: InvestPeaseViewResponse | None) -> s
             f"{instrument.ticker} is available as a listed paper-trading instrument. "
             "Live factor scores could not be built yet; price and identity still apply."
         )
+    if is_price_snapshot(instrument.asset_class, instrument.ticker):
+        return (
+            f"{instrument.name} ({instrument.ticker}) — {view.stance_label}. "
+            "Listed funds and rates proxies use a price-path snapshot, not company earnings. "
+            "This is not advice to trade."
+        )
     return (
         f"{instrument.name} ({instrument.ticker}) — {view.stance_label}. "
         f"{view.coverage_pct:.0f}% of the fundamental inputs are filled. "
         "This is a shared factor snapshot, not advice to trade."
-    )
-
-
-async def _quote(session: AsyncSession, instrument: Instrument) -> InstrumentQuote | None:
-    return await session.scalar(
-        select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument.id)
     )
 
 

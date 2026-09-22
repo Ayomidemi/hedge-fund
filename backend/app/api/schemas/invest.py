@@ -114,6 +114,9 @@ class InvestWatchlistItemResponse(BaseModel):
     date_added: datetime
     price: Decimal | None = None
     change_pct: Decimal | None = None
+    headline: str | None = None
+    unusual: bool = False
+    unusual_label: str | None = None
 
 
 class InvestInstrumentResponse(BaseModel):
@@ -207,6 +210,9 @@ class InvestFixedIncomeProductResponse(BaseModel):
     next_coupon_date: str | None = None
     face_value_increment: Decimal | None = None
     quote_status: str | None = None
+    quote_source: str | None = None
+    quote_as_of: datetime | None = None
+    quote_stale: bool = False
     minimum_order_amount: Decimal
     liquidity: str
     risk_level: str
@@ -215,6 +221,7 @@ class InvestFixedIncomeProductResponse(BaseModel):
     proxy_ticker: str | None = None
     proxy_label: str | None = None
     retail_notes: list[str] = Field(default_factory=list)
+    pricing_assumptions: list[str] = Field(default_factory=list)
     cashflows: list[InvestFixedIncomeCashflowResponse] = Field(default_factory=list)
     risk_checks: list[InvestRiskCheckResponse] = Field(default_factory=list)
 
@@ -274,6 +281,7 @@ class InvestDiscoverSectionResponse(BaseModel):
 class InvestDiscoverResponse(BaseModel):
     generated_at: datetime
     summary: str
+    narrative: str | None = None
     sections: list[InvestDiscoverSectionResponse]
     next_actions: list[InvestDiscoverItemResponse] = Field(default_factory=list)
 

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -37,6 +37,7 @@ from app.core.config import settings
 from app.models import (
     Instrument,
     InstrumentQuote,
+    RadarSnapshot,
     RetailAccount,
     RetailOrder,
     RetailWatchlistItem,
@@ -52,15 +53,17 @@ from app.services.brokerage.protocol import (
 )
 from app.services.invest.fixed_income import (
     ensure_fixed_income_instrument,
-    fixed_income_price_per_face,
-    fixed_income_quote,
+    fixed_income_price_per_face_db,
     get_fixed_income_product,
-    search_fixed_income_products,
+    get_fixed_income_product_db,
+    latest_fixed_income_quote,
+    search_fixed_income_products_db,
 )
 from app.services.invest.risk import evaluate_order_risk
-from app.services.market_data.quote_cache import (
-    get_cached_quote_price,
-    get_or_fetch_quote_price,
+from app.services.market_data.quote_cache import get_cached_quote_price
+from app.services.market_radar.watchlist_book import (
+    WatchlistValidationError,
+    get_ticker_chart,
 )
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.market_data import search_ticker_suggestions
@@ -243,6 +246,8 @@ async def get_home(
     cost_basis = sum(
         (item.market_value - item.unrealized_pnl for item in holdings), Decimal("0")
     )
+    today_change, today_change_pct = await _today_change(session, holdings, invested)
+    headlines = await _home_headlines(session, today_change, account.base_currency)
     return InvestHomeResponse(
         account=_account_response(account, balances.cash, balances.buying_power),
         portfolio_value=portfolio_value,
@@ -256,13 +261,11 @@ async def get_home(
             if cost_basis > 0
             else None
         ),
+        today_change=today_change,
+        today_change_pct=today_change_pct,
         allocation=_allocation_buckets(holdings, balances.cash, portfolio_value),
         holdings=holdings,
-        headlines=[
-            "Discover shows unusual listed-name tape — not a recommendation.",
-            "Headlines for your book live on News. Bills and bonds stay on Markets.",
-            "Add watchlist names to see when something you follow starts to move.",
-        ],
+        headlines=headlines,
     )
 
 
@@ -280,10 +283,14 @@ async def submit_order(
     if payload.amount is None and payload.quantity is None:
         raise InvestValidationError("Enter an amount or a quantity.")
     instrument = await _require_instrument(session, payload.ticker)
+    fixed_income_product = await get_fixed_income_product_db(session, instrument.ticker)
+    if fixed_income_product is not None:
+        instrument = await ensure_fixed_income_instrument(session, fixed_income_product)
     risk_assessment = evaluate_order_risk(
         account=account,
         instrument=instrument,
         payload=payload,
+        fixed_income_product=fixed_income_product,
     )
     if risk_assessment.blockers:
         raise InvestValidationError(
@@ -505,14 +512,34 @@ async def list_watchlist(
         )
     )
     items: list[InvestWatchlistItemResponse] = []
-    for row in rows:
-        product = get_fixed_income_product(row.instrument.ticker)
-        quote = (
-            None
-            if product is not None
-            else await _quote_for_instrument(session, row.instrument)
+    tickers = [row.instrument.ticker for row in rows]
+    headlines = await _watchlist_headlines(session, tickers)
+    unusual = await _watchlist_unusual(session, tickers)
+    quotes = {
+        quote.instrument_id: quote
+        for quote in await session.scalars(
+            select(InstrumentQuote).where(
+                InstrumentQuote.instrument_id.in_(
+                    [row.instrument.id for row in rows]
+                )
+            )
         )
-        items.append(_watchlist_response(row, product=product, quote=quote))
+    } if rows else {}
+    for row in rows:
+        product = await get_fixed_income_product_db(session, row.instrument.ticker)
+        quote = None if product is not None else quotes.get(row.instrument.id)
+        ticker_key = row.instrument.ticker.upper()
+        items.append(
+            await _watchlist_response(
+                session,
+                row,
+                product=product,
+                quote=quote,
+                headline=headlines.get(ticker_key),
+                unusual=ticker_key in unusual,
+                unusual_label=unusual.get(ticker_key),
+            )
+        )
     return items
 
 
@@ -527,13 +554,16 @@ async def add_watchlist_item(
         .where(RetailWatchlistItem.instrument_id == instrument.id)
     )
     if existing is not None:
-        existing_product = get_fixed_income_product(existing.instrument.ticker)
+        existing_product = await get_fixed_income_product_db(
+            session, existing.instrument.ticker
+        )
         existing_quote = (
             None
             if existing_product is not None
             else await _quote_for_instrument(session, existing.instrument)
         )
-        return _watchlist_response(
+        return await _watchlist_response(
+            session,
             existing,
             product=existing_product,
             quote=existing_quote,
@@ -544,32 +574,22 @@ async def add_watchlist_item(
         notes=notes,
         date_added=datetime.now(timezone.utc),
     )
+    item.instrument = instrument
     session.add(item)
     await session.commit()
     await session.refresh(item)
-    product = get_fixed_income_product(instrument.ticker)
+    item.instrument = instrument
+    product = await get_fixed_income_product_db(session, instrument.ticker)
     quote = (
         None
         if product is not None
         else await _quote_for_instrument(session, instrument)
     )
-    return InvestWatchlistItemResponse(
-        id=item.id,
-        ticker=instrument.ticker,
-        name=instrument.name,
-        asset_class=instrument.asset_class,
-        currency=instrument.currency,
-        href=_instrument_href(instrument.ticker),
-        notes=item.notes,
-        date_added=item.date_added,
-        price=(
-            fixed_income_price_per_face(product)
-            if product is not None
-            else quote.price
-            if quote is not None
-            else None
-        ),
-        change_pct=None if product is not None or quote is None else quote.change_pct,
+    return await _watchlist_response(
+        session,
+        item,
+        product=product,
+        quote=quote,
     )
 
 
@@ -596,7 +616,10 @@ async def search_instruments(
 ) -> list[InvestInstrumentResponse]:
     results: list[InvestInstrumentResponse] = []
     seen: set[str] = set()
-    for product in search_fixed_income_products(query, market=market):
+    fixed_income_products = await search_fixed_income_products_db(
+        session, query, market=market
+    )
+    for product in fixed_income_products:
         if product.ticker in seen:
             continue
         results.append(
@@ -608,7 +631,7 @@ async def search_instruments(
                 currency=product.currency,
                 sector="Fixed Income",
                 industry=product.instrument_type,
-                price=fixed_income_price_per_face(product),
+                price=await fixed_income_price_per_face_db(session, product),
             )
         )
         seen.add(product.ticker)
@@ -662,21 +685,21 @@ async def get_instrument(
     session: AsyncSession, ticker: str
 ) -> InvestInstrumentResponse:
     instrument = await _require_instrument(session, ticker)
-    product = get_fixed_income_product(instrument.ticker)
-    if product is not None:
-        return InvestInstrumentResponse(
-            ticker=instrument.ticker,
-            name=instrument.name,
-            asset_class=instrument.asset_class,
-            exchange=instrument.exchange,
-            currency=instrument.currency,
-            sector=instrument.sector,
-            industry=instrument.industry,
-            price=fixed_income_price_per_face(product),
-        )
-    price = await get_or_fetch_quote_price(
-        session, instrument.ticker, instrument_id=instrument.id
-    )
+    asset_class = (instrument.asset_class or "").strip().lower()
+    if asset_class in {"bond", "cash_equivalent"}:
+        product = await get_fixed_income_product_db(session, instrument.ticker)
+        if product is not None:
+            return InvestInstrumentResponse(
+                ticker=instrument.ticker,
+                name=instrument.name,
+                asset_class=instrument.asset_class,
+                exchange=instrument.exchange,
+                currency=instrument.currency,
+                sector=instrument.sector,
+                industry=instrument.industry,
+                price=await fixed_income_price_per_face_db(session, product),
+            )
+    price = await get_cached_quote_price(session, instrument.ticker)
     return InvestInstrumentResponse(
         ticker=instrument.ticker,
         name=instrument.name,
@@ -689,13 +712,29 @@ async def get_instrument(
     )
 
 
+async def get_instrument_chart(
+    session: AsyncSession, ticker: str, range_key: str = "3m"
+):
+    try:
+        return await get_ticker_chart(
+            session, ticker=ticker.strip().upper(), range_key=range_key
+        )
+    except WatchlistValidationError as exc:
+        raise InvestValidationError(str(exc)) from exc
+
+
 async def get_instrument_research(
     session: AsyncSession, ticker: str
 ) -> InvestInstrumentResearchResponse:
     instrument = await _require_instrument(session, ticker)
-    product = get_fixed_income_product(instrument.ticker)
+    asset_class = (instrument.asset_class or "").strip().lower()
+    product = (
+        await get_fixed_income_product_db(session, instrument.ticker)
+        if asset_class in {"bond", "cash_equivalent"}
+        else None
+    )
     if product is not None:
-        quote = fixed_income_quote(product)
+        quote = await latest_fixed_income_quote(session, product)
         return InvestInstrumentResearchResponse(
             ticker=instrument.ticker,
             name=instrument.name,
@@ -818,7 +857,7 @@ async def get_instrument_research(
 
 async def _require_instrument(session: AsyncSession, ticker: str) -> Instrument:
     normalized = ticker.strip().upper()
-    product = get_fixed_income_product(normalized)
+    product = await get_fixed_income_product_db(session, normalized)
     if product is not None:
         return await ensure_fixed_income_instrument(session, product)
     instrument = await session.scalar(
@@ -838,7 +877,11 @@ async def _holdings(session: AsyncSession, positions) -> list[InvestHolding]:
         instrument = await session.scalar(
             select(Instrument).where(Instrument.ticker == item.symbol)
         )
-        product = None if instrument is None else get_fixed_income_product(instrument.ticker)
+        product = (
+            None
+            if instrument is None
+            else await get_fixed_income_product_db(session, instrument.ticker)
+        )
         holdings.append(
             InvestHolding(
                 ticker=item.symbol,
@@ -850,7 +893,7 @@ async def _holdings(session: AsyncSession, positions) -> list[InvestHolding]:
                 current_price=(
                     None
                     if instrument is None
-                    else fixed_income_price_per_face(product)
+                    else await fixed_income_price_per_face_db(session, product)
                     if product is not None
                     else await get_cached_quote_price(session, item.symbol)
                 ),
@@ -1003,30 +1046,42 @@ async def _quote_for_instrument(
     )
 
 
-def _watchlist_response(
+async def _watchlist_response(
+    session: AsyncSession,
     row: RetailWatchlistItem,
     *,
     product,
     quote: InstrumentQuote | None,
+    headline: str | None = None,
+    unusual: bool = False,
+    unusual_label: str | None = None,
 ) -> InvestWatchlistItemResponse:
     instrument = row.instrument
+    price = (
+        await fixed_income_price_per_face_db(session, product)
+        if product is not None
+        else quote.price
+        if quote is not None
+        else None
+    )
     return InvestWatchlistItemResponse(
         id=row.id,
         ticker=instrument.ticker,
         name=instrument.name,
         asset_class=instrument.asset_class,
         currency=instrument.currency,
-        href=_instrument_href(instrument.ticker),
+        href=(
+            f"/invest/fixed-income/{instrument.ticker}"
+            if product is not None
+            else _instrument_href(instrument.ticker)
+        ),
         notes=row.notes,
         date_added=row.date_added,
-        price=(
-            fixed_income_price_per_face(product)
-            if product is not None
-            else quote.price
-            if quote is not None
-            else None
-        ),
+        price=price,
         change_pct=None if product is not None or quote is None else quote.change_pct,
+        headline=headline,
+        unusual=unusual,
+        unusual_label=unusual_label,
     )
 
 
@@ -1081,3 +1136,131 @@ def _allocation_name(asset_class: str | None) -> str:
     if normalized == "equity":
         return "Stocks"
     return normalized.replace("_", " ").title()
+
+
+async def _today_change(
+    session: AsyncSession,
+    holdings: list[InvestHolding],
+    invested: Decimal,
+) -> tuple[Decimal | None, Decimal | None]:
+    listed = [
+        holding
+        for holding in holdings
+        if (holding.asset_class or "").strip().lower()
+        not in {"bond", "cash_equivalent"}
+    ]
+    if not listed:
+        return None, None
+    tickers = [holding.ticker for holding in listed]
+    instruments = {
+        row.ticker: row
+        for row in await session.scalars(
+            select(Instrument).where(Instrument.ticker.in_(tickers))
+        )
+    }
+    if not instruments:
+        return None, None
+    quotes = {
+        quote.instrument_id: quote
+        for quote in await session.scalars(
+            select(InstrumentQuote).where(
+                InstrumentQuote.instrument_id.in_(
+                    [row.id for row in instruments.values()]
+                )
+            )
+        )
+    }
+    day_pnl = Decimal("0")
+    marked = False
+    for holding in listed:
+        instrument = instruments.get(holding.ticker)
+        if instrument is None:
+            continue
+        quote = quotes.get(instrument.id)
+        if quote is None or quote.change_pct is None:
+            continue
+        marked = True
+        denom = Decimal("100") + quote.change_pct
+        if denom == 0:
+            continue
+        day_pnl += holding.market_value * quote.change_pct / denom
+    if not marked:
+        return None, None
+    day_pnl = day_pnl.quantize(MONEY)
+    pct = (
+        ((day_pnl / invested) * Decimal("100")).quantize(Decimal("0.01"))
+        if invested > 0
+        else None
+    )
+    return day_pnl, pct
+
+
+async def _home_headlines(
+    session: AsyncSession, today_change: Decimal | None, currency: str
+) -> list[str]:
+    from app.services.invest.discover import home_tape_headline
+    from app.services.invest.news import rates_headline
+
+    lines: list[str] = []
+    if today_change is None:
+        lines.append(
+            "No live day mark on listed names yet. Cash and bills use last close or modeled yield."
+        )
+    elif today_change > 0:
+        lines.append(
+            f"Your listed book is up {currency} {today_change.quantize(MONEY)} today."
+        )
+    elif today_change < 0:
+        lines.append(
+            f"Your listed book is down {currency} {abs(today_change).quantize(MONEY)} today."
+        )
+    else:
+        lines.append("Your listed book is roughly unchanged today.")
+    tape = await home_tape_headline(session)
+    if tape:
+        lines.append(tape)
+    rates = await rates_headline(session)
+    if rates:
+        lines.append(rates)
+    if len(lines) < 3:
+        lines.append(
+            "Discover is unusual listed-name tape. Rates headlines lead on News."
+        )
+    return lines[:3]
+
+
+async def _watchlist_headlines(
+    session: AsyncSession, tickers: list[str]
+) -> dict[str, str]:
+    from app.services.invest.news import headlines_for_tickers
+
+    return await headlines_for_tickers(session, tickers)
+
+
+async def _watchlist_unusual(
+    session: AsyncSession, tickers: list[str]
+) -> dict[str, str]:
+    wanted = {ticker.upper() for ticker in tickers if ticker}
+    if not wanted:
+        return {}
+    latest = (
+        select(
+            RadarSnapshot.ticker,
+            func.max(RadarSnapshot.as_of).label("as_of"),
+        )
+        .where(func.upper(RadarSnapshot.ticker).in_(wanted))
+        .group_by(RadarSnapshot.ticker)
+        .subquery()
+    )
+    rows = await session.scalars(
+        select(RadarSnapshot).join(
+            latest,
+            (RadarSnapshot.ticker == latest.c.ticker)
+            & (RadarSnapshot.as_of == latest.c.as_of),
+        )
+    )
+    found: dict[str, str] = {}
+    for row in rows:
+        if row.flags:
+            found[row.ticker.upper()] = "Unusual"
+    return found

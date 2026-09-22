@@ -1,9 +1,11 @@
 import "server-only";
 
+import { cache } from "react";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import type { User } from "@supabase/supabase-js";
 
-export async function createClient() {
+export const createClient = cache(async () => {
   const cookieStore = await cookies();
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -30,24 +32,29 @@ export async function createClient() {
       },
     },
   });
-}
+});
 
-export async function getServerAccessToken(): Promise<string | undefined> {
+const getServerAuth = cache(async () => {
   const supabase = await createClient();
   const { data: userData, error: userError } = await supabase.auth.getUser();
-
   if (userError || !userData.user) {
-    return undefined;
+    return { user: null as User | null, accessToken: undefined as string | undefined };
   }
-
   const { data: sessionData } = await supabase.auth.getSession();
-  return sessionData.session?.access_token;
+  return {
+    user: userData.user,
+    accessToken: sessionData.session?.access_token,
+  };
+});
+
+export async function getServerAccessToken(): Promise<string | undefined> {
+  const auth = await getServerAuth();
+  return auth.accessToken;
 }
 
 export async function getServerUserEmail(): Promise<string | null> {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getUser();
-  return data.user?.email ?? null;
+  const auth = await getServerAuth();
+  return auth.user?.email ?? null;
 }
 
 export async function getServerUserProfile(): Promise<{
@@ -57,14 +64,13 @@ export async function getServerUserProfile(): Promise<{
   role: string | null;
   canSwitchProducts: boolean;
 }> {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getUser();
+  const auth = await getServerAuth();
   const { resolvePeaseRole, canSwitchProducts } = await import("@/lib/pease-role");
-  const metadata = data.user?.user_metadata ?? {};
-  const role = resolvePeaseRole(data.user);
+  const metadata = auth.user?.user_metadata ?? {};
+  const role = resolvePeaseRole(auth.user);
 
   return {
-    email: data.user?.email ?? null,
+    email: auth.user?.email ?? null,
     fullName: typeof metadata.full_name === "string" ? metadata.full_name : null,
     orgName: typeof metadata.org_name === "string" ? metadata.org_name : null,
     role,

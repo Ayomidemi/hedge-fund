@@ -136,6 +136,31 @@ class InvestPermissionTests(TestCase):
         self.assertEqual(view.stance, "caution")
         self.assertTrue(view.watch_outs)
 
+    def test_pease_view_uses_price_path_for_listed_funds(self) -> None:
+        from app.api.schemas.ticker_intelligence import TickerMetricsInput
+        from app.services.invest.research import pease_view_from_scorecard, retail_stance
+        from app.services.ticker_intelligence.scoring import score_ticker
+
+        metrics = TickerMetricsInput(
+            current_price=Decimal("91.40"),
+            price_vs_200d_pct=Decimal("1.20"),
+            relative_strength_6m_pct=Decimal("-0.40"),
+            volatility_30d_pct=Decimal("3.50"),
+        )
+        scorecard = score_ticker(metrics, "etf")
+        stance, label = retail_stance(scorecard, price_snapshot=True)
+        view = pease_view_from_scorecard(
+            scorecard, asset_class="etf", ticker="BIL", metrics=metrics
+        )
+        self.assertNotEqual(stance, "incomplete")
+        self.assertNotEqual(label, "Not enough data")
+        self.assertEqual(view.stance, stance)
+        self.assertIn("price-path", view.summary.lower())
+        self.assertEqual(
+            {factor.id for factor in view.factors},
+            {"momentum", "growth", "risk"},
+        )
+
     def test_payload_prefers_pease_role_over_jwt_authenticated(self) -> None:
         from app.core.auth import _user_from_payload
 
@@ -259,6 +284,11 @@ class FixedIncomeScopeTests(TestCase):
         self.assertIsNotNone(response.clean_price)
         self.assertIsNotNone(response.dirty_price)
         self.assertIsNotNone(response.settlement_date)
+        self.assertEqual(response.quote_source, "model_seed")
+        self.assertFalse(response.quote_stale)
+        self.assertIsNotNone(response.quote_as_of)
+        self.assertTrue(response.pricing_assumptions)
+        self.assertTrue(response.risk_checks)
         self.assertTrue(response.cashflows)
 
     def test_us_cash_bills_point_to_listed_paper_proxy(self) -> None:
@@ -536,6 +566,23 @@ class InvestDiscoverCopyTests(TestCase):
         self.assertEqual(section.id, "unusual_activity")
         self.assertNotIn("fixed_income", section.id)
         self.assertIn("quiet", section.items[0].title.lower())
+
+    def test_narrative_uses_sector_sentence(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.invest.discover import _narrative
+
+        industry = SimpleNamespace(
+            name="Semiconductors",
+            status="industry_event",
+            jurisdiction="US",
+            flagged_count=6,
+            name_count=12,
+            median_change_pct=Decimal("3.10"),
+        )
+        copy = _narrative([industry], [])
+        self.assertIsNotNone(copy)
+        self.assertIn("Semiconductors", copy or "")
 
 
 class InvestPortfolioResponseTests(TestCase):

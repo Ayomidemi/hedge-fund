@@ -22,14 +22,15 @@ from app.api.schemas.invest import (
     InvestWatchlistCreate,
     InvestWatchlistItemResponse,
 )
+from app.api.schemas.market_radar import RadarWatchlistChartResponse
 from app.core.auth import AuthenticatedUser, require_invest_user
 from app.db.session import get_session
 from app.services.invest import accounts as invest
 from app.services.invest.fixed_income import (
     ensure_fixed_income_instrument,
-    fixed_income_response,
-    get_fixed_income_product,
-    search_fixed_income_products,
+    fixed_income_response_db,
+    get_fixed_income_product_db,
+    search_fixed_income_products_db,
 )
 from app.services.invest.discover import build_invest_discover
 from app.services.invest.markets import build_invest_markets
@@ -261,6 +262,24 @@ async def read_instrument_research(
     return response
 
 
+@router.get(
+    "/instruments/{ticker}/chart",
+    response_model=RadarWatchlistChartResponse,
+)
+async def read_instrument_chart(
+    ticker: str,
+    range: str = Query(default="3m"),
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> RadarWatchlistChartResponse:
+    try:
+        response = await invest.get_instrument_chart(session, ticker, range)
+    except invest.InvestError as extra:
+        raise _http_error(extra) from extra
+    await session.commit()
+    return response
+
+
 @router.get("/instruments/{ticker}", response_model=InvestInstrumentResponse)
 async def read_instrument(
     ticker: str,
@@ -287,11 +306,14 @@ async def read_fixed_income_products(
     query: str = Query(default="", max_length=64),
     market: str = Query(default="ALL", max_length=8),
     user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
 ) -> list[InvestFixedIncomeProductResponse]:
-    return [
-        fixed_income_response(product)
-        for product in search_fixed_income_products(query, market=market)
+    products = await search_fixed_income_products_db(session, query, market=market)
+    response = [
+        await fixed_income_response_db(session, product) for product in products
     ]
+    await session.commit()
+    return response
 
 
 @router.get(
@@ -303,15 +325,16 @@ async def read_fixed_income_product(
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
 ) -> InvestFixedIncomeProductResponse:
-    product = get_fixed_income_product(ticker)
+    product = await get_fixed_income_product_db(session, ticker)
     if product is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Fixed-income product was not found.",
         )
     await ensure_fixed_income_instrument(session, product)
+    response = await fixed_income_response_db(session, product)
     await session.commit()
-    return fixed_income_response(product)
+    return response
 
 
 @router.get("/discover", response_model=InvestDiscoverResponse)

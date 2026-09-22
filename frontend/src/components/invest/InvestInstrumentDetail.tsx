@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -12,21 +12,23 @@ import { toast } from "@/components/ui/ToastProvider";
 import {
   addInvestWatchlistItem,
   createInvestOrder,
+  getInvestInstrumentResearch,
   type InvestInstrument,
   type InvestInstrumentResearch,
   type InvestPeaseView,
   type InvestResearchSection,
 } from "@/lib/api";
 import { money } from "@/components/invest/format";
+import { InvestPriceChart } from "@/components/invest/InvestPriceChart";
 
-type DetailTab = "overview" | "analysis" | "order";
+type DetailTab = "overview" | "chart" | "analysis" | "order";
 
 export function InvestInstrumentDetail({
   instrument,
-  research,
+  research: initialResearch = null,
 }: {
   instrument: InvestInstrument;
-  research: InvestInstrumentResearch | null;
+  research?: InvestInstrumentResearch | null;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<DetailTab>("overview");
@@ -34,6 +36,37 @@ export function InvestInstrumentDetail({
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState<"buy" | "watch" | null>(null);
+  const [research, setResearch] = useState<InvestInstrumentResearch | null>(
+    initialResearch,
+  );
+  const [researchLoading, setResearchLoading] = useState(!initialResearch);
+
+  useEffect(() => {
+    if (initialResearch) {
+      return;
+    }
+    let cancelled = false;
+    setResearchLoading(true);
+    void getInvestInstrumentResearch(instrument.ticker)
+      .then((data) => {
+        if (!cancelled) {
+          setResearch(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResearch(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setResearchLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [instrument.ticker, initialResearch]);
   const price = instrument.price ? Number(instrument.price) : null;
   const estimatedUnits = useMemo(() => {
     const budget = Number(amount);
@@ -117,8 +150,9 @@ export function InvestInstrumentDetail({
           </p>
         ) : (
           <p className="mt-5 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
-            Retail research context could not load, but the paper order ticket can
-            still use the instrument record if a price is available.
+            {researchLoading
+              ? "Loading research context…"
+              : "Retail research context could not load, but the paper order ticket can still use the instrument record if a price is available."}
           </p>
         )}
 
@@ -136,7 +170,7 @@ export function InvestInstrumentDetail({
               News
             </Link>
           ) : null}
-          <Link href="/invest/search" className={buttonSecondaryClassName}>
+          <Link href="/invest/markets" className={buttonSecondaryClassName}>
             Search
           </Link>
         </div>
@@ -145,6 +179,7 @@ export function InvestInstrumentDetail({
       <div className="flex gap-2 overflow-x-auto rounded-2xl border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-950">
         {([
           ["overview", "Overview"],
+          ["chart", "Chart"],
           ["analysis", "Analysis"],
           ["order", "Paper order"],
         ] as const).map(([value, label]) => (
@@ -175,6 +210,8 @@ export function InvestInstrumentDetail({
         </div>
       ) : null}
 
+      {tab === "chart" ? <InvestPriceChart ticker={instrument.ticker} /> : null}
+
       {tab === "analysis" ? (
         <div className="space-y-4">
           {peaseView ? <PeaseViewCard view={peaseView} /> : null}
@@ -185,7 +222,9 @@ export function InvestInstrumentDetail({
               ))
             ) : peaseView ? null : (
               <section className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
-                Live factor scores have not been generated for this instrument yet.
+                {researchLoading
+                  ? "Loading analysis…"
+                  : "Live factor scores have not been generated for this instrument yet."}
               </section>
             )}
           </div>
@@ -282,8 +321,8 @@ export function InvestInstrumentDetail({
             >
               {pending === "watch" ? "Saving..." : "Add to watchlist"}
             </button>
-            <Link href="/invest/search" className={buttonSecondaryClassName}>
-              Back to search
+            <Link href="/invest/markets" className={buttonSecondaryClassName}>
+              Back to markets
             </Link>
           </div>
         </form>

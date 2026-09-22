@@ -20,6 +20,8 @@ from app.services.invest import accounts as invest_accounts
 from app.services.invest.fixed_income import (
     FIXED_INCOME_PRODUCTS,
     get_fixed_income_product,
+    get_fixed_income_product_db,
+    search_fixed_income_products_db,
 )
 from app.services.invest.markets import active_board_tickers, rates_board_tickers
 from app.services.news import centre as news_centre
@@ -81,17 +83,16 @@ async def build_invest_news_overview(
     ticker_page_size: int = TICKER_PAGE_SIZE,
 ) -> InvestNewsOverviewResponse:
     generated_at = datetime.now(timezone.utc)
-    income_tickers = INCOME_TICKERS
+    income_tickers = await income_proxy_tickers_db(session)
+    income_ticker_set = set(income_tickers)
     portfolio_tickers = await _portfolio_news_tickers(session, user)
     watchlist_tickers = await _retail_watchlist_news_tickers(session, user.id)
     active_board = await active_board_tickers(session)
     listed_board = [
-        symbol for symbol in active_board if symbol not in INCOME_TICKER_SET
+        symbol for symbol in active_board if symbol not in income_ticker_set
     ]
     for_you_tickers = _unique([*portfolio_tickers, *watchlist_tickers])
     normalized_jurisdiction = news_centre._normalize_jurisdiction(jurisdiction)
-
-    await _refresh_income_news_if_needed(session, income_tickers)
 
     headlines, headlines_total = await news_centre._current_items(
         session,
@@ -112,6 +113,7 @@ async def build_invest_news_overview(
         ticker_income,
         income_window,
         jurisdiction=normalized_jurisdiction,
+        income_ticker_set=income_ticker_set,
         limit=INCOME_LIMIT,
     )
     portfolio_items, _ = await news_centre._items_for_tickers(
@@ -230,15 +232,26 @@ INCOME_TICKERS = income_proxy_tickers()
 INCOME_TICKER_SET = set(INCOME_TICKERS)
 
 
+async def income_proxy_tickers_db(session: AsyncSession) -> list[str]:
+    tickers = list(rates_board_tickers())
+    for product in await search_fixed_income_products_db(session):
+        tickers.append(product.ticker)
+        if product.proxy_ticker:
+            tickers.append(product.proxy_ticker)
+    return _unique(tickers)
+
+
 def is_income_story(
     *,
     title: str,
     summary: str | None,
     tickers: list[str],
     jurisdiction: str | None = None,
+    income_ticker_set: set[str] | None = None,
 ) -> bool:
+    income_ticker_set = income_ticker_set or INCOME_TICKER_SET
     ticker_set = {ticker.upper() for ticker in tickers if ticker}
-    if ticker_set & INCOME_TICKER_SET:
+    if ticker_set & income_ticker_set:
         return True
     text = f"{title} {summary or ''}".lower()
     return any(keyword in text for keyword in _keywords_for(jurisdiction))
@@ -247,10 +260,13 @@ def is_income_story(
 async def _refresh_income_news_if_needed(
     session: AsyncSession, tickers: list[str]
 ) -> None:
+    fixed_income_tickers = {
+        product.ticker for product in await search_fixed_income_products_db(session)
+    }
     listed_proxies = [
         ticker
         for ticker in tickers
-        if get_fixed_income_product(ticker) is None and not ticker.endswith(".NG")
+        if ticker.upper() not in fixed_income_tickers and not ticker.endswith(".NG")
     ]
     _, total = await news_centre._items_for_tickers(
         session, listed_proxies, page=1, page_size=INCOME_LIMIT
@@ -278,6 +294,7 @@ def _merge_income_stories(
     *,
     jurisdiction: str | None,
     limit: int,
+    income_ticker_set: set[str] | None = None,
 ) -> list[NewsItem]:
     merged: list[NewsItem] = []
     seen: set[UUID] = set()
@@ -290,6 +307,7 @@ def _merge_income_stories(
             summary=item.summary,
             tickers=tickers,
             jurisdiction=jurisdiction,
+            income_ticker_set=income_ticker_set,
         ):
             continue
         seen.add(item.id)
@@ -313,7 +331,7 @@ async def _portfolio_news_tickers(
     holdings = await invest_accounts.list_positions(session, user)
     tickers: list[str] = []
     for holding in holdings:
-        tickers.extend(_news_tickers_for_symbol(holding.ticker))
+        tickers.extend(await _news_tickers_for_symbol_db(session, holding.ticker))
     return _unique(tickers)
 
 
@@ -331,8 +349,19 @@ async def _retail_watchlist_news_tickers(
         instrument: Instrument | None = row.instrument
         if instrument is None:
             continue
-        tickers.extend(_news_tickers_for_symbol(instrument.ticker))
+        tickers.extend(await _news_tickers_for_symbol_db(session, instrument.ticker))
     return _unique(tickers)
+
+
+async def _news_tickers_for_symbol_db(session: AsyncSession, symbol: str) -> list[str]:
+    normalized = (symbol or "").strip().upper()
+    if not normalized:
+        return []
+    tickers = [normalized]
+    product = await get_fixed_income_product_db(session, normalized)
+    if product is not None and product.proxy_ticker:
+        tickers.append(product.proxy_ticker.upper())
+    return tickers
 
 
 def _news_tickers_for_symbol(symbol: str) -> list[str]:
@@ -377,3 +406,51 @@ def _summary(
         "Rates and income lead this page — T-bills, Treasuries, FGN context, "
         "and listed proxies (BIL, SHY, IEF, TLT). Listed equity tape stays below."
     )
+
+
+async def rates_headline(session: AsyncSession) -> str | None:
+    items = await income_news_items(session, limit=1)
+    return items[0].title if items else None
+
+
+async def income_news_items(
+    session: AsyncSession, *, limit: int = 5, jurisdiction: str | None = None
+) -> list[NewsItem]:
+    window, _ = await news_centre._current_items(
+        session, jurisdiction=jurisdiction, page=1, page_size=40
+    )
+    ticker_income, _ = await news_centre._items_for_tickers(
+        session, INCOME_TICKERS, page=1, page_size=limit
+    )
+    return _merge_income_stories(
+        ticker_income, window, jurisdiction=jurisdiction, limit=limit
+    )
+
+
+async def latest_news_items(
+    session: AsyncSession, *, limit: int = 8, jurisdiction: str | None = None
+) -> list[NewsItem]:
+    items, _ = await news_centre._current_items(
+        session, jurisdiction=jurisdiction, page=1, page_size=limit
+    )
+    return items
+
+
+async def headlines_for_tickers(
+    session: AsyncSession, tickers: list[str]
+) -> dict[str, str]:
+    wanted = {ticker.upper() for ticker in tickers if ticker}
+    if not wanted:
+        return {}
+    items, _ = await news_centre._items_for_tickers(
+        session, list(wanted), page=1, page_size=min(max(len(wanted) * 2, 8), 40)
+    )
+    found: dict[str, str] = {}
+    for item in items:
+        for link in item.ticker_links or []:
+            key = (link.ticker or "").upper()
+            if key in wanted and key not in found:
+                found[key] = item.title
+        if len(found) >= len(wanted):
+            break
+    return found

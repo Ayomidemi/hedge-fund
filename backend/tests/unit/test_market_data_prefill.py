@@ -40,6 +40,8 @@ class MarketDataPrefillTests(TestCase):
     def test_resolves_prefill_scope(self) -> None:
         self.assertEqual(resolve_prefill_scope("analysis"), "analysis")
         self.assertEqual(resolve_prefill_scope("full"), "analysis")
+        self.assertEqual(resolve_prefill_scope("invest"), "invest")
+        self.assertEqual(resolve_prefill_scope("retail"), "invest")
         self.assertEqual(resolve_prefill_scope("triage"), "triage")
         self.assertEqual(resolve_prefill_scope("screening"), "triage")
         self.assertEqual(resolve_prefill_scope("identity"), "identity")

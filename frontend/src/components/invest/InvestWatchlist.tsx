@@ -24,7 +24,7 @@ export function InvestWatchlist({ items }: { items: InvestWatchlistItem[] }) {
     return (
       <div className="mx-auto max-w-3xl rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
         Nothing saved yet.{" "}
-        <Link href="/invest/search" className="font-medium underline">
+        <Link href="/invest/markets" className="font-medium underline">
           Search
         </Link>{" "}
         and add a name.
@@ -45,6 +45,9 @@ export function InvestWatchlist({ items }: { items: InvestWatchlistItem[] }) {
             <p className="mt-1 text-xs capitalize text-zinc-500">
               {(item.asset_class ?? "instrument").replaceAll("_", " ")}
             </p>
+            {item.headline ? (
+              <p className="mt-2 line-clamp-2 text-xs text-zinc-500">{item.headline}</p>
+            ) : null}
           </Link>
           <div className="flex flex-wrap items-center gap-3 sm:justify-end">
             <div className="text-sm tabular-nums">
@@ -55,6 +58,11 @@ export function InvestWatchlist({ items }: { items: InvestWatchlistItem[] }) {
                 {signedPercent(item.change_pct)}
               </p>
             </div>
+            {item.unusual ? (
+              <span className="rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                {item.unusual_label || "Unusual"}
+              </span>
+            ) : null}
             <Link href={item.href} className={buttonSecondaryClassName}>
               Open
             </Link>

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.invest import (
@@ -21,8 +22,8 @@ from app.api.schemas.invest import (
 from app.api.schemas.operating_core import InstrumentCreate
 from app.models import Instrument, InstrumentQuote, InvestMarketBoardItem
 from app.services.invest.fixed_income import (
-    fixed_income_response,
-    search_fixed_income_products,
+    fixed_income_response_db,
+    search_fixed_income_products_db,
 )
 from app.services.market_data.ingestion import persist_quotes
 from app.services.market_data.quote_provider import fetch_quotes
@@ -248,28 +249,38 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
             "Fixed-income products use modeled yield and settlement; listed funds show last-close market context."
         )
 
+    fixed_income = []
+    for product in await search_fixed_income_products_db(session):
+        fixed_income.append(await fixed_income_response_db(session, product))
+
     return InvestMarketsResponse(
         generated_at=now,
         summary=summary,
         sessions=sessions,
         boards=list(boards.values()),
-        fixed_income=[
-            fixed_income_response(product) for product in search_fixed_income_products()
-        ],
+        fixed_income=fixed_income,
     )
 
 
 async def market_board_rows(session: AsyncSession) -> list[MarketBoardRow]:
-    await _ensure_market_board_seed_rows(session)
-    records = await session.scalars(
-        select(InvestMarketBoardItem)
-        .where(InvestMarketBoardItem.is_active.is_(True))
-        .order_by(
-            InvestMarketBoardItem.display_order.asc(),
-            InvestMarketBoardItem.ticker.asc(),
+    try:
+        await _ensure_market_board_seed_rows(session)
+        records = list(
+            await session.scalars(
+                select(InvestMarketBoardItem)
+                .where(InvestMarketBoardItem.is_active.is_(True))
+                .order_by(
+                    InvestMarketBoardItem.display_order.asc(),
+                    InvestMarketBoardItem.ticker.asc(),
+                )
+            )
         )
-    )
-    return [_board_row_from_record(record) for record in records]
+        if records:
+            return [_board_row_from_record(record) for record in records]
+    except ProgrammingError:
+        logger.warning("invest_market_board_table_missing")
+        await session.rollback()
+    return list(DEFAULT_MARKET_BOARD_RULES)
 
 
 async def active_board_tickers(session: AsyncSession) -> tuple[str, ...]:

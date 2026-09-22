@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from app.api.schemas.invest import InvestOrderCreate
 from app.models import Instrument, RetailAccount
-from app.services.invest.fixed_income import get_fixed_income_product
+from app.services.invest.fixed_income import FixedIncomeProduct, get_fixed_income_product
 
 MONEY = Decimal("0.01")
 SUPPORTED_ASSET_CLASSES = {"equity", "etf", "bond", "cash_equivalent"}
@@ -41,6 +41,7 @@ def evaluate_order_risk(
     account: RetailAccount,
     instrument: Instrument,
     payload: InvestOrderCreate,
+    fixed_income_product: FixedIncomeProduct | None = None,
 ) -> RetailRiskAssessment:
     checks: list[RetailRiskCheck] = []
     asset_class = instrument.asset_class.strip().lower()
@@ -92,7 +93,7 @@ def evaluate_order_risk(
                 )
             )
 
-    product = get_fixed_income_product(instrument.ticker)
+    product = fixed_income_product or get_fixed_income_product(instrument.ticker)
     if product is not None:
         order_value = notional
         if order_value is None and payload.quantity is not None and side == "BUY":

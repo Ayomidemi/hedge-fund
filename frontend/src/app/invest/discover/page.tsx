@@ -32,8 +32,11 @@ export default async function InvestDiscoverPage() {
         </p>
         <h2 className="mt-1 text-2xl font-semibold">What&apos;s moving</h2>
         <p className="mt-3 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
-          {discover.summary}
+          {discover.narrative ?? discover.summary}
         </p>
+        {discover.narrative ? (
+          <p className="mt-2 text-sm text-zinc-500">{discover.summary}</p>
+        ) : null}
         <p className="mt-3 text-xs text-zinc-500">
           Updated {new Date(discover.generated_at).toLocaleString()}. Headlines
           stay on News; bills and bonds stay on Markets.

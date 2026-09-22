@@ -21,8 +21,9 @@ from app.services.brokerage.protocol import (
     SubmitOrderRequest,
 )
 from app.services.invest.fixed_income import (
-    fixed_income_price_per_face,
-    get_fixed_income_product,
+    ensure_fixed_income_instrument,
+    fixed_income_price_per_face_db,
+    get_fixed_income_product_db,
 )
 from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
 
@@ -61,9 +62,11 @@ class PaperBrokerProvider:
         )
         positions: list[BrokerPosition] = []
         for row in rows:
-            fixed_income_product = get_fixed_income_product(row.instrument.ticker)
+            fixed_income_product = await get_fixed_income_product_db(
+                self.session, row.instrument.ticker
+            )
             mark = (
-                fixed_income_price_per_face(fixed_income_product)
+                await fixed_income_price_per_face_db(self.session, fixed_income_product)
                 if fixed_income_product is not None
                 else await get_cached_quote_price(self.session, row.instrument.ticker)
             )
@@ -101,9 +104,16 @@ class PaperBrokerProvider:
             raise BrokerValidationError("Paper V1 only accepts market orders.")
 
         instrument = await self._load_instrument(request.symbol)
-        fixed_income_product = get_fixed_income_product(instrument.ticker)
+        fixed_income_product = await get_fixed_income_product_db(
+            self.session, instrument.ticker
+        )
         if fixed_income_product is not None:
-            mark = fixed_income_price_per_face(fixed_income_product)
+            instrument = await ensure_fixed_income_instrument(
+                self.session, fixed_income_product
+            )
+            mark = await fixed_income_price_per_face_db(
+                self.session, fixed_income_product
+            )
             face_increment = fixed_income_product.face_value_increment
         else:
             mark = await get_or_fetch_quote_price(
@@ -526,6 +536,12 @@ def _order_snapshot(order: RetailOrder, symbol: str) -> BrokerOrder:
 
 
 def _transaction_description(action: str, quantity: Decimal, instrument: Instrument) -> str:
-    if get_fixed_income_product(instrument.ticker) is not None:
+    if _looks_like_fixed_income(instrument):
         return f"{action} {quantity} face value of {instrument.ticker}."
     return f"{action} {quantity} {instrument.ticker}."
+
+
+def _looks_like_fixed_income(instrument: Instrument) -> bool:
+    return (instrument.sector or "").strip().lower() == "fixed income" or (
+        instrument.asset_class or ""
+    ).strip().lower() in {"bond", "cash_equivalent"}

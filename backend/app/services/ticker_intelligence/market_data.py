@@ -25,7 +25,7 @@ from app.services.ticker_intelligence.sec_fundamentals import (
 
 logger = logging.getLogger(__name__)
 
-PrefillScope = Literal["identity", "triage", "analysis"]
+PrefillScope = Literal["identity", "triage", "analysis", "invest"]
 
 
 class MarketDataUnavailableError(RuntimeError):
@@ -97,7 +97,7 @@ async def prefill_ticker(
     if resolution.market == "NG":
         if prefill_scope == "identity":
             await _load_ngn_identity_sources(context)
-        elif prefill_scope == "triage":
+        elif prefill_scope in {"triage", "invest"}:
             await _load_ngn_triage_sources(context)
         else:
             await _load_ngn_market_sources(context)
@@ -106,6 +106,8 @@ async def prefill_ticker(
             await _load_us_identity_sources(context)
         elif prefill_scope == "triage":
             await _load_us_triage_sources(context)
+        elif prefill_scope == "invest":
+            await _load_us_invest_sources(context)
         else:
             await _load_us_sources(context)
 
@@ -237,6 +239,8 @@ def resolve_prefill_scope(scope: str | None = None) -> PrefillScope:
     normalized_scope = (scope or "").strip().lower()
     if normalized_scope in {"analysis", "full", "research"}:
         return "analysis"
+    if normalized_scope in {"invest", "retail", "pease_view"}:
+        return "invest"
     if normalized_scope in {"triage", "quick", "screen", "screening"}:
         return "triage"
     return "identity"
@@ -298,6 +302,15 @@ async def _load_us_sources(context: PrefillBuildContext) -> None:
     await _fetch_sec_fundamentals(context)
     await _load_fmp_sources(context)
     await _load_tiingo_sources(context)
+
+
+async def _load_us_invest_sources(context: PrefillBuildContext) -> None:
+    """Tiingo-first retail prefill. Fundamentals are optional and skipped for ETFs."""
+    await _load_tiingo_price_sources(context, include_meta=True)
+    if _is_listed_fund_context(context):
+        return
+    await _load_fmp_sources(context)
+    await _fetch_sec_fundamentals(context)
 
 
 async def _load_us_triage_sources(context: PrefillBuildContext) -> None:
@@ -936,10 +949,18 @@ def _asset_class(context: PrefillBuildContext) -> str:
     if fmp_type == "ETF" or context.fmp_profile.get("isEtf") is True:
         return "etf"
 
+    tiingo_type = str(context.tiingo_meta.get("assetType") or "").upper()
+    if tiingo_type in {"ETF", "ETP", "MUTUAL FUND", "MUTUALFUND"}:
+        return "etf"
+
     if context.ngn_etf and not context.ngn_company:
         return "etf"
 
     return "equity"
+
+
+def _is_listed_fund_context(context: PrefillBuildContext) -> bool:
+    return _asset_class(context) == "etf"
 
 
 def _exchange(context: PrefillBuildContext) -> str | None:

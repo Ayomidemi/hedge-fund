@@ -1542,6 +1542,157 @@ class InvestMarketBoardItem(Base, TimestampMixin):
     )
 
 
+class InvestFixedIncomeProduct(Base, TimestampMixin):
+    __tablename__ = "invest_fixed_income_products"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    issuer: Mapped[str] = mapped_column(String(255), nullable=False)
+    instrument_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenor: Mapped[str] = mapped_column(String(64), nullable=False)
+    maturity_date: Mapped[date | None] = mapped_column(Date)
+    maturity_days: Mapped[int | None] = mapped_column(Integer)
+    indicative_yield_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    coupon_rate_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    coupon_frequency_per_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    settlement_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    minimum_order_amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    face_value_increment: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    liquidity: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_payout: Mapped[str] = mapped_column(Text, nullable=False)
+    trade_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    exchange: Mapped[str | None] = mapped_column(String(64))
+    proxy_ticker: Mapped[str | None] = mapped_column(String(32))
+    proxy_label: Mapped[str | None] = mapped_column(String(128))
+    retail_notes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    day_count_convention: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ACT/365"
+    )
+    compounding_basis: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="simple"
+    )
+    quote_source: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="model_seed"
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    quotes: Mapped[list["InvestFixedIncomeQuote"]] = relationship(
+        back_populates="product"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("ticker", name="uq_invest_fixed_income_products_ticker"),
+        Index("ix_invest_fixed_income_products_ticker", "ticker"),
+        Index(
+            "ix_invest_fixed_income_products_active_market",
+            "is_active",
+            "market",
+            "instrument_type",
+        ),
+    )
+
+
+class InvestFixedIncomeQuote(Base, TimestampMixin):
+    __tablename__ = "invest_fixed_income_quotes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invest_fixed_income_products.id"), nullable=False, index=True
+    )
+    yield_to_maturity_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    clean_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    accrued_interest: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    dirty_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    settlement_date: Mapped[date | None] = mapped_column(Date)
+    maturity_date: Mapped[date | None] = mapped_column(Date)
+    days_to_maturity: Mapped[int | None] = mapped_column(Integer)
+    next_coupon_date: Mapped[date | None] = mapped_column(Date)
+    face_value_increment: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    quote_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_as_of: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    stale_after: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    assumptions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    product: Mapped["InvestFixedIncomeProduct"] = relationship(back_populates="quotes")
+
+    __table_args__ = (
+        Index(
+            "ix_invest_fixed_income_quotes_product_asof",
+            "product_id",
+            "source_as_of",
+        ),
+        Index("ix_invest_fixed_income_quotes_stale_after", "stale_after"),
+    )
+
+
+class InvestYieldCurve(Base, TimestampMixin):
+    __tablename__ = "invest_yield_curves"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    curve_date: Mapped[date] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+
+    points: Mapped[list["InvestYieldCurvePoint"]] = relationship(
+        back_populates="curve"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "market",
+            "currency",
+            "curve_date",
+            "source",
+            name="uq_invest_yield_curve_market_date_source",
+        ),
+        Index("ix_invest_yield_curves_market_date", "market", "curve_date"),
+    )
+
+
+class InvestYieldCurvePoint(Base, TimestampMixin):
+    __tablename__ = "invest_yield_curve_points"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    curve_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invest_yield_curves.id"), nullable=False, index=True
+    )
+    tenor: Mapped[str] = mapped_column(String(32), nullable=False)
+    days_to_maturity: Mapped[int] = mapped_column(Integer, nullable=False)
+    yield_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+
+    curve: Mapped["InvestYieldCurve"] = relationship(back_populates="points")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "curve_id",
+            "tenor",
+            name="uq_invest_yield_curve_points_curve_tenor",
+        ),
+    )
+
+
 class RetailAccount(Base, TimestampMixin):
     """Pease Invest brokerage account. Separate book from Capital portfolios."""
 

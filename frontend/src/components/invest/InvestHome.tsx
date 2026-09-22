@@ -46,6 +46,12 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
   }
 
   const baseCurrency = home.account.base_currency;
+  const todayTone =
+    Number(home.today_change ?? 0) > 0
+      ? "text-emerald-700 dark:text-emerald-300"
+      : Number(home.today_change ?? 0) < 0
+        ? "text-red-700 dark:text-red-300"
+        : "text-zinc-600 dark:text-zinc-400";
   const returnTone =
     Number(home.total_return) > 0
       ? "text-emerald-700 dark:text-emerald-300"
@@ -72,13 +78,13 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
             <Link href="/invest/markets" className={buttonPrimaryClassName}>
               Explore fixed income
             </Link>
-            <Link href="/invest/search" className={buttonSecondaryClassName}>
+            <Link href="/invest/markets" className={buttonSecondaryClassName}>
               Search
             </Link>
           </div>
         </div>
 
-        <div className="grid divide-y divide-zinc-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-5 dark:divide-zinc-900">
+        <div className="grid divide-y divide-zinc-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-6 dark:divide-zinc-900">
           <SummaryMetric
             label="Portfolio value"
             value={money(home.portfolio_value, baseCurrency)}
@@ -88,6 +94,16 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
           <SummaryMetric
             label="Invested"
             value={money(home.invested, baseCurrency)}
+          />
+          <SummaryMetric
+            label="Today"
+            value={
+              home.today_change != null
+                ? signedMoney(home.today_change, baseCurrency)
+                : "—"
+            }
+            valueClassName={todayTone}
+            subValue={signedPercent(home.today_change_pct)}
           />
           <SummaryMetric
             label="Total return"

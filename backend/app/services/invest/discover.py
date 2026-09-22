@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -14,8 +14,13 @@ from app.api.schemas.invest import (
 )
 from app.core.auth import AuthenticatedUser
 from app.core.market_constants import RADAR_PULSE_TICKERS
-from app.models import RetailWatchlistItem
+from app.models import RadarRun, RadarSnapshot, RetailWatchlistItem
 from app.services.invest.markets import active_board_tickers
+from app.services.invest.news import (
+    income_news_items,
+    is_income_story,
+    latest_news_items,
+)
 from app.services.market_radar.overview import build_radar_overview
 
 UNUSUAL_LIMIT = 10
@@ -58,10 +63,13 @@ async def build_invest_discover(
     watchlist_moves.sort(key=_retail_sort_key)
     board_moves = [item for item in flagged if item.ticker.upper() in board]
     board_moves.sort(key=_retail_sort_key)
+    news_section = await _news_section(session)
+    narrative = _narrative(radar.industries, unusual)
 
     sections = [
         _unusual_section(unusual, screened=radar.working_set_count),
         _sector_section(radar.industries),
+        news_section,
         _watchlist_section(watchlist_moves, watchlist_tickers),
         _board_section(board_moves),
     ]
@@ -74,6 +82,7 @@ async def build_invest_discover(
             watchlist_hits=len(watchlist_moves),
             watchlist_count=len(watchlist_tickers),
         ),
+        narrative=narrative,
         sections=sections,
         next_actions=_next_actions(watchlist_tickers),
     )
@@ -175,6 +184,95 @@ def _board_section(items) -> InvestDiscoverSectionResponse:
         description="Unusual prints among the listed names on the Invest markets board.",
         items=cards,
     )
+
+
+async def _news_section(session: AsyncSession) -> InvestDiscoverSectionResponse:
+    income = await income_news_items(session, limit=3)
+    latest = await latest_news_items(session, limit=8)
+    cards: list[InvestDiscoverItemResponse] = []
+    seen: set = set()
+    for item in [*income, *latest]:
+        if item.id in seen:
+            continue
+        seen.add(item.id)
+        tickers = [link.ticker for link in (item.ticker_links or [])]
+        rates = is_income_story(
+            title=item.title,
+            summary=item.summary,
+            tickers=tickers,
+        )
+        lead = next((ticker for ticker in tickers if ticker), None)
+        cards.append(
+            InvestDiscoverItemResponse(
+                title=item.title,
+                subtitle=item.source_name or item.provider,
+                badge="Rates" if rates else "Headline",
+                href=(
+                    f"/invest/news?ticker={lead}"
+                    if lead
+                    else "/invest/news"
+                ),
+                tone="income" if rates else "neutral",
+                metadata=tickers[:3],
+            )
+        )
+        if len(cards) >= 5:
+            break
+    if not cards:
+        cards.append(
+            InvestDiscoverItemResponse(
+                title="No stored headlines yet",
+                subtitle="Rates and listed tape land on News when Tiingo has copy.",
+                badge="News",
+                href="/invest/news",
+            )
+        )
+    return InvestDiscoverSectionResponse(
+        id="latest_news",
+        title="Latest headlines",
+        description="Rates first when the tape has Treasury, bill, or FGN copy. Full article list stays on News.",
+        items=cards,
+    )
+
+
+def _narrative(industries, unusual) -> str | None:
+    for industry in industries:
+        if industry.status in {"industry_event", "market_event"}:
+            return _sector_copy(industry)
+    if unusual:
+        return _move_copy(unusual[0])
+    return None
+
+
+async def home_tape_headline(session: AsyncSession) -> str | None:
+    run_id = await session.scalar(
+        select(RadarRun.id)
+        .where(RadarRun.status == "completed")
+        .where(RadarRun.working_set_count > 0)
+        .order_by(RadarRun.started_at.desc())
+        .limit(1)
+    )
+    if run_id is None:
+        return None
+    snapshots = list(
+        await session.scalars(
+            select(RadarSnapshot)
+            .where(RadarSnapshot.run_id == run_id)
+            .where(RadarSnapshot.in_working_set.is_(True))
+            .where(func.jsonb_array_length(RadarSnapshot.flags) > 0)
+            .order_by(RadarSnapshot.anomaly_score.desc())
+            .limit(12)
+        )
+    )
+    unusual = [
+        item
+        for item in snapshots
+        if item.ticker.upper() not in RADAR_PULSE_TICKERS
+    ]
+    unusual.sort(key=_retail_sort_key)
+    if not unusual:
+        return None
+    return _move_copy(unusual[0])
 
 
 def _next_actions(watchlist_tickers: set[str]) -> list[InvestDiscoverItemResponse]:

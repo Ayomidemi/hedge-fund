@@ -122,6 +122,16 @@ export function InvestFixedIncomeDetail({
             label="Face increment"
             value={money(product.face_value_increment, product.currency)}
           />
+          <Detail label="Quote source" value={product.quote_source ?? "Pending"} />
+          <Detail label="Quote time" value={quoteTimeLabel(product.quote_as_of)} />
+          <Detail
+            label="Quote status"
+            value={
+              product.quote_stale
+                ? "Stale"
+                : product.quote_status?.replaceAll("_", " ") ?? "Indicative"
+            }
+          />
         </div>
       </section>
 
@@ -193,6 +203,11 @@ export function InvestFixedIncomeDetail({
               </p>
             </div>
           ) : null}
+          {product.quote_stale ? (
+            <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              Quote snapshot is stale. Refresh Markets before relying on this mark.
+            </p>
+          ) : null}
           <div className="mt-4 flex flex-col gap-2">
             <button
               type="submit"
@@ -234,10 +249,36 @@ export function InvestFixedIncomeDetail({
           {product.expected_payout}
         </p>
         <ul className="mt-4 space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
-          {product.retail_notes.map((note) => (
-            <li key={note}>{note}</li>
+          {product.retail_notes.map((note, index) => (
+            <li key={`${index}-${note}`}>{note}</li>
           ))}
         </ul>
+        {product.pricing_assumptions.length ? (
+          <div className="mt-5">
+            <h4 className="text-sm font-semibold">Pricing assumptions</h4>
+            <ul className="mt-3 space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+              {product.pricing_assumptions.map((assumption, index) => (
+                <li key={`${index}-${assumption}`}>{assumption}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {product.risk_checks.length ? (
+          <div className="mt-5 flex flex-wrap gap-2">
+            {product.risk_checks.map((check) => (
+              <span
+                key={check.code}
+                className={`rounded-md px-2 py-1 text-xs font-medium ${
+                  check.passed
+                    ? "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                    : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200"
+                }`}
+              >
+                {check.code.replaceAll("_", " ")}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -264,4 +305,14 @@ function dateLabel(value: string | null) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(`${value}T00:00:00Z`));
+}
+
+function quoteTimeLabel(value: string | null) {
+  if (!value) return "Pending";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
