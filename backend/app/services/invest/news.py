@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,7 +15,7 @@ from app.api.schemas.invest import (
     InvestNewsPaginationResponse,
 )
 from app.core.auth import AuthenticatedUser
-from app.models import Instrument, NewsItem, RetailWatchlistItem
+from app.models import Instrument, NewsItem, NewsItemStar, RetailWatchlistItem
 from app.services.invest import accounts as invest_accounts
 from app.services.invest.fixed_income import (
     FIXED_INCOME_PRODUCTS,
@@ -29,11 +29,13 @@ from app.services.news.providers import _fetch_tiingo_news, normalize_ticker
 
 logger = logging.getLogger(__name__)
 
-FOR_YOU_LIMIT = 24
-SECTION_LIMIT = 16
-INCOME_LIMIT = 20
-HEADLINES_DEFAULT_PAGE_SIZE = 20
+FOR_YOU_LIMIT = 8
+SECTION_LIMIT = 8
+INCOME_LIMIT = 8
+INCOME_POOL = 80
+HEADLINES_DEFAULT_PAGE_SIZE = 10
 TICKER_PAGE_SIZE = 8
+SAVED_PAGE_SIZE = 8
 INCOME_REFRESH_MIN_ITEMS = 5
 INCOME_REFRESH_TIMEOUT_SECONDS = 6.0
 
@@ -81,6 +83,14 @@ async def build_invest_news_overview(
     page_size: int = HEADLINES_DEFAULT_PAGE_SIZE,
     ticker_page: int = 1,
     ticker_page_size: int = TICKER_PAGE_SIZE,
+    income_page: int = 1,
+    income_page_size: int = INCOME_LIMIT,
+    for_you_page: int = 1,
+    for_you_page_size: int = FOR_YOU_LIMIT,
+    markets_page: int = 1,
+    markets_page_size: int = SECTION_LIMIT,
+    saved_page: int = 1,
+    saved_page_size: int = SAVED_PAGE_SIZE,
 ) -> InvestNewsOverviewResponse:
     generated_at = datetime.now(timezone.utc)
     income_tickers = await income_proxy_tickers_db(session)
@@ -94,42 +104,58 @@ async def build_invest_news_overview(
     for_you_tickers = _unique([*portfolio_tickers, *watchlist_tickers])
     normalized_jurisdiction = news_centre._normalize_jurisdiction(jurisdiction)
 
+    current_page = max(page, 1)
+    current_page_size = min(max(page_size, 5), news_centre.CURRENT_NEWS_MAX_PAGE_SIZE)
     headlines, headlines_total = await news_centre._current_items(
         session,
         jurisdiction=normalized_jurisdiction,
-        page=max(page, 1),
-        page_size=min(max(page_size, 5), news_centre.CURRENT_NEWS_MAX_PAGE_SIZE),
+        page=current_page,
+        page_size=current_page_size,
     )
     income_window, _ = await news_centre._current_items(
         session,
         jurisdiction=normalized_jurisdiction,
         page=1,
-        page_size=80,
+        page_size=INCOME_POOL,
     )
     ticker_income, _ = await news_centre._items_for_tickers(
-        session, income_tickers, page=1, page_size=INCOME_LIMIT
+        session, income_tickers, page=1, page_size=INCOME_POOL
     )
-    income_items = _merge_income_stories(
+    income_pool = _merge_income_stories(
         ticker_income,
         income_window,
         jurisdiction=normalized_jurisdiction,
         income_ticker_set=income_ticker_set,
-        limit=INCOME_LIMIT,
+        limit=INCOME_POOL,
     )
-    portfolio_items, _ = await news_centre._items_for_tickers(
-        session, portfolio_tickers, page=1, page_size=SECTION_LIMIT
+    selected_income_page = max(income_page, 1)
+    selected_income_page_size = min(max(income_page_size, 5), 20)
+    income_items, income_total = _slice_page(
+        income_pool, selected_income_page, selected_income_page_size
     )
-    watchlist_items, _ = await news_centre._items_for_tickers(
-        session, watchlist_tickers, page=1, page_size=SECTION_LIMIT
+    selected_for_you_page = max(for_you_page, 1)
+    selected_for_you_page_size = min(max(for_you_page_size, 5), 20)
+    for_you_items, for_you_total = await news_centre._items_for_tickers(
+        session,
+        for_you_tickers,
+        page=selected_for_you_page,
+        page_size=selected_for_you_page_size,
     )
-    for_you_items, _ = await news_centre._items_for_tickers(
-        session, for_you_tickers, page=1, page_size=FOR_YOU_LIMIT
+    selected_markets_page = max(markets_page, 1)
+    selected_markets_page_size = min(max(markets_page_size, 5), 20)
+    markets_items, markets_total = await news_centre._items_for_tickers(
+        session,
+        listed_board,
+        page=selected_markets_page,
+        page_size=selected_markets_page_size,
     )
-    markets_items, _ = await news_centre._items_for_tickers(
-        session, listed_board, page=1, page_size=SECTION_LIMIT
-    )
-    saved_items = await news_centre._saved_items(
-        session, user.id, limit=news_centre.WATCHLIST_NEWS_LIMIT
+    selected_saved_page = max(saved_page, 1)
+    selected_saved_page_size = min(max(saved_page_size, 5), 20)
+    saved_items, saved_total = await _saved_news_page(
+        session,
+        user.id,
+        page=selected_saved_page,
+        page_size=selected_saved_page_size,
     )
 
     normalized_ticker = normalize_ticker(ticker or "", market) if ticker else None
@@ -154,8 +180,6 @@ async def build_invest_news_overview(
         [
             *(item.id for item in income_items),
             *(item.id for item in for_you_items),
-            *(item.id for item in portfolio_items),
-            *(item.id for item in watchlist_items),
             *(item.id for item in markets_items),
             *(item.id for item in headlines),
             *(item.id for item in ticker_items),
@@ -163,13 +187,10 @@ async def build_invest_news_overview(
         ],
     )
 
-    current_page = max(page, 1)
-    current_page_size = min(max(page_size, 5), news_centre.CURRENT_NEWS_MAX_PAGE_SIZE)
-
     return InvestNewsOverviewResponse(
         generated_at=generated_at,
         summary=_summary(
-            income_count=len(income_items),
+            income_count=income_total,
             portfolio_count=len(portfolio_tickers),
             watchlist_count=len(watchlist_tickers),
         ),
@@ -177,34 +198,81 @@ async def build_invest_news_overview(
         watchlist_tickers=watchlist_tickers,
         markets_tickers=listed_board,
         for_you=[_item_response(item, starred_ids) for item in for_you_items],
-        portfolio_items=[_item_response(item, starred_ids) for item in portfolio_items],
-        watchlist_items=[_item_response(item, starred_ids) for item in watchlist_items],
         markets_items=[_item_response(item, starred_ids) for item in markets_items],
         income_tickers=income_tickers,
         income_items=[_item_response(item, starred_ids) for item in income_items],
         headlines=[_item_response(item, starred_ids) for item in headlines],
-        headlines_page=InvestNewsPaginationResponse(
-            page=current_page,
-            page_size=current_page_size,
-            total=headlines_total,
-            has_next=current_page * current_page_size < headlines_total,
-            has_previous=current_page > 1,
+        headlines_page=_pagination(current_page, current_page_size, headlines_total),
+        income_page=_pagination(
+            selected_income_page, selected_income_page_size, income_total
+        ),
+        for_you_page=_pagination(
+            selected_for_you_page, selected_for_you_page_size, for_you_total
+        ),
+        markets_page=_pagination(
+            selected_markets_page, selected_markets_page_size, markets_total
         ),
         ticker=normalized_ticker,
         ticker_items=[_item_response(item, starred_ids) for item in ticker_items],
         ticker_page=(
-            InvestNewsPaginationResponse(
-                page=selected_ticker_page,
-                page_size=selected_ticker_page_size,
-                total=ticker_total,
-                has_next=selected_ticker_page * selected_ticker_page_size < ticker_total,
-                has_previous=selected_ticker_page > 1,
-            )
+            _pagination(selected_ticker_page, selected_ticker_page_size, ticker_total)
             if normalized_ticker
             else None
         ),
         saved_items=[_item_response(item, starred_ids) for item in saved_items],
+        saved_page=_pagination(selected_saved_page, selected_saved_page_size, saved_total),
     )
+
+
+def _pagination(page: int, page_size: int, total: int) -> InvestNewsPaginationResponse:
+    current = max(page, 1)
+    size = max(page_size, 1)
+    return InvestNewsPaginationResponse(
+        page=current,
+        page_size=size,
+        total=total,
+        has_next=current * size < total,
+        has_previous=current > 1,
+    )
+
+
+def _slice_page(
+    items: list[NewsItem], page: int, page_size: int
+) -> tuple[list[NewsItem], int]:
+    total = len(items)
+    start = (max(page, 1) - 1) * max(page_size, 1)
+    return items[start : start + max(page_size, 1)], total
+
+
+async def _saved_news_page(
+    session: AsyncSession,
+    user_id: str | None,
+    *,
+    page: int,
+    page_size: int,
+) -> tuple[list[NewsItem], int]:
+    if not user_id:
+        return [], 0
+    total = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(NewsItemStar)
+            .where(NewsItemStar.owner_user_id == user_id)
+        )
+        or 0
+    )
+    items = list(
+        await session.scalars(
+            select(NewsItem)
+            .join(NewsItemStar, NewsItemStar.news_item_id == NewsItem.id)
+            .options(selectinload(NewsItem.ticker_links))
+            .where(NewsItemStar.owner_user_id == user_id)
+            .order_by(NewsItemStar.created_at.desc())
+            .offset((max(page, 1) - 1) * max(page_size, 1))
+            .limit(max(page_size, 1))
+        )
+    )
+    return items, total
 
 
 def _unique(values: list[str]) -> list[str]:

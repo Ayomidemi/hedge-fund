@@ -324,12 +324,16 @@ class InvestNewsOverviewResponse(BaseModel):
     markets_items: list[InvestNewsItemResponse] = Field(default_factory=list)
     income_tickers: list[str] = Field(default_factory=list)
     income_items: list[InvestNewsItemResponse] = Field(default_factory=list)
+    income_page: InvestNewsPaginationResponse
     headlines: list[InvestNewsItemResponse] = Field(default_factory=list)
     headlines_page: InvestNewsPaginationResponse
+    for_you_page: InvestNewsPaginationResponse
+    markets_page: InvestNewsPaginationResponse
     ticker: str | None = None
     ticker_items: list[InvestNewsItemResponse] = Field(default_factory=list)
     ticker_page: InvestNewsPaginationResponse | None = None
     saved_items: list[InvestNewsItemResponse] = Field(default_factory=list)
+    saved_page: InvestNewsPaginationResponse
 
 
 class InvestTransactionResponse(BaseModel):

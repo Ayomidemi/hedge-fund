@@ -17,7 +17,7 @@ export function InvestProfileTabs({ profile }: { profile: InvestProfile }) {
   const [activeTab, setActiveTab] = useState<ProfileTab>("account");
 
   return (
-    <div className="mx-auto max-w-[760px]">
+    <div className="w-full">
       <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 p-5 dark:border-zinc-800">
           <div>

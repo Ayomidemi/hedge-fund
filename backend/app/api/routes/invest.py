@@ -353,9 +353,17 @@ async def read_invest_news(
     market: str | None = Query(default=None),
     jurisdiction: str | None = Query(default="all"),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=5, le=50),
+    page_size: int = Query(default=10, ge=5, le=50),
     ticker_page: int = Query(default=1, ge=1),
     ticker_page_size: int = Query(default=8, ge=5, le=20),
+    income_page: int = Query(default=1, ge=1),
+    income_page_size: int = Query(default=8, ge=5, le=20),
+    for_you_page: int = Query(default=1, ge=1),
+    for_you_page_size: int = Query(default=8, ge=5, le=20),
+    markets_page: int = Query(default=1, ge=1),
+    markets_page_size: int = Query(default=8, ge=5, le=20),
+    saved_page: int = Query(default=1, ge=1),
+    saved_page_size: int = Query(default=8, ge=5, le=20),
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
 ) -> InvestNewsOverviewResponse:
@@ -370,6 +378,14 @@ async def read_invest_news(
         page_size=page_size,
         ticker_page=ticker_page,
         ticker_page_size=ticker_page_size,
+        income_page=income_page,
+        income_page_size=income_page_size,
+        for_you_page=for_you_page,
+        for_you_page_size=for_you_page_size,
+        markets_page=markets_page,
+        markets_page_size=markets_page_size,
+        saved_page=saved_page,
+        saved_page_size=saved_page_size,
     )
     await session.commit()
     return response

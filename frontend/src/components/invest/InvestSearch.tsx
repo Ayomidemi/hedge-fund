@@ -19,7 +19,7 @@ type InvestSearchProps = {
 
 export function InvestSearch({
   initialQuery = "T-BILL",
-  variant = "page",
+  variant: _variant = "page",
 }: InvestSearchProps) {
   const [query, setQuery] = useState(initialQuery);
   const [market, setMarket] = useState<SearchMarket>("US");
@@ -56,10 +56,10 @@ export function InvestSearch({
     setLastSearch(null);
   }
 
-  const isEmbedded = variant === "embedded";
+  const isEmbedded = _variant === "embedded";
 
   return (
-    <div className={isEmbedded ? "w-full" : "mx-auto max-w-3xl"}>
+    <div className="w-full">
       <form
         onSubmit={(event) => void handleSearch(event)}
         className="grid gap-2 sm:grid-cols-[1fr_auto_auto]"

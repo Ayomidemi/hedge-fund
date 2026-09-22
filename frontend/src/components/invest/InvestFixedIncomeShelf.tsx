@@ -65,8 +65,6 @@ export function InvestFixedIncomeShelf({
     ? estimateFaceValue(selected, selectedAmount)
     : null;
   const highestYield = filtered[0];
-  const minimums = filtered.map((product) => Number(product.minimum_order_amount));
-  const lowestMinimum = minimums.length ? Math.min(...minimums) : null;
 
   function chooseProduct(product: InvestFixedIncomeProduct) {
     setPreview({
@@ -111,13 +109,13 @@ export function InvestFixedIncomeShelf({
           sublabel={highestYield?.ticker ?? "No match"}
         />
         <ShelfStat
-          label="Lowest minimum"
+          label="Selected minimum"
           value={
-            lowestMinimum === null
-              ? "-"
-              : money(lowestMinimum, filtered[0]?.currency ?? "USD")
+            selected
+              ? money(selected.minimum_order_amount, selected.currency)
+              : "-"
           }
-          sublabel="Within current filter"
+          sublabel={selected?.ticker ?? "No product selected"}
         />
         <ShelfStat
           label="Quote source"
@@ -128,30 +126,31 @@ export function InvestFixedIncomeShelf({
 
       {filtered.length ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="space-y-3">
+          <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
             {filtered.map((product) => (
               <button
                 key={product.ticker}
                 type="button"
                 onClick={() => chooseProduct(product)}
-                className={`w-full rounded-xl border p-4 text-left transition ${
+                className={`w-full border-b border-zinc-100 p-4 text-left transition last:border-b-0 dark:border-zinc-900 ${
                   selected?.ticker === product.ticker
-                    ? "border-zinc-950 bg-zinc-50 dark:border-zinc-50 dark:bg-zinc-900"
-                    : "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                    ? "bg-zinc-50 shadow-[inset_3px_0_0_rgb(24_24_27)] dark:bg-zinc-900 dark:shadow-[inset_3px_0_0_rgb(244_244_245)]"
+                    : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
                 }`}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-semibold">{product.name}</p>
-                    <p className="mt-1 text-sm text-zinc-500">
-                      {product.issuer} · {product.currency}
+                <div className="grid gap-4 md:grid-cols-[minmax(0,1.35fr)_repeat(4,minmax(84px,auto))] md:items-center">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate font-semibold">{product.name}</p>
+                      <span className="rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                        {product.market}
+                      </span>
+                    </div>
+                    <p className="mt-1 truncate text-sm text-zinc-500">
+                      {product.issuer} · {product.currency} ·{" "}
+                      {product.instrument_type.replaceAll("_", " ")}
                     </p>
                   </div>
-                  <span className="rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                    {product.market}
-                  </span>
-                </div>
-                <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
                   <Metric label="YTM" value={percent(product.yield_to_maturity_pct)} />
                   <Metric
                     label="Dirty / 100"
@@ -162,13 +161,13 @@ export function InvestFixedIncomeShelf({
                     label="Minimum"
                     value={money(product.minimum_order_amount, product.currency)}
                   />
-                </dl>
+                </div>
               </button>
             ))}
           </div>
 
           {selected ? (
-            <aside className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <aside className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800 lg:sticky lg:top-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-wide text-zinc-500">
@@ -348,8 +347,8 @@ function ShelfStat({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <dt className="text-xs uppercase tracking-wide text-zinc-500">{label}</dt>
-      <dd className="mt-1 truncate font-semibold capitalize tabular-nums">{value}</dd>
+      <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="mt-1 truncate font-semibold capitalize tabular-nums">{value}</p>
     </div>
   );
 }

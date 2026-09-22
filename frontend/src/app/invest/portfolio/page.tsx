@@ -21,7 +21,7 @@ export default async function InvestPortfolioPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
+    <div className="w-full space-y-4">
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Stat label="Total" value={money(home.portfolio_value)} />
         <Stat label="Cash" value={money(home.cash)} />

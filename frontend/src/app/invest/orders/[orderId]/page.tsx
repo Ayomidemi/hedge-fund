@@ -21,14 +21,14 @@ export default async function InvestOrderDetailPage({
 
   if (!order) {
     return (
-      <div className="mx-auto max-w-3xl rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Order could not be loaded.
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    <div className="w-full space-y-4">
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
         <p className="text-sm text-zinc-500">{order.name}</p>
         <h2 className="mt-1 text-2xl font-semibold">

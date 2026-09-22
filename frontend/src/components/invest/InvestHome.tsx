@@ -60,7 +60,7 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
         : "text-zinc-600 dark:text-zinc-400";
 
   return (
-    <div className="mx-auto max-w-[1320px] space-y-5">
+    <div className="w-full space-y-4">
       <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-100 p-5 dark:border-zinc-900 sm:p-6">
           <div>

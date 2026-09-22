@@ -24,6 +24,17 @@ type InvestNewsProps = {
   unavailable: boolean;
 };
 
+type ReloadOptions = {
+  ticker?: string | null;
+  jurisdiction?: "all" | "US" | "NG";
+  page?: number;
+  tickerPage?: number;
+  incomePage?: number;
+  forYouPage?: number;
+  marketsPage?: number;
+  savedPage?: number;
+};
+
 const dateTimeFormat = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -31,9 +42,18 @@ const dateTimeFormat = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
 });
 
-const HEADLINES_PAGE_SIZE = 20;
+const HEADLINES_PAGE_SIZE = 10;
+const SECTION_PAGE_SIZE = 8;
 const TICKER_PAGE_SIZE = 8;
 const SYNC_MS = 60_000;
+
+const EMPTY_PAGE: InvestNewsPagination = {
+  page: 1,
+  page_size: SECTION_PAGE_SIZE,
+  total: 0,
+  has_next: false,
+  has_previous: false,
+};
 
 export function InvestNews({
   initialOverview,
@@ -54,20 +74,12 @@ export function InvestNews({
   const searchParams = useSearchParams();
 
   const reload = useCallback(
-    async (next?: {
-      ticker?: string | null;
-      jurisdiction?: "all" | "US" | "NG";
-      page?: number;
-      tickerPage?: number;
-    }) => {
+    async (next?: ReloadOptions) => {
       const nextTicker =
         next && "ticker" in next
           ? (next.ticker ?? "")
           : (overview?.ticker ?? "");
       const nextJurisdiction = next?.jurisdiction ?? jurisdiction;
-      const nextPage = next?.page ?? overview?.headlines_page.page ?? 1;
-      const nextTickerPage =
-        next?.tickerPage ?? overview?.ticker_page?.page ?? 1;
       const data = await getInvestNews({
         ticker: nextTicker || undefined,
         market: nextTicker
@@ -76,16 +88,30 @@ export function InvestNews({
             : "US"
           : undefined,
         jurisdiction: nextJurisdiction,
-        page: nextPage,
+        page: next?.page ?? overview?.headlines_page.page ?? 1,
         page_size: HEADLINES_PAGE_SIZE,
-        ticker_page: nextTicker ? nextTickerPage : undefined,
+        ticker_page: nextTicker
+          ? (next?.tickerPage ?? overview?.ticker_page?.page ?? 1)
+          : undefined,
         ticker_page_size: nextTicker ? TICKER_PAGE_SIZE : undefined,
+        income_page: next?.incomePage ?? overview?.income_page?.page ?? 1,
+        income_page_size: SECTION_PAGE_SIZE,
+        for_you_page: next?.forYouPage ?? overview?.for_you_page?.page ?? 1,
+        for_you_page_size: SECTION_PAGE_SIZE,
+        markets_page: next?.marketsPage ?? overview?.markets_page?.page ?? 1,
+        markets_page_size: SECTION_PAGE_SIZE,
+        saved_page: next?.savedPage ?? overview?.saved_page?.page ?? 1,
+        saved_page_size: SECTION_PAGE_SIZE,
       });
       setOverview(data);
     },
     [
       jurisdiction,
+      overview?.for_you_page?.page,
       overview?.headlines_page.page,
+      overview?.income_page?.page,
+      overview?.markets_page?.page,
+      overview?.saved_page?.page,
       overview?.ticker,
       overview?.ticker_page?.page,
     ],
@@ -109,20 +135,32 @@ export function InvestNews({
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
+  async function runReload(next?: ReloadOptions, errorMessage = "Headlines could not reload.") {
+    setLoading(true);
+    try {
+      await reload(next);
+    } catch {
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleFilter(next: "all" | "US" | "NG") {
     setJurisdiction(next);
     replaceQuery({
       jurisdiction: next === "all" ? null : next,
       page: null,
     });
-    setLoading(true);
-    try {
-      await reload({ jurisdiction: next, page: 1 });
-    } catch {
-      toast.error("Headlines could not reload.");
-    } finally {
-      setLoading(false);
-    }
+    await runReload({
+      jurisdiction: next,
+      page: 1,
+      incomePage: 1,
+      forYouPage: 1,
+      marketsPage: 1,
+      savedPage: 1,
+      tickerPage: 1,
+    });
   }
 
   async function handleTickerFocus() {
@@ -132,39 +170,16 @@ export function InvestNews({
       ticker: selected,
       market: selected.endsWith(".NG") ? "NG" : "US",
     });
-    setLoading(true);
-    try {
-      await reload({ ticker: selected, tickerPage: 1 });
-    } catch {
-      toast.error("Could not load headlines for that ticker.");
-    } finally {
-      setLoading(false);
-    }
+    await runReload(
+      { ticker: selected, tickerPage: 1 },
+      "Could not load headlines for that ticker.",
+    );
   }
 
   async function handleClearTicker() {
     setTickerQuery("");
     replaceQuery({ ticker: null, market: null });
-    setLoading(true);
-    try {
-      await reload({ ticker: "", tickerPage: 1 });
-    } catch {
-      toast.error("Could not clear ticker focus.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleHeadlinesPage(nextPage: number) {
-    replaceQuery({ page: String(nextPage) });
-    setLoading(true);
-    try {
-      await reload({ page: nextPage });
-    } catch {
-      toast.error("Could not load more headlines.");
-    } finally {
-      setLoading(false);
-    }
+    await runReload({ ticker: "", tickerPage: 1 }, "Could not clear ticker focus.");
   }
 
   async function handleToggleStar(item: InvestNewsItem) {
@@ -198,7 +213,7 @@ export function InvestNews({
 
   if (!overview) {
     return (
-      <div className="mx-auto max-w-5xl rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         {unavailable
           ? "Headlines could not load. Sign in again or refresh."
           : "No headlines yet."}
@@ -215,50 +230,19 @@ export function InvestNews({
   const ratesTickers = incomeTickers.filter(
     (symbol) => !isIncomeShelfSymbol(symbol),
   );
+  const incomePage = overview.income_page ?? EMPTY_PAGE;
+  const forYouPage = overview.for_you_page ?? EMPTY_PAGE;
+  const marketsPage = overview.markets_page ?? EMPTY_PAGE;
+  const savedPage = overview.saved_page ?? EMPTY_PAGE;
+  const tickerPage = overview.ticker_page ?? null;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-xs uppercase tracking-wide text-zinc-500">News</p>
-        <h2 className="mt-1 text-2xl font-semibold">Rates and income</h2>
-        <p className="mt-3 max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
+    <div className="w-full space-y-4">
+      <section className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+        <p className="max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
           {overview.summary}
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {ratesTickers.map((symbol) => (
-            <ContextChip
-              key={`r-${symbol}`}
-              href={instrumentHref(symbol)}
-              label={symbol}
-              kind="Rates"
-            />
-          ))}
-          {shelfTickers.map((symbol) => (
-            <ContextChip
-              key={`s-${symbol}`}
-              href={instrumentHref(symbol)}
-              label={symbol}
-              kind="Shelf"
-            />
-          ))}
-          {overview.portfolio_tickers.slice(0, 8).map((symbol) => (
-            <ContextChip
-              key={`p-${symbol}`}
-              href={instrumentHref(symbol)}
-              label={symbol}
-              kind="Holding"
-            />
-          ))}
-          {overview.watchlist_tickers.slice(0, 8).map((symbol) => (
-            <ContextChip
-              key={`w-${symbol}`}
-              href={instrumentHref(symbol)}
-              label={symbol}
-              kind="Watch"
-            />
-          ))}
-        </div>
-        <div className="mt-5 flex flex-wrap items-end gap-3">
+        <div className="mt-4 flex flex-wrap items-end gap-3">
           <div className="min-w-[160px]">
             <label className="text-xs font-medium text-zinc-500" htmlFor="invest-news-market">
               Market
@@ -314,139 +298,166 @@ export function InvestNews({
             </button>
           ) : null}
         </div>
-        <p className="mt-3 text-xs text-zinc-500">
-          T-bills, Treasuries, FGN context, and listed duration proxies lead.
-          Discover stays unusual-price tape. This page is article headlines only.
-        </p>
+        <div className="mt-4 space-y-2">
+          <ChipRow label="Rates" symbols={ratesTickers} kind="Rates" />
+          <ChipRow label="Shelf" symbols={shelfTickers} kind="Shelf" />
+          <ChipRow
+            label="Your book"
+            symbols={[
+              ...overview.portfolio_tickers.slice(0, 6),
+              ...overview.watchlist_tickers.slice(0, 6),
+            ]}
+            kind="Book"
+          />
+        </div>
       </section>
 
-      <NewsSection
-        title="Rates and income"
-        description="Treasury, bill, FGN, and listed duration-proxy headlines from Tiingo."
-        items={incomeItems}
-        emptyLabel="No rates or income headlines stored yet. Tiingo is queried for BIL, SHY, IEF, and TLT when this tape is thin."
-        savingStars={savingStars}
-        onOpen={setSelectedArticle}
-        onToggleStar={handleToggleStar}
-      />
-
-      {overview.ticker ? (
-        <NewsSection
-          title={`${overview.ticker}`}
-          description="Focused headlines for the ticker you selected."
-          items={overview.ticker_items}
-          emptyLabel={`No stored headlines for ${overview.ticker} yet.`}
-          savingStars={savingStars}
-          onOpen={setSelectedArticle}
-          onToggleStar={handleToggleStar}
-          footer={
-            overview.ticker_page ? (
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)] xl:items-start">
+        <div className="space-y-5">
+          <NewsSection
+            title="Rates and income"
+            description={`Treasury, bill, FGN, and duration-proxy headlines. ${paginationLabel(incomePage)}`}
+            items={incomeItems}
+            emptyLabel="No rates or income headlines stored yet."
+            savingStars={savingStars}
+            onOpen={setSelectedArticle}
+            onToggleStar={handleToggleStar}
+            footer={
               <Pagination
-                page={overview.ticker_page}
+                page={incomePage}
                 loading={loading}
                 onPageChange={(next) =>
-                  void reload({ tickerPage: next }).catch(() =>
-                    toast.error("Could not load more."),
-                  )
+                  void runReload({ incomePage: next }, "Could not load more rates headlines.")
                 }
               />
-            ) : null
-          }
-        />
-      ) : null}
-
-      <NewsSection
-        title="For you"
-        description={
-          personalEmpty
-            ? "Add names on Watchlist or take paper positions to fill this section."
-            : "Stories linked to your holdings and watchlist, including T-bill and Treasury proxies."
-        }
-        items={overview.for_you}
-        emptyLabel={
-          personalEmpty
-            ? "Nothing personal yet — start from Watchlist or Markets."
-            : "No matching headlines for your names right now."
-        }
-        savingStars={savingStars}
-        onOpen={setSelectedArticle}
-        onToggleStar={handleToggleStar}
-        actions={
-          personalEmpty ? (
-            <div className="flex flex-wrap gap-2">
-              <Link href="/invest/watchlist" className={buttonSecondaryClassName}>
-                Open watchlist
-              </Link>
-              <Link href="/invest/markets" className={buttonSecondaryClassName}>
-                Browse markets
-              </Link>
-            </div>
-          ) : null
-        }
-      />
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <NewsSection
-          title="Holdings"
-          description="News tied to what you own."
-          items={overview.portfolio_items}
-          emptyLabel="No holdings headlines yet."
-          compact
-          savingStars={savingStars}
-          onOpen={setSelectedArticle}
-          onToggleStar={handleToggleStar}
-        />
-        <NewsSection
-          title="Watchlist"
-          description="News for names you are tracking."
-          items={overview.watchlist_items}
-          emptyLabel="No watchlist headlines yet."
-          compact
-          savingStars={savingStars}
-          onOpen={setSelectedArticle}
-          onToggleStar={handleToggleStar}
-        />
-      </div>
-
-      <NewsSection
-        title="Listed equity tape"
-        description="Index and sector headlines from the markets board. Rates proxies sit in the section above."
-        items={overview.markets_items}
-        emptyLabel="No listed-equity board headlines stored yet."
-        savingStars={savingStars}
-        onOpen={setSelectedArticle}
-        onToggleStar={handleToggleStar}
-      />
-
-      <NewsSection
-        title="All headlines"
-        description={`Broader tape after rates. ${paginationLabel(overview.headlines_page)}`}
-        items={overview.headlines}
-        emptyLabel="No market headlines in this filter."
-        savingStars={savingStars}
-        onOpen={setSelectedArticle}
-        onToggleStar={handleToggleStar}
-        footer={
-          <Pagination
-            page={overview.headlines_page}
-            loading={loading}
-            onPageChange={(next) => void handleHeadlinesPage(next)}
+            }
           />
-        }
-      />
+          <NewsSection
+            title="Listed equity tape"
+            description={`Index and sector board headlines. ${paginationLabel(marketsPage)}`}
+            items={overview.markets_items}
+            emptyLabel="No listed-equity board headlines stored yet."
+            compact
+            savingStars={savingStars}
+            onOpen={setSelectedArticle}
+            onToggleStar={handleToggleStar}
+            footer={
+              <Pagination
+                page={marketsPage}
+                loading={loading}
+                onPageChange={(next) =>
+                  void runReload({ marketsPage: next }, "Could not load more listed headlines.")
+                }
+              />
+            }
+          />
+          <NewsSection
+            title="All headlines"
+            description={`Broader tape after rates. ${paginationLabel(overview.headlines_page)}`}
+            items={overview.headlines}
+            emptyLabel="No market headlines in this filter."
+            savingStars={savingStars}
+            onOpen={setSelectedArticle}
+            onToggleStar={handleToggleStar}
+            footer={
+              <Pagination
+                page={overview.headlines_page}
+                loading={loading}
+                onPageChange={(next) => {
+                  replaceQuery({ page: String(next) });
+                  void runReload({ page: next }, "Could not load more headlines.");
+                }}
+              />
+            }
+          />
+        </div>
 
-      {overview.saved_items.length > 0 ? (
-        <NewsSection
-          title="Saved"
-          description={`${overview.saved_items.length} saved`}
-          items={overview.saved_items}
-          emptyLabel="Nothing saved."
-          compact
-          savingStars={savingStars}
-          onOpen={setSelectedArticle}
-          onToggleStar={handleToggleStar}
-        />
-      ) : null}
+        <div className="space-y-5">
+          {overview.ticker ? (
+            <NewsSection
+              title={overview.ticker}
+              description={`Focused headlines. ${tickerPage ? paginationLabel(tickerPage) : ""}`.trim()}
+              items={overview.ticker_items}
+              emptyLabel={`No stored headlines for ${overview.ticker} yet.`}
+              compact
+              savingStars={savingStars}
+              onOpen={setSelectedArticle}
+              onToggleStar={handleToggleStar}
+              footer={
+                tickerPage ? (
+                  <Pagination
+                    page={tickerPage}
+                    loading={loading}
+                    onPageChange={(next) =>
+                      void runReload({ tickerPage: next }, "Could not load more.")
+                    }
+                  />
+                ) : null
+              }
+            />
+          ) : null}
+          <NewsSection
+            title="For you"
+            description={
+              personalEmpty
+                ? "Add names on Watchlist or take paper positions to fill this section."
+                : `Holdings and watchlist. ${paginationLabel(forYouPage)}`
+            }
+            items={overview.for_you}
+            emptyLabel={
+              personalEmpty
+                ? "Nothing personal yet — start from Watchlist or Markets."
+                : "No matching headlines for your names right now."
+            }
+            compact
+            savingStars={savingStars}
+            onOpen={setSelectedArticle}
+            onToggleStar={handleToggleStar}
+            actions={
+              personalEmpty ? (
+                <div className="flex flex-wrap gap-2">
+                  <Link href="/invest/watchlist" className={buttonSecondaryClassName}>
+                    Watchlist
+                  </Link>
+                  <Link href="/invest/markets" className={buttonSecondaryClassName}>
+                    Markets
+                  </Link>
+                </div>
+              ) : null
+            }
+            footer={
+              personalEmpty ? null : (
+                <Pagination
+                  page={forYouPage}
+                  loading={loading}
+                  onPageChange={(next) =>
+                    void runReload({ forYouPage: next }, "Could not load more personal headlines.")
+                  }
+                />
+              )
+            }
+          />
+          <NewsSection
+            title="Saved"
+            description={paginationLabel(savedPage)}
+            items={overview.saved_items}
+            emptyLabel="Nothing saved yet. Star a headline to keep it here."
+            compact
+            savingStars={savingStars}
+            onOpen={setSelectedArticle}
+            onToggleStar={handleToggleStar}
+            footer={
+              <Pagination
+                page={savedPage}
+                loading={loading}
+                onPageChange={(next) =>
+                  void runReload({ savedPage: next }, "Could not load more saved headlines.")
+                }
+              />
+            }
+          />
+        </div>
+      </div>
 
       <ArticleModal
         item={selectedArticle}
@@ -458,25 +469,32 @@ export function InvestNews({
   );
 }
 
-function ContextChip({
-  href,
+function ChipRow({
   label,
+  symbols,
   kind,
 }: {
-  href: string;
   label: string;
+  symbols: string[];
   kind: string;
 }) {
+  const unique = [...new Set(symbols)];
+  if (unique.length === 0) return null;
   return (
-    <Link
-      href={href}
-      className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-    >
-      <span className="text-[10px] uppercase tracking-wide text-zinc-400">
-        {kind}
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="w-16 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+        {label}
       </span>
-      {label}
-    </Link>
+      {unique.map((symbol) => (
+        <Link
+          key={`${kind}-${symbol}`}
+          href={instrumentHref(symbol)}
+          className="inline-flex items-center rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        >
+          {symbol}
+        </Link>
+      ))}
+    </div>
   );
 }
 
@@ -715,7 +733,7 @@ function updateStar(
   const updateItems = (items: InvestNewsItem[]) =>
     items.map((item) => (item.id === itemId ? { ...item, starred } : item));
   const sourceItem = [
-    ...overview.income_items ?? [],
+    ...(overview.income_items ?? []),
     ...overview.for_you,
     ...overview.portfolio_items,
     ...overview.watchlist_items,

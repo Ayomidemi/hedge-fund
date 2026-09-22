@@ -18,14 +18,14 @@ export default async function InvestDiscoverPage() {
 
   if (!discover) {
     return (
-      <div className="mx-auto max-w-4xl rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Unusual activity could not load yet. Refresh or try again shortly.
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="w-full space-y-4">
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
         <p className="text-xs uppercase tracking-wide text-zinc-500">
           Discover

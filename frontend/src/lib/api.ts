@@ -2905,12 +2905,16 @@ export type InvestNewsOverview = {
   markets_items: InvestNewsItem[];
   income_tickers?: string[];
   income_items?: InvestNewsItem[];
+  income_page?: InvestNewsPagination;
   headlines: InvestNewsItem[];
   headlines_page: InvestNewsPagination;
+  for_you_page?: InvestNewsPagination;
+  markets_page?: InvestNewsPagination;
   ticker: string | null;
   ticker_items: InvestNewsItem[];
   ticker_page?: InvestNewsPagination | null;
   saved_items: InvestNewsItem[];
+  saved_page?: InvestNewsPagination;
 };
 
 export type InvestTransaction = {
@@ -3093,6 +3097,14 @@ export function getInvestNews(
     page_size?: number;
     ticker_page?: number;
     ticker_page_size?: number;
+    income_page?: number;
+    income_page_size?: number;
+    for_you_page?: number;
+    for_you_page_size?: number;
+    markets_page?: number;
+    markets_page_size?: number;
+    saved_page?: number;
+    saved_page_size?: number;
   },
   options?: ApiRequestOptions,
 ) {
@@ -3107,6 +3119,22 @@ export function getInvestNews(
   if (params?.ticker_page) search.set("ticker_page", String(params.ticker_page));
   if (params?.ticker_page_size) {
     search.set("ticker_page_size", String(params.ticker_page_size));
+  }
+  if (params?.income_page) search.set("income_page", String(params.income_page));
+  if (params?.income_page_size) {
+    search.set("income_page_size", String(params.income_page_size));
+  }
+  if (params?.for_you_page) search.set("for_you_page", String(params.for_you_page));
+  if (params?.for_you_page_size) {
+    search.set("for_you_page_size", String(params.for_you_page_size));
+  }
+  if (params?.markets_page) search.set("markets_page", String(params.markets_page));
+  if (params?.markets_page_size) {
+    search.set("markets_page_size", String(params.markets_page_size));
+  }
+  if (params?.saved_page) search.set("saved_page", String(params.saved_page));
+  if (params?.saved_page_size) {
+    search.set("saved_page_size", String(params.saved_page_size));
   }
   const query = search.toString();
   return fetchApi<InvestNewsOverview>(

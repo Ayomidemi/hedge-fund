@@ -21,7 +21,7 @@ const pageTitles: Record<string, string> = {
   Home: "Your investing",
   Discover: "What's happening",
   Markets: "Markets",
-  News: "Rates and income",
+  News: "News",
   Watchlist: "Watchlist",
   Portfolio: "Portfolio",
   Orders: "Orders",
@@ -118,7 +118,7 @@ export function InvestShell({
             ))}
           </nav>
         </header>
-        <main className="flex-1 px-4 py-5 sm:px-6 xl:px-8">{children}</main>
+        <main className="flex-1 px-2 py-3 sm:px-4 xl:px-5">{children}</main>
       </div>
     </div>
   );

@@ -495,6 +495,35 @@ class InvestNewsTickerTests(TestCase):
         self.assertIn("rates headlines", personal)
         self.assertIn("T-bills", empty)
 
+    def test_income_stories_can_be_paged(self) -> None:
+        from types import SimpleNamespace
+        from uuid import uuid4
+
+        from app.services.invest.news import _merge_income_stories, _pagination, _slice_page
+
+        stories = [
+            SimpleNamespace(
+                id=uuid4(),
+                title="Treasury yields jump after FOMC",
+                summary=None,
+                ticker_links=[SimpleNamespace(ticker="BIL")],
+            )
+            for _ in range(12)
+        ]
+        merged = _merge_income_stories(
+            stories,
+            [],
+            jurisdiction="US",
+            income_ticker_set={"BIL"},
+            limit=20,
+        )
+        page, total = _slice_page(merged, 2, 8)
+        self.assertEqual(total, 12)
+        self.assertEqual(len(page), 4)
+        meta = _pagination(2, 8, total)
+        self.assertTrue(meta.has_previous)
+        self.assertFalse(meta.has_next)
+
 
 class InvestDiscoverCopyTests(TestCase):
     def test_move_copy_is_plain_language(self) -> None:

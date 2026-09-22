@@ -13,7 +13,7 @@ export default async function InvestMarketsPage() {
 
   if (!markets) {
     return (
-      <div className="mx-auto max-w-4xl rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Markets could not load the tape yet.
       </div>
     );

@@ -70,7 +70,7 @@ export function InvestCash({
     .reduce((sum, item) => sum + Math.abs(Number(item.amount)), 0);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    <div className="w-full space-y-4">
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
         <p className="text-xs uppercase tracking-wide text-zinc-500">Cash</p>
         <p className="mt-2 text-3xl font-semibold tabular-nums">{money(account.cash)}</p>
