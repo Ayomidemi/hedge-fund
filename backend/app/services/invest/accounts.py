@@ -21,6 +21,7 @@ from app.api.schemas.invest import (
     InvestProfileActivityResponse,
     InvestProfilePermissionResponse,
     InvestProfileResponse,
+    InvestQuickActionResponse,
     InvestResearchMetricResponse,
     InvestResearchSectionResponse,
     InvestTransactionResponse,
@@ -58,6 +59,12 @@ from app.services.invest.fixed_income import (
     get_fixed_income_product_db,
     latest_fixed_income_quote,
     search_fixed_income_products_db,
+)
+from app.services.invest.configuration import (
+    default_invest_setting,
+    get_home_quick_actions,
+    get_profile_policy,
+    get_risk_policy,
 )
 from app.services.invest.risk import evaluate_order_risk
 from app.services.market_data.quote_cache import get_cached_quote_price
@@ -162,6 +169,7 @@ async def get_profile(
             .limit(8)
         )
     )
+    profile_policy = await get_profile_policy(session)
     return InvestProfileResponse(
         user_id=user.id,
         email=user.email,
@@ -172,19 +180,9 @@ async def get_profile(
             snapshot.balances.cash,
             snapshot.balances.buying_power,
         ),
-        permissions=_profile_permissions(user),
-        product_boundary=[
-            "Invest cash stays separate.",
-            "Paper orders stay in Invest.",
-            "Capital signals stay in Capital.",
-            "Broker routing is isolated.",
-        ],
-        notification_settings=[
-            "Order fills",
-            "Cash events",
-            "Account events",
-            "Market alerts planned",
-        ],
+        permissions=_profile_permissions(user, profile_policy.get("permissions")),
+        product_boundary=list(profile_policy.get("product_boundary") or []),
+        notification_settings=list(profile_policy.get("notification_settings") or []),
         recent_activity=[
             InvestProfileActivityResponse(
                 event=row.event,
@@ -248,6 +246,10 @@ async def get_home(
     )
     today_change, today_change_pct = await _today_change(session, holdings, invested)
     headlines = await _home_headlines(session, today_change, account.base_currency)
+    quick_actions = [
+        InvestQuickActionResponse.model_validate(action)
+        for action in await get_home_quick_actions(session)
+    ]
     return InvestHomeResponse(
         account=_account_response(account, balances.cash, balances.buying_power),
         portfolio_value=portfolio_value,
@@ -266,6 +268,7 @@ async def get_home(
         allocation=_allocation_buckets(holdings, balances.cash, portfolio_value),
         holdings=holdings,
         headlines=headlines,
+        quick_actions=quick_actions,
     )
 
 
@@ -286,11 +289,13 @@ async def submit_order(
     fixed_income_product = await get_fixed_income_product_db(session, instrument.ticker)
     if fixed_income_product is not None:
         instrument = await ensure_fixed_income_instrument(session, fixed_income_product)
+    risk_policy = await get_risk_policy(session)
     risk_assessment = evaluate_order_risk(
         account=account,
         instrument=instrument,
         payload=payload,
         fixed_income_product=fixed_income_product,
+        policy=risk_policy,
     )
     if risk_assessment.blockers:
         raise InvestValidationError(
@@ -944,50 +949,36 @@ def _order_response(order: RetailOrder, instrument: Instrument) -> InvestOrderRe
     )
 
 
-def _profile_permissions(user: AuthenticatedUser) -> list[InvestProfilePermissionResponse]:
+def _profile_permissions(
+    user: AuthenticatedUser, configured: list[dict] | None = None
+) -> list[InvestProfilePermissionResponse]:
+    entries = configured
+    if entries is None:
+        profile_policy = default_invest_setting("profile_policy")
+        entries = list(profile_policy.get("permissions") or [])
+    dynamic_enabled = {
+        "capital_workspace": user_can_access_capital(user),
+        "product_switching": user_can_switch_products(user),
+    }
     return [
         InvestProfilePermissionResponse(
-            code="paper_trading",
-            label="Paper trading",
-            enabled=True,
-            description="Simulated Invest orders.",
-        ),
-        InvestProfilePermissionResponse(
-            code="fixed_income",
-            label="Fixed income",
-            enabled=True,
-            description="Bills, notes, bonds, and cash-yield products.",
-        ),
-        InvestProfilePermissionResponse(
-            code="real_cash_movements",
-            label="Real cash movement",
-            enabled=False,
-            description="Live funding is off.",
-        ),
-        InvestProfilePermissionResponse(
-            code="capital_workspace",
-            label="Pease Capital workspace",
-            enabled=user_can_access_capital(user),
-            description="Fund books and PM workflow.",
-        ),
-        InvestProfilePermissionResponse(
-            code="product_switching",
-            label="Product switching",
-            enabled=user_can_switch_products(user),
-            description="Invest and Capital switcher.",
-        ),
+            code=str(entry.get("code", "")),
+            label=str(entry.get("label", entry.get("code", ""))),
+            enabled=bool(
+                dynamic_enabled.get(str(entry.get("code", "")), entry.get("enabled"))
+            ),
+            description=str(entry.get("description", "")),
+        )
+        for entry in entries
+        if entry.get("code")
     ]
 
 
-def _withheld_capital_signals() -> list[str]:
-    return [
-        "Capital target weights",
-        "Expected alpha and model rank",
-        "Strategy pod assignment",
-        "PM approval state",
-        "Portfolio hedge recommendation",
-        "Fund-level risk budget",
-    ]
+def _withheld_capital_signals(configured: list[str] | None = None) -> list[str]:
+    if configured is not None:
+        return list(configured)
+    profile_policy = default_invest_setting("profile_policy")
+    return list(profile_policy.get("withheld_capital_signals") or [])
 
 
 def _money_text(

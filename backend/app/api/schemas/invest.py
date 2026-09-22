@@ -37,6 +37,12 @@ class InvestAllocationBucket(BaseModel):
     allocation_pct: Decimal
 
 
+class InvestQuickActionResponse(BaseModel):
+    title: str
+    detail: str
+    href: str
+
+
 class InvestHomeResponse(BaseModel):
     account: InvestAccountResponse
     portfolio_value: Decimal
@@ -49,6 +55,7 @@ class InvestHomeResponse(BaseModel):
     allocation: list[InvestAllocationBucket] = Field(default_factory=list)
     holdings: list[InvestHolding] = Field(default_factory=list)
     headlines: list[str] = Field(default_factory=list)
+    quick_actions: list[InvestQuickActionResponse] = Field(default_factory=list)
 
 
 class InvestOrderCreate(BaseModel):
@@ -370,3 +377,26 @@ class InvestProfileResponse(BaseModel):
     product_boundary: list[str] = Field(default_factory=list)
     notification_settings: list[str] = Field(default_factory=list)
     recent_activity: list[InvestProfileActivityResponse] = Field(default_factory=list)
+
+
+class InvestSearchMarketResponse(BaseModel):
+    code: str
+    label: str
+
+
+class InvestSearchDefaultsResponse(BaseModel):
+    default_query: str
+    default_market: str
+    markets: list[InvestSearchMarketResponse] = Field(default_factory=list)
+
+
+class InvestNewsUiSettingsResponse(BaseModel):
+    headlines_page_size: int
+    section_page_size: int
+    ticker_page_size: int
+    refresh_ms: int
+
+
+class InvestUiConfigResponse(BaseModel):
+    search: InvestSearchDefaultsResponse
+    news: InvestNewsUiSettingsResponse

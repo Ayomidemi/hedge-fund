@@ -23,53 +23,27 @@ from app.services.invest.fixed_income import (
     get_fixed_income_product_db,
     search_fixed_income_products_db,
 )
+from app.services.invest.configuration import default_invest_setting, get_news_policy
 from app.services.invest.markets import active_board_tickers, rates_board_tickers
 from app.services.news import centre as news_centre
 from app.services.news.providers import _fetch_tiingo_news, normalize_ticker
 
 logger = logging.getLogger(__name__)
 
-FOR_YOU_LIMIT = 8
-SECTION_LIMIT = 8
-INCOME_LIMIT = 8
-INCOME_POOL = 80
-HEADLINES_DEFAULT_PAGE_SIZE = 10
-TICKER_PAGE_SIZE = 8
-SAVED_PAGE_SIZE = 8
-INCOME_REFRESH_MIN_ITEMS = 5
-INCOME_REFRESH_TIMEOUT_SECONDS = 6.0
-
-US_INCOME_KEYWORDS = (
-    "treasury",
-    "treasuries",
-    "t-bill",
-    "t bill",
-    "tbill",
-    "t-note",
-    "t-bond",
-    "yield curve",
-    "bond yield",
-    "treasury yield",
-    "fed funds",
-    "rate cut",
-    "rate hike",
-    "duration risk",
-    "money market",
-    "fomc",
+_DEFAULT_NEWS_POLICY = default_invest_setting("news_policy")
+FOR_YOU_LIMIT = int(_DEFAULT_NEWS_POLICY["section_page_size"])
+SECTION_LIMIT = int(_DEFAULT_NEWS_POLICY["section_page_size"])
+INCOME_LIMIT = int(_DEFAULT_NEWS_POLICY["section_page_size"])
+INCOME_POOL = int(_DEFAULT_NEWS_POLICY["income_pool"])
+HEADLINES_DEFAULT_PAGE_SIZE = int(_DEFAULT_NEWS_POLICY["headlines_page_size"])
+TICKER_PAGE_SIZE = int(_DEFAULT_NEWS_POLICY["ticker_page_size"])
+SAVED_PAGE_SIZE = int(_DEFAULT_NEWS_POLICY["saved_page_size"])
+INCOME_REFRESH_MIN_ITEMS = int(_DEFAULT_NEWS_POLICY["income_refresh_min_items"])
+INCOME_REFRESH_TIMEOUT_SECONDS = float(
+    _DEFAULT_NEWS_POLICY["income_refresh_timeout_seconds"]
 )
-NG_INCOME_KEYWORDS = (
-    "fgn",
-    "cbn",
-    "naira",
-    "dmo",
-    "fmdq",
-    "nigerian treasury",
-    "nigeria treasury",
-    "ntb",
-    "treasury bill",
-    "bond auction",
-    "open market operation",
-)
+US_INCOME_KEYWORDS = tuple(_DEFAULT_NEWS_POLICY["income_keywords"]["US"])
+NG_INCOME_KEYWORDS = tuple(_DEFAULT_NEWS_POLICY["income_keywords"]["NG"])
 
 
 async def build_invest_news_overview(
@@ -80,19 +54,34 @@ async def build_invest_news_overview(
     market: str | None = None,
     jurisdiction: str | None = "all",
     page: int = 1,
-    page_size: int = HEADLINES_DEFAULT_PAGE_SIZE,
+    page_size: int | None = None,
     ticker_page: int = 1,
-    ticker_page_size: int = TICKER_PAGE_SIZE,
+    ticker_page_size: int | None = None,
     income_page: int = 1,
-    income_page_size: int = INCOME_LIMIT,
+    income_page_size: int | None = None,
     for_you_page: int = 1,
-    for_you_page_size: int = FOR_YOU_LIMIT,
+    for_you_page_size: int | None = None,
     markets_page: int = 1,
-    markets_page_size: int = SECTION_LIMIT,
+    markets_page_size: int | None = None,
     saved_page: int = 1,
-    saved_page_size: int = SAVED_PAGE_SIZE,
+    saved_page_size: int | None = None,
 ) -> InvestNewsOverviewResponse:
     generated_at = datetime.now(timezone.utc)
+    news_policy = await get_news_policy(session)
+    income_pool_size = _policy_int(news_policy, "income_pool", INCOME_POOL)
+    section_page_size = _policy_int(news_policy, "section_page_size", SECTION_LIMIT)
+    page_size = page_size or _policy_int(
+        news_policy, "headlines_page_size", HEADLINES_DEFAULT_PAGE_SIZE
+    )
+    ticker_page_size = ticker_page_size or _policy_int(
+        news_policy, "ticker_page_size", TICKER_PAGE_SIZE
+    )
+    income_page_size = income_page_size or section_page_size
+    for_you_page_size = for_you_page_size or section_page_size
+    markets_page_size = markets_page_size or section_page_size
+    saved_page_size = saved_page_size or _policy_int(
+        news_policy, "saved_page_size", SAVED_PAGE_SIZE
+    )
     income_tickers = await income_proxy_tickers_db(session)
     income_ticker_set = set(income_tickers)
     portfolio_tickers = await _portfolio_news_tickers(session, user)
@@ -116,17 +105,18 @@ async def build_invest_news_overview(
         session,
         jurisdiction=normalized_jurisdiction,
         page=1,
-        page_size=INCOME_POOL,
+        page_size=income_pool_size,
     )
     ticker_income, _ = await news_centre._items_for_tickers(
-        session, income_tickers, page=1, page_size=INCOME_POOL
+        session, income_tickers, page=1, page_size=income_pool_size
     )
     income_pool = _merge_income_stories(
         ticker_income,
         income_window,
         jurisdiction=normalized_jurisdiction,
         income_ticker_set=income_ticker_set,
-        limit=INCOME_POOL,
+        limit=income_pool_size,
+        policy=news_policy,
     )
     selected_income_page = max(income_page, 1)
     selected_income_page_size = min(max(income_page_size, 5), 20)
@@ -316,18 +306,20 @@ def is_income_story(
     tickers: list[str],
     jurisdiction: str | None = None,
     income_ticker_set: set[str] | None = None,
+    policy: dict | None = None,
 ) -> bool:
     income_ticker_set = income_ticker_set or INCOME_TICKER_SET
     ticker_set = {ticker.upper() for ticker in tickers if ticker}
     if ticker_set & income_ticker_set:
         return True
     text = f"{title} {summary or ''}".lower()
-    return any(keyword in text for keyword in _keywords_for(jurisdiction))
+    return any(keyword in text for keyword in _keywords_for(jurisdiction, policy))
 
 
 async def _refresh_income_news_if_needed(
     session: AsyncSession, tickers: list[str]
 ) -> None:
+    news_policy = await get_news_policy(session)
     fixed_income_tickers = {
         product.ticker for product in await search_fixed_income_products_db(session)
     }
@@ -337,14 +329,27 @@ async def _refresh_income_news_if_needed(
         if ticker.upper() not in fixed_income_tickers and not ticker.endswith(".NG")
     ]
     _, total = await news_centre._items_for_tickers(
-        session, listed_proxies, page=1, page_size=INCOME_LIMIT
+        session,
+        listed_proxies,
+        page=1,
+        page_size=_policy_int(news_policy, "section_page_size", INCOME_LIMIT),
     )
-    if total >= INCOME_REFRESH_MIN_ITEMS or not listed_proxies:
+    if (
+        total >= _policy_int(
+            news_policy, "income_refresh_min_items", INCOME_REFRESH_MIN_ITEMS
+        )
+        or not listed_proxies
+    ):
         return
     try:
         result = await asyncio.wait_for(
             _fetch_tiingo_news(listed_proxies),
-            timeout=INCOME_REFRESH_TIMEOUT_SECONDS,
+            timeout=float(
+                news_policy.get(
+                    "income_refresh_timeout_seconds",
+                    INCOME_REFRESH_TIMEOUT_SECONDS,
+                )
+            ),
         )
     except TimeoutError:
         logger.warning("invest_income_news_refresh_timed_out")
@@ -363,6 +368,7 @@ def _merge_income_stories(
     jurisdiction: str | None,
     limit: int,
     income_ticker_set: set[str] | None = None,
+    policy: dict | None = None,
 ) -> list[NewsItem]:
     merged: list[NewsItem] = []
     seen: set[UUID] = set()
@@ -376,6 +382,7 @@ def _merge_income_stories(
             tickers=tickers,
             jurisdiction=jurisdiction,
             income_ticker_set=income_ticker_set,
+            policy=policy,
         ):
             continue
         seen.add(item.id)
@@ -385,12 +392,24 @@ def _merge_income_stories(
     return merged
 
 
-def _keywords_for(jurisdiction: str | None) -> tuple[str, ...]:
+def _keywords_for(
+    jurisdiction: str | None, policy: dict | None = None
+) -> tuple[str, ...]:
+    keywords = (policy or _DEFAULT_NEWS_POLICY).get("income_keywords") or {}
+    us_keywords = tuple(keywords.get("US") or US_INCOME_KEYWORDS)
+    ng_keywords = tuple(keywords.get("NG") or NG_INCOME_KEYWORDS)
     if jurisdiction == "US":
-        return US_INCOME_KEYWORDS
+        return us_keywords
     if jurisdiction == "NG":
-        return NG_INCOME_KEYWORDS
-    return US_INCOME_KEYWORDS + NG_INCOME_KEYWORDS
+        return ng_keywords
+    return us_keywords + ng_keywords
+
+
+def _policy_int(policy: dict, key: str, fallback: int) -> int:
+    try:
+        return int(policy.get(key, fallback))
+    except (TypeError, ValueError):
+        return fallback
 
 
 async def _portfolio_news_tickers(
@@ -484,14 +503,21 @@ async def rates_headline(session: AsyncSession) -> str | None:
 async def income_news_items(
     session: AsyncSession, *, limit: int = 5, jurisdiction: str | None = None
 ) -> list[NewsItem]:
+    news_policy = await get_news_policy(session)
     window, _ = await news_centre._current_items(
         session, jurisdiction=jurisdiction, page=1, page_size=40
     )
+    income_tickers = await income_proxy_tickers_db(session)
     ticker_income, _ = await news_centre._items_for_tickers(
-        session, INCOME_TICKERS, page=1, page_size=limit
+        session, income_tickers, page=1, page_size=limit
     )
     return _merge_income_stories(
-        ticker_income, window, jurisdiction=jurisdiction, limit=limit
+        ticker_income,
+        window,
+        jurisdiction=jurisdiction,
+        limit=limit,
+        income_ticker_set=set(income_tickers),
+        policy=news_policy,
     )
 
 

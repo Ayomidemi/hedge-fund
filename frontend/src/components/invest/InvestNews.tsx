@@ -14,6 +14,7 @@ import {
   getInvestNews,
   setNewsStar,
   type InvestNewsItem,
+  type InvestNewsUiSettings,
   type InvestNewsOverview,
   type InvestNewsPagination,
 } from "@/lib/api";
@@ -21,6 +22,7 @@ import {
 type InvestNewsProps = {
   initialOverview: InvestNewsOverview | null;
   initialJurisdiction: "all" | "US" | "NG";
+  settings: InvestNewsUiSettings | null;
   unavailable: boolean;
 };
 
@@ -42,22 +44,10 @@ const dateTimeFormat = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
 });
 
-const HEADLINES_PAGE_SIZE = 10;
-const SECTION_PAGE_SIZE = 8;
-const TICKER_PAGE_SIZE = 8;
-const SYNC_MS = 60_000;
-
-const EMPTY_PAGE: InvestNewsPagination = {
-  page: 1,
-  page_size: SECTION_PAGE_SIZE,
-  total: 0,
-  has_next: false,
-  has_previous: false,
-};
-
 export function InvestNews({
   initialOverview,
   initialJurisdiction,
+  settings,
   unavailable,
 }: InvestNewsProps) {
   const [overview, setOverview] = useState(initialOverview);
@@ -72,6 +62,20 @@ export function InvestNews({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const headlinesPageSize =
+    settings?.headlines_page_size ?? initialOverview?.headlines_page.page_size ?? 10;
+  const sectionPageSize =
+    settings?.section_page_size ?? initialOverview?.income_page?.page_size ?? 8;
+  const tickerPageSize =
+    settings?.ticker_page_size ?? initialOverview?.ticker_page?.page_size ?? 8;
+  const syncMs = settings?.refresh_ms ?? 60_000;
+  const emptyPage: InvestNewsPagination = {
+    page: 1,
+    page_size: sectionPageSize,
+    total: 0,
+    has_next: false,
+    has_previous: false,
+  };
 
   const reload = useCallback(
     async (next?: ReloadOptions) => {
@@ -89,31 +93,34 @@ export function InvestNews({
           : undefined,
         jurisdiction: nextJurisdiction,
         page: next?.page ?? overview?.headlines_page.page ?? 1,
-        page_size: HEADLINES_PAGE_SIZE,
+        page_size: headlinesPageSize,
         ticker_page: nextTicker
           ? (next?.tickerPage ?? overview?.ticker_page?.page ?? 1)
           : undefined,
-        ticker_page_size: nextTicker ? TICKER_PAGE_SIZE : undefined,
+        ticker_page_size: nextTicker ? tickerPageSize : undefined,
         income_page: next?.incomePage ?? overview?.income_page?.page ?? 1,
-        income_page_size: SECTION_PAGE_SIZE,
+        income_page_size: sectionPageSize,
         for_you_page: next?.forYouPage ?? overview?.for_you_page?.page ?? 1,
-        for_you_page_size: SECTION_PAGE_SIZE,
+        for_you_page_size: sectionPageSize,
         markets_page: next?.marketsPage ?? overview?.markets_page?.page ?? 1,
-        markets_page_size: SECTION_PAGE_SIZE,
+        markets_page_size: sectionPageSize,
         saved_page: next?.savedPage ?? overview?.saved_page?.page ?? 1,
-        saved_page_size: SECTION_PAGE_SIZE,
+        saved_page_size: sectionPageSize,
       });
       setOverview(data);
     },
     [
       jurisdiction,
-      overview?.for_you_page?.page,
-      overview?.headlines_page.page,
-      overview?.income_page?.page,
-      overview?.markets_page?.page,
-      overview?.saved_page?.page,
+      headlinesPageSize,
+      overview?.for_you_page,
+      overview?.headlines_page,
+      overview?.income_page,
+      overview?.markets_page,
+      overview?.saved_page,
       overview?.ticker,
-      overview?.ticker_page?.page,
+      overview?.ticker_page,
+      sectionPageSize,
+      tickerPageSize,
     ],
   );
 
@@ -121,9 +128,9 @@ export function InvestNews({
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible" || loading) return;
       void reload().catch(() => undefined);
-    }, SYNC_MS);
+    }, syncMs);
     return () => window.clearInterval(timer);
-  }, [loading, reload]);
+  }, [loading, reload, syncMs]);
 
   function replaceQuery(updates: Record<string, string | null>) {
     const params = new URLSearchParams(searchParams.toString());
@@ -230,10 +237,10 @@ export function InvestNews({
   const ratesTickers = incomeTickers.filter(
     (symbol) => !isIncomeShelfSymbol(symbol),
   );
-  const incomePage = overview.income_page ?? EMPTY_PAGE;
-  const forYouPage = overview.for_you_page ?? EMPTY_PAGE;
-  const marketsPage = overview.markets_page ?? EMPTY_PAGE;
-  const savedPage = overview.saved_page ?? EMPTY_PAGE;
+  const incomePage = overview.income_page ?? emptyPage;
+  const forYouPage = overview.for_you_page ?? emptyPage;
+  const marketsPage = overview.markets_page ?? emptyPage;
+  const savedPage = overview.saved_page ?? emptyPage;
   const tickerPage = overview.ticker_page ?? null;
 
   return (

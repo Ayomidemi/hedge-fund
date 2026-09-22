@@ -1,10 +1,20 @@
 import Link from "next/link";
-import type { InvestMarketQuote, InvestMarkets } from "@/lib/api";
+import type {
+  InvestMarketQuote,
+  InvestMarkets,
+  InvestSearchDefaults,
+} from "@/lib/api";
 import { money, signedPercent } from "@/components/invest/format";
 import { InvestSearch } from "@/components/invest/InvestSearch";
 import { InvestFixedIncomeShelf } from "@/components/invest/InvestFixedIncomeShelf";
 
-export function InvestMarketsBoard({ markets }: { markets: InvestMarkets }) {
+export function InvestMarketsBoard({
+  markets,
+  searchConfig,
+}: {
+  markets: InvestMarkets;
+  searchConfig?: InvestSearchDefaults;
+}) {
   const openSessions = markets.sessions.filter((session) => session.is_open);
   const listedCount = markets.boards.reduce(
     (total, board) => total + board.items.length,
@@ -52,7 +62,12 @@ export function InvestMarketsBoard({ markets }: { markets: InvestMarkets }) {
               Search
             </p>
             <div className="mt-3">
-              <InvestSearch initialQuery="" variant="embedded" />
+              <InvestSearch
+                initialMarket={searchConfig?.default_market}
+                initialQuery=""
+                markets={searchConfig?.markets}
+                variant="embedded"
+              />
             </div>
           </div>
         </div>

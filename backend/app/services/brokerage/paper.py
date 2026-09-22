@@ -25,6 +25,7 @@ from app.services.invest.fixed_income import (
     fixed_income_price_per_face_db,
     get_fixed_income_product_db,
 )
+from app.services.invest.configuration import get_paper_broker_policy
 from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
 
 CONCENTRATION_WARN_PCT = Decimal("0.25")
@@ -96,11 +97,23 @@ class PaperBrokerProvider:
         self, broker_account_id: str, request: SubmitOrderRequest
     ) -> BrokerOrder:
         account = await self._load_account(broker_account_id)
+        policy = await get_paper_broker_policy(self.session)
         side = request.side.strip().upper()
         order_type = request.order_type.strip().lower()
-        if side not in {"BUY", "SELL"}:
+        allowed_sides = {
+            str(item).strip().upper()
+            for item in policy.get("allowed_sides", ["BUY", "SELL"])
+        }
+        allowed_order_types = {
+            str(item).strip().lower()
+            for item in policy.get("allowed_order_types", ["market"])
+        }
+        concentration_warn_pct = Decimal(
+            str(policy.get("concentration_warn_pct", CONCENTRATION_WARN_PCT))
+        )
+        if side not in allowed_sides:
             raise BrokerValidationError("Order side must be BUY or SELL.")
-        if order_type != "market":
+        if order_type not in allowed_order_types:
             raise BrokerValidationError("Paper V1 only accepts market orders.")
 
         instrument = await self._load_instrument(request.symbol)
@@ -144,7 +157,10 @@ class PaperBrokerProvider:
             if notional > account.cash_balance:
                 raise BrokerValidationError("Not enough buying power for this order.")
             equity = await self._equity(account)
-            if equity > 0 and (notional / (equity + notional)) >= CONCENTRATION_WARN_PCT:
+            if (
+                equity > 0
+                and (notional / (equity + notional)) >= concentration_warn_pct
+            ):
                 warnings.append(
                     f"This purchase would be a large share of your portfolio "
                     f"({instrument.ticker})."

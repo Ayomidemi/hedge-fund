@@ -2656,6 +2656,12 @@ export type InvestAllocationBucket = {
   allocation_pct: string;
 };
 
+export type InvestQuickAction = {
+  title: string;
+  detail: string;
+  href: string;
+};
+
 export type InvestHome = {
   account: InvestAccount;
   portfolio_value: string;
@@ -2668,6 +2674,7 @@ export type InvestHome = {
   allocation: InvestAllocationBucket[];
   holdings: InvestHolding[];
   headlines: string[];
+  quick_actions: InvestQuickAction[];
 };
 
 export type InvestOrder = {
@@ -2953,8 +2960,35 @@ export type InvestProfile = {
   recent_activity: InvestProfileActivity[];
 };
 
+export type InvestSearchMarket = {
+  code: string;
+  label: string;
+};
+
+export type InvestSearchDefaults = {
+  default_query: string;
+  default_market: string;
+  markets: InvestSearchMarket[];
+};
+
+export type InvestNewsUiSettings = {
+  headlines_page_size: number;
+  section_page_size: number;
+  ticker_page_size: number;
+  refresh_ms: number;
+};
+
+export type InvestConfig = {
+  search: InvestSearchDefaults;
+  news: InvestNewsUiSettings;
+};
+
 export function getInvestHome(options?: ApiRequestOptions) {
   return fetchApi<InvestHome>("/api/invest/home", options);
+}
+
+export function getInvestConfig(options?: ApiRequestOptions) {
+  return fetchApi<InvestConfig>("/api/invest/config", options);
 }
 
 export function getInvestAccount(options?: ApiRequestOptions) {
@@ -3013,7 +3047,7 @@ export function removeInvestWatchlistItem(ticker: string, options?: ApiRequestOp
   return deleteApi(`/api/invest/watchlist/${encodeURIComponent(ticker)}`, options);
 }
 
-export function searchInvestInstruments(query: string, market = "US", options?: ApiRequestOptions) {
+export function searchInvestInstruments(query: string, market: string, options?: ApiRequestOptions) {
   const search = new URLSearchParams({ query, market });
   return fetchApi<InvestInstrument[]>(`/api/invest/instruments/search?${search.toString()}`, options);
 }

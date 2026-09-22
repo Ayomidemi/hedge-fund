@@ -12,29 +12,6 @@ import type {
 } from "@/lib/api";
 import { money, signedPercent } from "@/components/invest/format";
 
-const quickActions = [
-  {
-    title: "Compare bills and bonds",
-    detail: "T-bills, Treasury notes, FGN bonds, and cash-yield products.",
-    href: "/invest/markets",
-  },
-  {
-    title: "Fund paper cash",
-    detail: "Top up or reset the simulated Invest brokerage account.",
-    href: "/invest/cash",
-  },
-  {
-    title: "Check unusual tape",
-    detail: "Retail-safe market context without Capital workflow language.",
-    href: "/invest/discover",
-  },
-  {
-    title: "Review orders",
-    detail: "Paper fills, cancellations, broker IDs, and warnings.",
-    href: "/invest/orders",
-  },
-];
-
 export function InvestHome({ home }: { home: InvestHomeData | null }) {
   if (!home) {
     return (
@@ -128,7 +105,7 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
 
         <Panel title="Next actions" eyebrow="Invest workflow">
           <div className="grid gap-3 sm:grid-cols-2">
-            {quickActions.map((action) => (
+            {home.quick_actions.map((action) => (
               <Link
                 key={action.href}
                 href={action.href}

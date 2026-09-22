@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 
 import httpx
 from sqlalchemy import select
@@ -57,130 +60,33 @@ class MarketBoardRow:
     sector: str | None
 
 
+_SEED_DIR = Path(__file__).with_name("seed_data")
+
+
+@lru_cache(maxsize=1)
+def _load_default_market_board_rules() -> tuple[MarketBoardRow, ...]:
+    path = _SEED_DIR / "market_board_items.json"
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    return tuple(
+        MarketBoardRow(
+            ticker=row["ticker"],
+            label=row["label"],
+            name=row["name"],
+            market=row["market"],
+            group=row["group"],
+            group_title=row["group_title"],
+            group_description=row["group_description"],
+            asset_class=row["asset_class"],
+            exchange=row.get("exchange"),
+            currency=row["currency"],
+            sector=row.get("sector"),
+        )
+        for row in rows
+    )
+
+
 DEFAULT_MARKET_BOARD_RULES: tuple[MarketBoardRow, ...] = (
-    MarketBoardRow(
-        "SPY", "S&P 500", "SPDR S&P 500 ETF", "US", "us_indices",
-        "United States", "Listed index funds. Paper-tradable.",
-        "etf", "ARCX", "USD", "Broad Market",
-    ),
-    MarketBoardRow(
-        "QQQ", "Nasdaq", "Invesco QQQ Trust", "US", "us_indices",
-        "United States", "Listed index funds. Paper-tradable.",
-        "etf", "XNAS", "USD", "Technology",
-    ),
-    MarketBoardRow(
-        "DIA", "Dow", "SPDR Dow Jones Industrial Average ETF", "US", "us_indices",
-        "United States", "Listed index funds. Paper-tradable.",
-        "etf", "ARCX", "USD", "Broad Market",
-    ),
-    MarketBoardRow(
-        "IWM", "Small caps", "iShares Russell 2000 ETF", "US", "us_indices",
-        "United States", "Listed index funds. Paper-tradable.",
-        "etf", "ARCX", "USD", "Broad Market",
-    ),
-    MarketBoardRow(
-        "BIL", "T-bills", "SPDR Bloomberg 1-3 Month T-Bill ETF", "US", "rates",
-        "Rates proxies",
-        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
-        "etf", "ARCX", "USD", "Bonds",
-    ),
-    MarketBoardRow(
-        "SHY", "Short Treasuries", "iShares 1-3 Year Treasury Bond ETF", "US", "rates",
-        "Rates proxies",
-        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
-        "etf", "ARCX", "USD", "Bonds",
-    ),
-    MarketBoardRow(
-        "IEF", "Intermediate Treasuries", "iShares 7-10 Year Treasury Bond ETF", "US", "rates",
-        "Rates proxies",
-        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
-        "etf", "ARCX", "USD", "Bonds",
-    ),
-    MarketBoardRow(
-        "TLT", "Long Treasuries", "iShares 20+ Year Treasury Bond ETF", "US", "rates",
-        "Rates proxies",
-        "Listed funds that move with US rates. Use these beside the fixed-income shelf to compare ETF duration risk.",
-        "etf", "NASDAQ", "USD", "Bonds",
-    ),
-    MarketBoardRow(
-        "XLK", "Technology", "Technology Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Technology",
-    ),
-    MarketBoardRow(
-        "XLF", "Financials", "Financial Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Financial Services",
-    ),
-    MarketBoardRow(
-        "XLE", "Energy", "Energy Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Energy",
-    ),
-    MarketBoardRow(
-        "XLV", "Healthcare", "Health Care Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Healthcare",
-    ),
-    MarketBoardRow(
-        "XLI", "Industrials", "Industrial Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Industrials",
-    ),
-    MarketBoardRow(
-        "XLY", "Consumer", "Consumer Discretionary Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Consumer Cyclical",
-    ),
-    MarketBoardRow(
-        "XLP", "Staples", "Consumer Staples Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Consumer Defensive",
-    ),
-    MarketBoardRow(
-        "XLB", "Materials", "Materials Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Basic Materials",
-    ),
-    MarketBoardRow(
-        "XLU", "Utilities", "Utilities Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Utilities",
-    ),
-    MarketBoardRow(
-        "XLC", "Communication", "Communication Services Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Communication Services",
-    ),
-    MarketBoardRow(
-        "XLRE", "Real estate", "Real Estate Select Sector SPDR", "US", "sectors",
-        "US sectors", "Always-watched sector pulses from the shared tape.",
-        "etf", "ARCX", "USD", "Real Estate",
-    ),
-    MarketBoardRow(
-        "GTCO.NG", "Banking", "Guaranty Trust Holding", "NG", "nigeria",
-        "Nigeria",
-        "NGX has no listed ASI ETF here. These are liquid sector names used as market pulses.",
-        "equity", "NGX", "NGN", "Banking",
-    ),
-    MarketBoardRow(
-        "DANGCEM.NG", "Industrial", "Dangote Cement", "NG", "nigeria",
-        "Nigeria",
-        "NGX has no listed ASI ETF here. These are liquid sector names used as market pulses.",
-        "equity", "NGX", "NGN", "Industrial",
-    ),
-    MarketBoardRow(
-        "NESTLE.NG", "Consumer", "Nestle Nigeria", "NG", "nigeria",
-        "Nigeria",
-        "NGX has no listed ASI ETF here. These are liquid sector names used as market pulses.",
-        "equity", "NGX", "NGN", "Consumer",
-    ),
-    MarketBoardRow(
-        "SEPLAT.NG", "Oil & Gas", "Seplat Energy", "NG", "nigeria",
-        "Nigeria",
-        "NGX has no listed ASI ETF here. These are liquid sector names used as market pulses.",
-        "equity", "NGX", "NGN", "Oil & Gas",
-    ),
+    _load_default_market_board_rules()
 )
 
 

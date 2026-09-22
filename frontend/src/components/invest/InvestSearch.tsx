@@ -7,27 +7,35 @@ import {
   inputControlClassName,
 } from "@/components/ui/form-styles";
 import { toast } from "@/components/ui/ToastProvider";
-import { searchInvestInstruments, type InvestInstrument } from "@/lib/api";
+import {
+  searchInvestInstruments,
+  type InvestInstrument,
+  type InvestSearchMarket,
+} from "@/lib/api";
 import { money } from "@/components/invest/format";
-
-type SearchMarket = "US" | "NG";
 
 type InvestSearchProps = {
   initialQuery?: string;
+  initialMarket?: string;
+  markets?: InvestSearchMarket[];
   variant?: "page" | "embedded";
 };
 
 export function InvestSearch({
-  initialQuery = "T-BILL",
+  initialMarket,
+  initialQuery = "",
+  markets = [],
   variant: _variant = "page",
 }: InvestSearchProps) {
+  const marketOptions = markets.filter((option) => option.code && option.label);
+  const defaultMarket = initialMarket || marketOptions[0]?.code || "";
   const [query, setQuery] = useState(initialQuery);
-  const [market, setMarket] = useState<SearchMarket>("US");
+  const [market, setMarket] = useState(defaultMarket);
   const [results, setResults] = useState<InvestInstrument[]>([]);
   const [pending, setPending] = useState(false);
   const [lastSearch, setLastSearch] = useState<{
     query: string;
-    market: SearchMarket;
+    market: string;
   } | null>(null);
 
   async function handleSearch(event: FormEvent) {
@@ -36,6 +44,10 @@ export function InvestSearch({
     if (!normalizedQuery) {
       setResults([]);
       setLastSearch(null);
+      return;
+    }
+    if (!market) {
+      toast.error("No search market is configured.");
       return;
     }
 
@@ -50,7 +62,7 @@ export function InvestSearch({
     }
   }
 
-  function updateMarket(nextMarket: SearchMarket) {
+  function updateMarket(nextMarket: string) {
     setMarket(nextMarket);
     setResults([]);
     setLastSearch(null);
@@ -78,23 +90,27 @@ export function InvestSearch({
           aria-label="Market"
           className="inline-flex rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900"
         >
-          {(["US", "NG"] as const).map((option) => (
+          {marketOptions.map((option) => (
             <button
-              key={option}
+              key={option.code}
               type="button"
-              onClick={() => updateMarket(option)}
-              aria-pressed={market === option}
+              onClick={() => updateMarket(option.code)}
+              aria-pressed={market === option.code}
               className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
-                market === option
+                market === option.code
                   ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-950 dark:text-zinc-50"
                   : "text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
               }`}
             >
-              {option === "NG" ? "NGX" : option}
+              {option.label}
             </button>
           ))}
         </div>
-        <button type="submit" disabled={pending} className={buttonPrimaryClassName}>
+        <button
+          type="submit"
+          disabled={pending || !market}
+          className={buttonPrimaryClassName}
+        >
           {pending ? "Searching..." : "Search"}
         </button>
       </form>
@@ -109,7 +125,7 @@ export function InvestSearch({
         {results.length === 0 ? (
           <li className={isEmbedded ? "py-4 text-sm text-zinc-500" : "p-5 text-sm text-zinc-500"}>
             {lastSearch
-              ? `No ${lastSearch.market === "NG" ? "NGX" : "US"} matches for "${lastSearch.query}".`
+              ? `No ${marketLabel(lastSearch.market, marketOptions)} matches for "${lastSearch.query}".`
               : "Search fixed income, funds, or listed names."}
           </li>
         ) : (
@@ -140,6 +156,10 @@ export function InvestSearch({
       </ul>
     </div>
   );
+}
+
+function marketLabel(market: string, markets: InvestSearchMarket[]) {
+  return markets.find((option) => option.code === market)?.label ?? market;
 }
 
 function hrefForInstrument(item: InvestInstrument) {

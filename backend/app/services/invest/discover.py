@@ -15,6 +15,11 @@ from app.api.schemas.invest import (
 from app.core.auth import AuthenticatedUser
 from app.core.market_constants import RADAR_PULSE_TICKERS
 from app.models import RadarRun, RadarSnapshot, RetailWatchlistItem
+from app.services.invest.configuration import (
+    default_invest_setting,
+    get_discover_policy,
+    get_news_policy,
+)
 from app.services.invest.markets import active_board_tickers
 from app.services.invest.news import (
     income_news_items,
@@ -47,6 +52,7 @@ async def build_invest_discover(
     user: AuthenticatedUser,
 ) -> InvestDiscoverResponse:
     generated_at = datetime.now(timezone.utc)
+    policy = await get_discover_policy(session)
     radar = await build_radar_overview(session, jurisdiction="all")
     watchlist_tickers = await _retail_watchlist_tickers(session, user.id)
     board = {ticker.upper() for ticker in await active_board_tickers(session)}
@@ -63,16 +69,27 @@ async def build_invest_discover(
     watchlist_moves.sort(key=_retail_sort_key)
     board_moves = [item for item in flagged if item.ticker.upper() in board]
     board_moves.sort(key=_retail_sort_key)
-    news_section = await _news_section(session)
     narrative = _narrative(radar.industries, unusual)
 
     sections = [
-        _unusual_section(unusual, screened=radar.working_set_count),
-        _sector_section(radar.industries),
-        news_section,
-        _watchlist_section(watchlist_moves, watchlist_tickers),
-        _board_section(board_moves),
+        _unusual_section(
+            unusual,
+            screened=radar.working_set_count,
+            limit=int(policy.get("unusual_limit", UNUSUAL_LIMIT)),
+        ),
+        _sector_section(
+            radar.industries,
+            limit=int(policy.get("sector_limit", SECTOR_LIMIT)),
+        ),
+        _board_section(
+            board_moves,
+            limit=int(policy.get("board_limit", BOARD_LIMIT)),
+        ),
     ]
+    if bool(policy.get("include_watchlist_section", False)):
+        sections.append(_watchlist_section(watchlist_moves, watchlist_tickers))
+    if bool(policy.get("include_news_section", False)):
+        sections.append(await _news_section(session))
 
     return InvestDiscoverResponse(
         generated_at=generated_at,
@@ -84,14 +101,14 @@ async def build_invest_discover(
         ),
         narrative=narrative,
         sections=sections,
-        next_actions=_next_actions(watchlist_tickers),
+        next_actions=_next_actions(watchlist_tickers, policy=policy),
     )
 
 
 def _unusual_section(
-    items, *, screened: int
+    items, *, screened: int, limit: int = UNUSUAL_LIMIT
 ) -> InvestDiscoverSectionResponse:
-    cards = [_name_card(item) for item in items[:UNUSUAL_LIMIT]]
+    cards = [_name_card(item) for item in items[:limit]]
     if not cards:
         cards.append(
             InvestDiscoverItemResponse(
@@ -110,13 +127,15 @@ def _unusual_section(
     )
 
 
-def _sector_section(industries) -> InvestDiscoverSectionResponse:
+def _sector_section(
+    industries, *, limit: int = SECTOR_LIMIT
+) -> InvestDiscoverSectionResponse:
     cards: list[InvestDiscoverItemResponse] = []
     for industry in industries:
         if industry.status not in {"industry_event", "market_event"}:
             continue
         cards.append(_industry_card(industry))
-        if len(cards) >= SECTOR_LIMIT:
+        if len(cards) >= limit:
             break
     if not cards:
         cards.append(
@@ -167,8 +186,10 @@ def _watchlist_section(
     )
 
 
-def _board_section(items) -> InvestDiscoverSectionResponse:
-    cards = [_name_card(item, kind="Board") for item in items[:BOARD_LIMIT]]
+def _board_section(
+    items, *, limit: int = BOARD_LIMIT
+) -> InvestDiscoverSectionResponse:
+    cards = [_name_card(item, kind="Board") for item in items[:limit]]
     if not cards:
         cards.append(
             InvestDiscoverItemResponse(
@@ -187,6 +208,7 @@ def _board_section(items) -> InvestDiscoverSectionResponse:
 
 
 async def _news_section(session: AsyncSession) -> InvestDiscoverSectionResponse:
+    news_policy = await get_news_policy(session)
     income = await income_news_items(session, limit=3)
     latest = await latest_news_items(session, limit=8)
     cards: list[InvestDiscoverItemResponse] = []
@@ -200,6 +222,7 @@ async def _news_section(session: AsyncSession) -> InvestDiscoverSectionResponse:
             title=item.title,
             summary=item.summary,
             tickers=tickers,
+            policy=news_policy,
         )
         lead = next((ticker for ticker in tickers if ticker), None)
         cards.append(
@@ -275,21 +298,25 @@ async def home_tape_headline(session: AsyncSession) -> str | None:
     return _move_copy(unusual[0])
 
 
-def _next_actions(watchlist_tickers: set[str]) -> list[InvestDiscoverItemResponse]:
+def _next_actions(
+    watchlist_tickers: set[str], policy: dict | None = None
+) -> list[InvestDiscoverItemResponse]:
     if watchlist_tickers:
         return []
+    source = policy or default_invest_setting("discover_policy")
+    configured = source.get("next_actions_when_empty_watchlist") or []
+    if configured:
+        return [
+            InvestDiscoverItemResponse.model_validate(item)
+            for item in configured
+        ]
     return [
         InvestDiscoverItemResponse(
-            title="Build a watchlist",
-            subtitle="Personalize unusual activity with the names you actually follow.",
-            badge="Watchlist",
-            href="/invest/watchlist",
-        ),
-        InvestDiscoverItemResponse(
-            title="Read headlines",
-            subtitle="Article tape lives on News, not on this page.",
-            badge="News",
-            href="/invest/news",
+            title="Compare the fixed-income shelf",
+            subtitle="Bills and bonds stay first on Markets.",
+            badge="Markets",
+            href="/invest/markets",
+            tone="income",
         ),
     ]
 

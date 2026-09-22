@@ -19,6 +19,7 @@ from app.api.schemas.invest import (
     InvestProfileActivityResponse,
     InvestProfileResponse,
     InvestTransactionResponse,
+    InvestUiConfigResponse,
     InvestWatchlistCreate,
     InvestWatchlistItemResponse,
 )
@@ -33,6 +34,11 @@ from app.services.invest.fixed_income import (
     search_fixed_income_products_db,
 )
 from app.services.invest.discover import build_invest_discover
+from app.services.invest.configuration import (
+    get_invest_ui_config,
+    get_news_policy,
+    get_search_defaults,
+)
 from app.services.invest.markets import build_invest_markets
 from app.services.invest.news import build_invest_news_overview
 
@@ -78,6 +84,17 @@ async def read_profile(
     response = await invest.get_profile(session, user)
     await session.commit()
     return response
+
+
+@router.get("/config", response_model=InvestUiConfigResponse)
+async def read_config(
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> InvestUiConfigResponse:
+    _ = user
+    payload = await get_invest_ui_config(session)
+    await session.commit()
+    return InvestUiConfigResponse.model_validate(payload)
 
 
 @router.get("/activity", response_model=list[InvestProfileActivityResponse])
@@ -239,11 +256,13 @@ async def delete_watchlist_item(
 @router.get("/instruments/search", response_model=list[InvestInstrumentResponse])
 async def search_instruments(
     query: str = Query(min_length=1, max_length=64),
-    market: str = Query(default="US", max_length=8),
+    market: str | None = Query(default=None, max_length=8),
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[InvestInstrumentResponse]:
-    response = await invest.search_instruments(session, query, market)
+    config = await get_search_defaults(session)
+    selected_market = (market or config["default_market"]).strip().upper()
+    response = await invest.search_instruments(session, query, selected_market)
     await session.commit()
     return response
 
@@ -353,21 +372,23 @@ async def read_invest_news(
     market: str | None = Query(default=None),
     jurisdiction: str | None = Query(default="all"),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=10, ge=5, le=50),
+    page_size: int | None = Query(default=None, ge=5, le=50),
     ticker_page: int = Query(default=1, ge=1),
-    ticker_page_size: int = Query(default=8, ge=5, le=20),
+    ticker_page_size: int | None = Query(default=None, ge=5, le=20),
     income_page: int = Query(default=1, ge=1),
-    income_page_size: int = Query(default=8, ge=5, le=20),
+    income_page_size: int | None = Query(default=None, ge=5, le=20),
     for_you_page: int = Query(default=1, ge=1),
-    for_you_page_size: int = Query(default=8, ge=5, le=20),
+    for_you_page_size: int | None = Query(default=None, ge=5, le=20),
     markets_page: int = Query(default=1, ge=1),
-    markets_page_size: int = Query(default=8, ge=5, le=20),
+    markets_page_size: int | None = Query(default=None, ge=5, le=20),
     saved_page: int = Query(default=1, ge=1),
-    saved_page_size: int = Query(default=8, ge=5, le=20),
+    saved_page_size: int | None = Query(default=None, ge=5, le=20),
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
 ) -> InvestNewsOverviewResponse:
     normalized_market = (market or "").strip().upper()
+    news_policy = await get_news_policy(session)
+    section_page_size = int(news_policy["section_page_size"])
     response = await build_invest_news_overview(
         session,
         user,
@@ -375,17 +396,17 @@ async def read_invest_news(
         market=normalized_market if normalized_market in {"US", "NG"} else None,
         jurisdiction=jurisdiction,
         page=page,
-        page_size=page_size,
+        page_size=page_size or int(news_policy["headlines_page_size"]),
         ticker_page=ticker_page,
-        ticker_page_size=ticker_page_size,
+        ticker_page_size=ticker_page_size or int(news_policy["ticker_page_size"]),
         income_page=income_page,
-        income_page_size=income_page_size,
+        income_page_size=income_page_size or section_page_size,
         for_you_page=for_you_page,
-        for_you_page_size=for_you_page_size,
+        for_you_page_size=for_you_page_size or section_page_size,
         markets_page=markets_page,
-        markets_page_size=markets_page_size,
+        markets_page_size=markets_page_size or section_page_size,
         saved_page=saved_page,
-        saved_page_size=saved_page_size,
+        saved_page_size=saved_page_size or int(news_policy["saved_page_size"]),
     )
     await session.commit()
     return response

@@ -1,5 +1,10 @@
 import { InvestNews } from "@/components/invest/InvestNews";
-import { getInvestNews, type InvestNewsOverview } from "@/lib/api";
+import {
+  getInvestConfig,
+  getInvestNews,
+  type InvestConfig,
+  type InvestNewsOverview,
+} from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
 
 type NewsPageProps = {
@@ -13,6 +18,7 @@ type NewsPageProps = {
 
 export default async function InvestNewsPage({ searchParams }: NewsPageProps) {
   let overview: InvestNewsOverview | null = null;
+  let config: InvestConfig | null = null;
   let unavailable = false;
   const accessToken = await getServerAccessToken();
   const params = (await searchParams) ?? {};
@@ -26,23 +32,30 @@ export default async function InvestNewsPage({ searchParams }: NewsPageProps) {
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
   try {
+    config = await getInvestConfig({ accessToken });
+  } catch {
+    config = null;
+  }
+
+  try {
+    const sectionPageSize = config?.news.section_page_size;
     overview = await getInvestNews(
       {
         ticker,
         market,
         jurisdiction,
         page,
-        page_size: 10,
+        page_size: config?.news.headlines_page_size,
         ticker_page: 1,
-        ticker_page_size: 8,
+        ticker_page_size: config?.news.ticker_page_size,
         income_page: 1,
-        income_page_size: 8,
+        income_page_size: sectionPageSize,
         for_you_page: 1,
-        for_you_page_size: 8,
+        for_you_page_size: sectionPageSize,
         markets_page: 1,
-        markets_page_size: 8,
+        markets_page_size: sectionPageSize,
         saved_page: 1,
-        saved_page_size: 8,
+        saved_page_size: sectionPageSize,
       },
       { accessToken },
     );
@@ -57,6 +70,7 @@ export default async function InvestNewsPage({ searchParams }: NewsPageProps) {
       key={overviewKey}
       initialOverview={overview}
       initialJurisdiction={jurisdiction}
+      settings={config?.news ?? null}
       unavailable={unavailable}
     />
   );

@@ -1,14 +1,25 @@
 import { InvestMarketsBoard } from "@/components/invest/InvestMarkets";
-import { getInvestMarkets, type InvestMarkets } from "@/lib/api";
+import {
+  getInvestConfig,
+  getInvestMarkets,
+  type InvestConfig,
+  type InvestMarkets,
+} from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
 
 export default async function InvestMarketsPage() {
   const accessToken = await getServerAccessToken();
   let markets: InvestMarkets | null = null;
-  try {
-    markets = await getInvestMarkets({ accessToken });
-  } catch {
-    markets = null;
+  let config: InvestConfig | null = null;
+  const [marketsResult, configResult] = await Promise.allSettled([
+    getInvestMarkets({ accessToken }),
+    getInvestConfig({ accessToken }),
+  ]);
+  if (marketsResult.status === "fulfilled") {
+    markets = marketsResult.value;
+  }
+  if (configResult.status === "fulfilled") {
+    config = configResult.value;
   }
 
   if (!markets) {
@@ -19,5 +30,5 @@ export default async function InvestMarketsPage() {
     );
   }
 
-  return <InvestMarketsBoard markets={markets} />;
+  return <InvestMarketsBoard markets={markets} searchConfig={config?.search} />;
 }

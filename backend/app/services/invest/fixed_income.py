@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from functools import lru_cache
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -88,124 +91,55 @@ class FixedIncomeQuote:
     pricing_assumptions: tuple[str, ...]
 
 
-FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
-    FixedIncomeProduct(
-        ticker="US-TBILL-13W",
-        name="US Treasury Bill 13 Week",
-        market="US",
-        currency="USD",
-        issuer="United States Treasury",
-        instrument_type="treasury_bill",
-        tenor="13 weeks",
-        maturity_date=None,
-        maturity_days=91,
-        indicative_yield_pct=Decimal("4.85"),
-        coupon_rate_pct=Decimal("0"),
-        coupon_frequency_per_year=0,
-        settlement_days=1,
-        minimum_order_amount=Decimal("100.00"),
-        face_value_increment=Decimal("100.00"),
-        liquidity="Very high",
-        risk_level="Low",
-        expected_payout="Discount bill; return is earned between purchase price and face value at maturity.",
-        trade_status="paper_tradable",
-        asset_class="cash_equivalent",
-        exchange="TREASURY",
-        proxy_ticker="BIL",
-        proxy_label="Paper the T-bill move with BIL",
-        retail_notes=(
-            "Paper fills use an indicative discount-bill model, not a live Treasury auction feed.",
-            "BIL remains available as a listed proxy when you want exchange-traded exposure.",
-        ),
-    ),
-    FixedIncomeProduct(
-        ticker="US-TREASURY-2Y",
-        name="US Treasury Note 2 Year",
-        market="US",
-        currency="USD",
-        issuer="United States Treasury",
-        instrument_type="treasury_note",
-        tenor="2 years",
-        maturity_date=None,
-        maturity_days=730,
-        indicative_yield_pct=Decimal("4.10"),
-        coupon_rate_pct=Decimal("4.00"),
-        coupon_frequency_per_year=2,
-        settlement_days=1,
-        minimum_order_amount=Decimal("100.00"),
-        face_value_increment=Decimal("100.00"),
-        liquidity="Very high",
-        risk_level="Low",
-        expected_payout="Semiannual coupons plus principal repayment at maturity.",
-        trade_status="paper_tradable",
-        asset_class="bond",
-        exchange="TREASURY",
-        proxy_ticker="SHY",
-        proxy_label="Paper short-duration Treasuries with SHY",
-        retail_notes=(
-            "Paper fills track clean price, accrued interest, settlement, and projected coupon dates.",
-            "SHY remains available as a listed proxy for ETF-style short-duration exposure.",
-        ),
-    ),
-    FixedIncomeProduct(
-        ticker="NG-TBILL-182D",
-        name="Nigeria Treasury Bill 182 Day",
-        market="NG",
-        currency="NGN",
-        issuer="Federal Government of Nigeria",
-        instrument_type="treasury_bill",
-        tenor="182 days",
-        maturity_date=None,
-        maturity_days=182,
-        indicative_yield_pct=Decimal("18.50"),
-        coupon_rate_pct=Decimal("0"),
-        coupon_frequency_per_year=0,
-        settlement_days=2,
-        minimum_order_amount=Decimal("100000.00"),
-        face_value_increment=Decimal("1000.00"),
-        liquidity="Medium",
-        risk_level="Medium",
-        expected_payout="Discount bill; return is earned between purchase price and face value at maturity.",
-        trade_status="paper_tradable",
-        asset_class="cash_equivalent",
-        exchange="FMDQ",
-        proxy_ticker=None,
-        proxy_label=None,
-        retail_notes=(
-            "Paper fills use an indicative Nigerian T-bill discount model with T+2 settlement.",
-            "There is no honest listed ETF proxy for Nigerian T-bills on this board yet.",
-        ),
-    ),
-    FixedIncomeProduct(
-        ticker="FGN-BOND-2029",
-        name="FGN Bond 2029",
-        market="NG",
-        currency="NGN",
-        issuer="Federal Government of Nigeria",
-        instrument_type="government_bond",
-        tenor="Medium term",
-        maturity_date="2029-04-27",
-        maturity_days=None,
-        indicative_yield_pct=Decimal("19.75"),
-        coupon_rate_pct=Decimal("16.25"),
-        coupon_frequency_per_year=2,
-        settlement_days=2,
-        minimum_order_amount=Decimal("100000.00"),
-        face_value_increment=Decimal("1000.00"),
-        liquidity="Medium",
-        risk_level="Medium",
-        expected_payout="Periodic coupons plus principal repayment at maturity.",
-        trade_status="paper_tradable",
-        asset_class="bond",
-        exchange="FMDQ",
-        proxy_ticker=None,
-        proxy_label=None,
-        retail_notes=(
-            "Paper fills model clean price, accrued interest, coupons, and principal repayment.",
-            "There is no honest listed ETF proxy for FGN bonds on this board yet.",
-        ),
-    ),
-)
+_SEED_DIR = Path(__file__).with_name("seed_data")
+
+
+@lru_cache(maxsize=1)
+def _load_seed_fixed_income_products() -> tuple[FixedIncomeProduct, ...]:
+    path = _SEED_DIR / "fixed_income_products.json"
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    return tuple(_product_from_seed(row) for row in rows)
+
+
+def _product_from_seed(row: dict) -> FixedIncomeProduct:
+    return FixedIncomeProduct(
+        ticker=row["ticker"],
+        name=row["name"],
+        market=row["market"],
+        currency=row["currency"],
+        issuer=row["issuer"],
+        instrument_type=row["instrument_type"],
+        tenor=row["tenor"],
+        maturity_date=row.get("maturity_date"),
+        maturity_days=row.get("maturity_days"),
+        indicative_yield_pct=_seed_decimal(row.get("indicative_yield_pct")),
+        coupon_rate_pct=_seed_decimal(row.get("coupon_rate_pct")),
+        coupon_frequency_per_year=int(row["coupon_frequency_per_year"]),
+        settlement_days=int(row["settlement_days"]),
+        minimum_order_amount=_seed_decimal(row["minimum_order_amount"]),
+        face_value_increment=_seed_decimal(row["face_value_increment"]),
+        liquidity=row["liquidity"],
+        risk_level=row["risk_level"],
+        expected_payout=row["expected_payout"],
+        trade_status=row["trade_status"],
+        asset_class=row["asset_class"],
+        exchange=row.get("exchange"),
+        proxy_ticker=row.get("proxy_ticker"),
+        proxy_label=row.get("proxy_label"),
+        retail_notes=tuple(row.get("retail_notes") or []),
+        day_count_convention=row.get("day_count_convention", "ACT/365"),
+        compounding_basis=row.get("compounding_basis", "simple"),
+        quote_source=row.get("quote_source", "model_seed"),
+    )
+
+
+def _seed_decimal(value) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(value))
+
+
+FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = _load_seed_fixed_income_products()
 
 
 def get_fixed_income_product(ticker: str) -> FixedIncomeProduct | None:

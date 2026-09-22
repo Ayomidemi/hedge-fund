@@ -1542,6 +1542,22 @@ class InvestMarketBoardItem(Base, TimestampMixin):
     )
 
 
+class InvestSetting(Base, TimestampMixin):
+    __tablename__ = "invest_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        UniqueConstraint("key", name="uq_invest_settings_key"),
+        Index("ix_invest_settings_key_active", "key", "is_active"),
+    )
+
+
 class InvestFixedIncomeProduct(Base, TimestampMixin):
     __tablename__ = "invest_fixed_income_products"
 
