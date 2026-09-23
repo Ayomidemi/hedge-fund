@@ -4,12 +4,9 @@ from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import InvestSetting
-
-SETTINGS_TABLE_ERRORS = (ProgrammingError, OperationalError)
 
 DEFAULT_INVEST_SETTINGS: dict[str, Any] = {
     "home_quick_actions": [
@@ -29,9 +26,9 @@ DEFAULT_INVEST_SETTINGS: dict[str, Any] = {
             "href": "/invest/discover",
         },
         {
-            "title": "Review orders",
-            "detail": "Paper fills, cancellations, broker IDs, and warnings.",
-            "href": "/invest/orders",
+            "title": "Review portfolio",
+            "detail": "Positions, paper fills, and cash.",
+            "href": "/invest/portfolio",
         },
     ],
     "search_defaults": {
@@ -211,16 +208,12 @@ async def ensure_invest_settings(
 
 async def get_invest_setting(session: AsyncSession, key: str) -> Any:
     fallback = default_invest_setting(key)
-    try:
-        await ensure_invest_settings(session, [key])
-        record = await session.scalar(
-            select(InvestSetting)
-            .where(InvestSetting.key == key)
-            .where(InvestSetting.is_active.is_(True))
-        )
-    except SETTINGS_TABLE_ERRORS:
-        await session.rollback()
-        return fallback
+    await ensure_invest_settings(session, [key])
+    record = await session.scalar(
+        select(InvestSetting)
+        .where(InvestSetting.key == key)
+        .where(InvestSetting.is_active.is_(True))
+    )
     if record is None:
         return fallback
     return _merge_default(fallback, record.payload)

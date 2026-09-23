@@ -9,7 +9,6 @@ from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.invest import (
@@ -150,23 +149,30 @@ def get_fixed_income_product(ticker: str) -> FixedIncomeProduct | None:
     return None
 
 
+async def fixed_income_products_by_tickers_db(
+    session: AsyncSession, tickers: list[str]
+) -> dict[str, FixedIncomeProduct]:
+    wanted = {ticker.strip().upper() for ticker in tickers if ticker and ticker.strip()}
+    if not wanted:
+        return {}
+    await ensure_fixed_income_seed_products(session)
+    rows = await session.scalars(
+        select(InvestFixedIncomeProductRecord).where(
+            InvestFixedIncomeProductRecord.ticker.in_(wanted)
+        )
+    )
+    return {
+        row.ticker: _product_from_record(row)
+        for row in rows
+        if row.is_active
+    }
+
+
 async def get_fixed_income_product_db(
     session: AsyncSession, ticker: str
 ) -> FixedIncomeProduct | None:
-    normalized = ticker.strip().upper()
-    try:
-        await ensure_fixed_income_seed_products(session)
-        record = await session.scalar(
-            select(InvestFixedIncomeProductRecord).where(
-                InvestFixedIncomeProductRecord.ticker == normalized
-            )
-        )
-    except ProgrammingError:
-        await session.rollback()
-        return get_fixed_income_product(normalized)
-    if record is None or not record.is_active:
-        return None
-    return _product_from_record(record)
+    products = await fixed_income_products_by_tickers_db(session, [ticker])
+    return products.get(ticker.strip().upper())
 
 
 def search_fixed_income_products(
@@ -193,11 +199,7 @@ async def search_fixed_income_products_db(
     *,
     market: str | None = None,
 ) -> list[FixedIncomeProduct]:
-    try:
-        await ensure_fixed_income_seed_products(session)
-    except ProgrammingError:
-        await session.rollback()
-        return search_fixed_income_products(query, market=market)
+    await ensure_fixed_income_seed_products(session)
     normalized_query = query.strip().upper()
     normalized_market = (market or "").strip().upper()
     rows = list(

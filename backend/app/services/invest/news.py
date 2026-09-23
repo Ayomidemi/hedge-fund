@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -26,9 +24,7 @@ from app.services.invest.fixed_income import (
 from app.services.invest.configuration import default_invest_setting, get_news_policy
 from app.services.invest.markets import active_board_tickers, rates_board_tickers
 from app.services.news import centre as news_centre
-from app.services.news.providers import _fetch_tiingo_news, normalize_ticker
-
-logger = logging.getLogger(__name__)
+from app.services.news.providers import normalize_ticker
 
 _DEFAULT_NEWS_POLICY = default_invest_setting("news_policy")
 FOR_YOU_LIMIT = int(_DEFAULT_NEWS_POLICY["section_page_size"])
@@ -38,10 +34,6 @@ INCOME_POOL = int(_DEFAULT_NEWS_POLICY["income_pool"])
 HEADLINES_DEFAULT_PAGE_SIZE = int(_DEFAULT_NEWS_POLICY["headlines_page_size"])
 TICKER_PAGE_SIZE = int(_DEFAULT_NEWS_POLICY["ticker_page_size"])
 SAVED_PAGE_SIZE = int(_DEFAULT_NEWS_POLICY["saved_page_size"])
-INCOME_REFRESH_MIN_ITEMS = int(_DEFAULT_NEWS_POLICY["income_refresh_min_items"])
-INCOME_REFRESH_TIMEOUT_SECONDS = float(
-    _DEFAULT_NEWS_POLICY["income_refresh_timeout_seconds"]
-)
 US_INCOME_KEYWORDS = tuple(_DEFAULT_NEWS_POLICY["income_keywords"]["US"])
 NG_INCOME_KEYWORDS = tuple(_DEFAULT_NEWS_POLICY["income_keywords"]["NG"])
 
@@ -314,51 +306,6 @@ def is_income_story(
         return True
     text = f"{title} {summary or ''}".lower()
     return any(keyword in text for keyword in _keywords_for(jurisdiction, policy))
-
-
-async def _refresh_income_news_if_needed(
-    session: AsyncSession, tickers: list[str]
-) -> None:
-    news_policy = await get_news_policy(session)
-    fixed_income_tickers = {
-        product.ticker for product in await search_fixed_income_products_db(session)
-    }
-    listed_proxies = [
-        ticker
-        for ticker in tickers
-        if ticker.upper() not in fixed_income_tickers and not ticker.endswith(".NG")
-    ]
-    _, total = await news_centre._items_for_tickers(
-        session,
-        listed_proxies,
-        page=1,
-        page_size=_policy_int(news_policy, "section_page_size", INCOME_LIMIT),
-    )
-    if (
-        total >= _policy_int(
-            news_policy, "income_refresh_min_items", INCOME_REFRESH_MIN_ITEMS
-        )
-        or not listed_proxies
-    ):
-        return
-    try:
-        result = await asyncio.wait_for(
-            _fetch_tiingo_news(listed_proxies),
-            timeout=float(
-                news_policy.get(
-                    "income_refresh_timeout_seconds",
-                    INCOME_REFRESH_TIMEOUT_SECONDS,
-                )
-            ),
-        )
-    except TimeoutError:
-        logger.warning("invest_income_news_refresh_timed_out")
-        return
-    except Exception:
-        logger.warning("invest_income_news_refresh_failed", exc_info=True)
-        return
-    if result.items:
-        await news_centre._upsert_provider_items(session, result.items)
 
 
 def _merge_income_stories(

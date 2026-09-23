@@ -11,7 +11,6 @@ const navigationItems = [
   { label: "News", href: "/invest/news" },
   { label: "Watchlist", href: "/invest/watchlist" },
   { label: "Portfolio", href: "/invest/portfolio" },
-  { label: "Orders", href: "/invest/orders" },
   { label: "Cash", href: "/invest/cash" },
   { label: "Activity", href: "/invest/activity" },
   { label: "Profile", href: "/invest/profile" },
@@ -24,7 +23,6 @@ const pageTitles: Record<string, string> = {
   News: "News",
   Watchlist: "Watchlist",
   Portfolio: "Portfolio",
-  Orders: "Orders",
   Cash: "Cash",
   Activity: "Activity",
   Profile: "Profile",
@@ -41,12 +39,15 @@ export function InvestShell({
 }: InvestShellProps) {
   const pathname = usePathname();
   const instrumentMatch = pathname.match(/^\/invest\/instruments\/([^/]+)/i);
+  const onOrderDetail = pathname.startsWith("/invest/orders/");
   const activeLabel =
-    navigationItems.find((item) =>
-      item.href === "/invest"
-        ? pathname === "/invest"
-        : pathname === item.href || pathname.startsWith(`${item.href}/`),
-    )?.label ?? "Home";
+    onOrderDetail
+      ? "Portfolio"
+      : (navigationItems.find((item) =>
+          item.href === "/invest"
+            ? pathname === "/invest"
+            : pathname === item.href || pathname.startsWith(`${item.href}/`),
+        )?.label ?? "Home");
   const headerTitle = instrumentMatch
     ? decodeURIComponent(instrumentMatch[1]).toUpperCase()
     : (pageTitles[activeLabel] ?? "Pease Invest");

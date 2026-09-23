@@ -23,9 +23,12 @@ from app.services.brokerage.protocol import (
 from app.services.invest.fixed_income import (
     ensure_fixed_income_instrument,
     fixed_income_price_per_face_db,
+    fixed_income_products_by_tickers_db,
     get_fixed_income_product_db,
 )
 from app.services.invest.configuration import get_paper_broker_policy
+from app.services.market_data.fx_convert import amount_in_base, convert_amount_to_base
+from app.services.market_data.fx_refresh import load_fx_rates
 from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
 
 CONCENTRATION_WARN_PCT = Decimal("0.25")
@@ -61,17 +64,24 @@ class PaperBrokerProvider:
                 .where(RetailPosition.quantity > 0)
             )
         )
+        products = await fixed_income_products_by_tickers_db(
+            self.session, [row.instrument.ticker for row in rows]
+        )
+        fx_rates = await load_fx_rates(self.session)
         positions: list[BrokerPosition] = []
         for row in rows:
-            fixed_income_product = await get_fixed_income_product_db(
-                self.session, row.instrument.ticker
-            )
-            mark = (
+            native_currency = row.instrument.currency or account.base_currency
+            fixed_income_product = products.get(row.instrument.ticker.upper())
+            native_mark = (
                 await fixed_income_price_per_face_db(self.session, fixed_income_product)
                 if fixed_income_product is not None
                 else await get_cached_quote_price(self.session, row.instrument.ticker)
             )
-            price = mark if mark is not None else row.average_cost
+            mark = native_mark if native_mark is not None else row.average_cost
+            cash_mark = amount_in_base(
+                mark, native_currency, account.base_currency, fx_rates
+            )
+            price = cash_mark if cash_mark is not None else mark
             market_value = (row.quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
             unrealized = (market_value - row.cost_basis).quantize(
                 MONEY, rounding=ROUND_HALF_UP
@@ -154,18 +164,27 @@ class PaperBrokerProvider:
                 )
             else:
                 quantity, notional = _buy_size(request, mark)
-            if notional > account.cash_balance:
+            cash_notional = await self._cash_amount(account, instrument, notional)
+            if cash_notional > account.cash_balance:
                 raise BrokerValidationError("Not enough buying power for this order.")
             equity = await self._equity(account)
             if (
                 equity > 0
-                and (notional / (equity + notional)) >= concentration_warn_pct
+                and (cash_notional / (equity + cash_notional)) >= concentration_warn_pct
             ):
                 warnings.append(
                     f"This purchase would be a large share of your portfolio "
                     f"({instrument.ticker})."
                 )
-            await self._apply_buy(account, instrument, quantity, mark, now, broker_order_id)
+            native_ccy = (instrument.currency or account.base_currency).upper()
+            if native_ccy != account.base_currency.upper():
+                warnings.append(
+                    f"Paper cash is {account.base_currency}; "
+                    f"{native_ccy} converted at the stored FX rate."
+                )
+            await self._apply_buy(
+                account, instrument, quantity, cash_notional, now, broker_order_id
+            )
         else:
             quantity, notional = await self._sell_size(
                 account,
@@ -178,7 +197,16 @@ class PaperBrokerProvider:
                 warnings.append(
                     "Fixed-income paper fill uses modeled dirty price; quantity is face value."
                 )
-            await self._apply_sell(account, instrument, quantity, mark, now, broker_order_id)
+            cash_notional = await self._cash_amount(account, instrument, notional)
+            native_ccy = (instrument.currency or account.base_currency).upper()
+            if native_ccy != account.base_currency.upper():
+                warnings.append(
+                    f"Paper cash is {account.base_currency}; "
+                    f"{native_ccy} converted at the stored FX rate."
+                )
+            await self._apply_sell(
+                account, instrument, quantity, cash_notional, now, broker_order_id
+            )
 
         order = RetailOrder(
             user_id=account.user_id,
@@ -340,28 +368,42 @@ class PaperBrokerProvider:
         invested = sum((item.market_value for item in positions), Decimal("0"))
         return (account.cash_balance + invested).quantize(MONEY)
 
+    async def _cash_amount(
+        self, account: RetailAccount, instrument: Instrument, native_amount: Decimal
+    ) -> Decimal:
+        currency = instrument.currency or account.base_currency
+        converted = await convert_amount_to_base(
+            self.session, native_amount, currency, account.base_currency
+        )
+        if converted is None:
+            raise BrokerValidationError(
+                f"No {account.base_currency}/{currency} rate available to paper this order."
+            )
+        return converted.quantize(MONEY, rounding=ROUND_HALF_UP)
+
     async def _apply_buy(
         self,
         account: RetailAccount,
         instrument: Instrument,
         quantity: Decimal,
-        price: Decimal,
+        cash_notional: Decimal,
         now: datetime,
         broker_order_id: str,
     ) -> None:
-        notional = (quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
+        notional = cash_notional.quantize(MONEY, rounding=ROUND_HALF_UP)
         account.cash_balance = (account.cash_balance - notional).quantize(MONEY)
         position = await self.session.scalar(
             select(RetailPosition)
             .where(RetailPosition.account_id == account.id)
             .where(RetailPosition.instrument_id == instrument.id)
         )
+        unit_cost = (notional / quantity).quantize(PRICE, rounding=ROUND_HALF_UP)
         if position is None:
             position = RetailPosition(
                 account_id=account.id,
                 instrument_id=instrument.id,
                 quantity=quantity,
-                average_cost=price.quantize(PRICE, rounding=ROUND_HALF_UP),
+                average_cost=unit_cost,
                 cost_basis=notional,
                 realized_pnl=Decimal("0.00"),
             )
@@ -393,7 +435,7 @@ class PaperBrokerProvider:
         account: RetailAccount,
         instrument: Instrument,
         quantity: Decimal,
-        price: Decimal,
+        cash_proceeds: Decimal,
         now: datetime,
         broker_order_id: str,
     ) -> None:
@@ -404,7 +446,7 @@ class PaperBrokerProvider:
         )
         if position is None or position.quantity < quantity:
             raise BrokerValidationError(f"Not enough {instrument.ticker} to sell.")
-        proceeds = (quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
+        proceeds = cash_proceeds.quantize(MONEY, rounding=ROUND_HALF_UP)
         sold_cost = (position.average_cost * quantity).quantize(
             MONEY, rounding=ROUND_HALF_UP
         )

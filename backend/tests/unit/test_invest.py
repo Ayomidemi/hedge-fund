@@ -57,10 +57,10 @@ class InvestPermissionTests(TestCase):
         self.assertTrue(user_can_access_capital(user))
         self.assertTrue(user_can_switch_products(user))
 
-    def test_default_authenticated_user_can_access_both(self) -> None:
+    def test_unscoped_authenticated_user_stays_on_invest(self) -> None:
         user = AuthenticatedUser(id="u3", email="a@example.com", role="authenticated")
         self.assertTrue(user_can_access_invest(user))
-        self.assertTrue(user_can_access_capital(user))
+        self.assertFalse(user_can_access_capital(user))
 
     def test_auth_disabled_anonymous_user_keeps_local_capital_access(self) -> None:
         user = AuthenticatedUser(id="anonymous", email=None, role="anonymous")
@@ -366,6 +366,69 @@ class FixedIncomeScopeTests(TestCase):
         blocker_codes = {check.code for check in assessment.blockers}
         self.assertIn("minimum_order", blocker_codes)
 
+    def test_ngn_order_uses_usd_cash_notional_for_buying_power(self) -> None:
+        account = RetailAccount(
+            user_id="u1",
+            account_number="PI-TEST",
+            broker_provider="PAPER",
+            broker_account_id="paper-1",
+            status="active",
+            base_currency="USD",
+            cash_balance=Decimal("10000.00"),
+        )
+        instrument = Instrument(
+            ticker="FGN-BOND-2029",
+            name="FGN Bond 2029",
+            asset_class="bond",
+            exchange="FMDQ",
+            currency="NGN",
+            sector="Fixed Income",
+            industry="government_bond",
+        )
+        without_fx = evaluate_order_risk(
+            account=account,
+            instrument=instrument,
+            payload=InvestOrderCreate(
+                ticker="FGN-BOND-2029",
+                side="BUY",
+                amount=Decimal("100000.00"),
+            ),
+        )
+        self.assertIn("buying_power", {check.code for check in without_fx.blockers})
+
+        with_fx = evaluate_order_risk(
+            account=account,
+            instrument=instrument,
+            payload=InvestOrderCreate(
+                ticker="FGN-BOND-2029",
+                side="BUY",
+                amount=Decimal("100000.00"),
+            ),
+            cash_notional=Decimal("65.40"),
+        )
+        self.assertFalse(with_fx.blockers)
+        self.assertTrue(
+            any("stored FX rate" in warning for warning in with_fx.warnings)
+        )
+
+    def test_amount_in_base_converts_ngn_to_usd(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.market_data.fx_convert import amount_in_base
+
+        rate = SimpleNamespace(rate=Decimal("1500"))
+        cash = amount_in_base(
+            Decimal("150000.00"),
+            "NGN",
+            "USD",
+            {("USD", "NGN"): rate},
+        )
+        self.assertEqual(cash, Decimal("100"))
+        self.assertEqual(
+            amount_in_base(Decimal("100"), "USD", "USD", {}),
+            Decimal("100"),
+        )
+
 
 class InvestMarketsBoardTests(TestCase):
     def test_board_covers_us_rates_and_nigeria_pulses(self) -> None:
@@ -621,6 +684,61 @@ class InvestPortfolioResponseTests(TestCase):
             "/invest/fixed-income/US-TBILL-13W",
         )
         self.assertEqual(_instrument_href("SPY"), "/invest/instruments/SPY")
+        self.assertEqual(
+            _instrument_href("CUSTOM-BOND", "bond"),
+            "/invest/fixed-income/CUSTOM-BOND",
+        )
+
+    def test_paper_policy_stays_market_only_with_instant_fills(self) -> None:
+        from app.services.invest.configuration import default_invest_setting
+
+        policy = default_invest_setting("paper_broker_policy")
+        self.assertTrue(policy["instant_fills"])
+        self.assertEqual(policy["allowed_order_types"], ["market"])
+        quantity, notional = _buy_size(
+            SubmitOrderRequest(symbol="SPY", side="BUY", notional=Decimal("500")),
+            Decimal("100"),
+        )
+        self.assertEqual(quantity, Decimal("5.00000000"))
+        self.assertEqual(notional, Decimal("500.00"))
+        account = RetailAccount(
+            user_id="u1",
+            account_number="PI-TEST",
+            broker_provider="PAPER",
+            broker_account_id="paper-1",
+            status="active",
+            base_currency="USD",
+            cash_balance=Decimal("10000.00"),
+        )
+        instrument = Instrument(
+            ticker="SPY",
+            name="SPDR S&P 500",
+            asset_class="etf",
+            exchange="ARCA",
+            currency="USD",
+            sector="Index",
+            industry="etf",
+        )
+        assessment = evaluate_order_risk(
+            account=account,
+            instrument=instrument,
+            payload=InvestOrderCreate(
+                ticker="SPY",
+                side="BUY",
+                amount=Decimal("500"),
+            ),
+        )
+        self.assertFalse(assessment.blockers)
+
+    def test_price_universe_includes_invest_books(self) -> None:
+        import inspect
+
+        from app.services.market_data import universe
+
+        source = inspect.getsource(universe.build_price_universe)
+        self.assertIn("RetailPosition", source)
+        self.assertIn("RetailWatchlistItem", source)
+        self.assertIn("InvestMarketBoardItem", source)
 
     def test_allocation_buckets_include_cash_and_fixed_income(self) -> None:
         holdings = [

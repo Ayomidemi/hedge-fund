@@ -188,7 +188,7 @@ export function InvestFixedIncomeShelf({
 
               <label className="mt-4 block text-sm">
                 <span className="text-xs uppercase tracking-wide text-zinc-500">
-                  Cash amount
+                  {selected.currency} amount
                 </span>
                 <input
                   value={selectedAmount}

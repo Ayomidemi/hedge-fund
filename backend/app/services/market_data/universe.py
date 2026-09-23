@@ -1,8 +1,8 @@
 """Builds the set of instruments whose prices we keep fresh.
 
-Universe = open positions (all portfolios) + open opportunities + recent
-model recommendations + benchmark tickers. Deduplicated globally because
-instruments are shared across users.
+Universe = Capital positions + Invest books/board/watchlists + open
+opportunities + recent model recommendations + benchmark tickers.
+Deduplicated globally because instruments are shared across users.
 """
 
 import logging
@@ -16,7 +16,15 @@ from app.core.market_constants import (
     BENCHMARK_TICKERS,
     RECOMMENDATION_UNIVERSE_DAYS,
 )
-from app.models import Instrument, ModelRecommendation, Opportunity, Position
+from app.models import (
+    Instrument,
+    InvestMarketBoardItem,
+    ModelRecommendation,
+    Opportunity,
+    Position,
+    RetailPosition,
+    RetailWatchlistItem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +45,30 @@ async def build_price_universe(session: AsyncSession) -> dict[str, list[uuid.UUI
         .distinct()
     )
     instrument_ids.update(position_ids)
+
+    instrument_ids.update(
+        await session.scalars(
+            select(RetailPosition.instrument_id)
+            .where(RetailPosition.quantity > 0)
+            .distinct()
+        )
+    )
+    instrument_ids.update(
+        await session.scalars(select(RetailWatchlistItem.instrument_id).distinct())
+    )
+    board_tickers = list(
+        await session.scalars(
+            select(InvestMarketBoardItem.ticker).where(
+                InvestMarketBoardItem.is_active.is_(True)
+            )
+        )
+    )
+    if board_tickers:
+        instrument_ids.update(
+            await session.scalars(
+                select(Instrument.id).where(Instrument.ticker.in_(board_tickers))
+            )
+        )
 
     opportunity_ids = await session.scalars(
         select(Opportunity.instrument_id)

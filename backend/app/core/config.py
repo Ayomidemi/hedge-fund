@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     hf_price_refresh_interval_seconds: int = 300
     hf_redis_url: str = "redis://localhost:6379/0"
 
-    hf_invest_paper_starting_cash: Decimal = Decimal("10000.00")
+    hf_invest_paper_starting_cash: Decimal = Decimal("100000.00")
 
     hf_ai_provider: str = "disabled"
     hf_openai_api_key: str | None = None

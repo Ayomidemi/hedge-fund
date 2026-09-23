@@ -17,7 +17,7 @@ from app.api.schemas.invest import (
 from app.api.schemas.ticker_intelligence import TickerMetricsInput
 from app.models import Instrument, InstrumentQuote, RadarSnapshot
 from app.services.invest.markets import rates_board_tickers
-from app.services.market_data.quote_cache import get_or_fetch_quote_price
+from app.services.market_data.quote_cache import get_cached_quote_price
 from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.market_data import (
     MarketDataUnavailableError,
@@ -47,9 +47,7 @@ async def build_listed_research(
     quote = await session.scalar(
         select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument_id)
     )
-    live_price = await get_or_fetch_quote_price(
-        session, ticker, instrument_id=instrument_id
-    )
+    live_price = await get_cached_quote_price(session, ticker)
     refreshed = await session.get(Instrument, instrument_id)
     if refreshed is not None:
         instrument = refreshed

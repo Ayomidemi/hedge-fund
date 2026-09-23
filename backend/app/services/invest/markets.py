@@ -3,16 +3,13 @@ from __future__ import annotations
 import csv
 import io
 import json
-import logging
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
-import httpx
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.invest import (
@@ -28,21 +25,12 @@ from app.services.invest.fixed_income import (
     fixed_income_response_db,
     search_fixed_income_products_db,
 )
-from app.services.market_data.ingestion import persist_quotes
-from app.services.market_data.quote_provider import fetch_quotes
 from app.services.market_data.sessions import (
     ALL_JURISDICTIONS,
     jurisdiction_for_ticker,
     session_for,
 )
 from app.services.portfolio.operating_core import upsert_instrument
-
-logger = logging.getLogger(__name__)
-
-TIINGO_SUPPORTED_TICKERS_URL = (
-    "https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip"
-)
-TIINGO_SUPPORTED_TICKERS_TIMEOUT_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -106,8 +94,6 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
     board_rows = await market_board_rows(session)
     instruments = await _ensure_board_instruments(session, board_rows)
     quotes = await _quotes_by_ticker(session, list(instruments.values()))
-    await _fill_missing_quotes(session, instruments, quotes)
-    quotes = await _quotes_by_ticker(session, list(instruments.values()))
 
     boards: dict[str, InvestMarketBoardResponse] = {}
     live_count = 0
@@ -169,23 +155,19 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
 
 
 async def market_board_rows(session: AsyncSession) -> list[MarketBoardRow]:
-    try:
-        await _ensure_market_board_seed_rows(session)
-        records = list(
-            await session.scalars(
-                select(InvestMarketBoardItem)
-                .where(InvestMarketBoardItem.is_active.is_(True))
-                .order_by(
-                    InvestMarketBoardItem.display_order.asc(),
-                    InvestMarketBoardItem.ticker.asc(),
-                )
+    await _ensure_market_board_seed_rows(session)
+    records = list(
+        await session.scalars(
+            select(InvestMarketBoardItem)
+            .where(InvestMarketBoardItem.is_active.is_(True))
+            .order_by(
+                InvestMarketBoardItem.display_order.asc(),
+                InvestMarketBoardItem.ticker.asc(),
             )
         )
-        if records:
-            return [_board_row_from_record(record) for record in records]
-    except ProgrammingError:
-        logger.warning("invest_market_board_table_missing")
-        await session.rollback()
+    )
+    if records:
+        return [_board_row_from_record(record) for record in records]
     return list(DEFAULT_MARKET_BOARD_RULES)
 
 
@@ -221,16 +203,13 @@ async def _ensure_market_board_seed_rows(session: AsyncSession) -> None:
     if not missing:
         return
 
-    tiingo_metadata = await _tiingo_supported_metadata(
-        [rule.ticker for _, rule in missing if rule.market == "US"]
-    )
     now = datetime.now(timezone.utc)
     for index, rule in missing:
         session.add(
             _board_item_from_rule(
                 rule,
                 display_order=index * 10,
-                tiingo_metadata=tiingo_metadata.get(rule.ticker),
+                tiingo_metadata=None,
                 seeded_at=now,
             )
         )
@@ -286,26 +265,6 @@ def _board_row_from_record(record: InvestMarketBoardItem) -> MarketBoardRow:
         currency=record.currency,
         sector=record.sector,
     )
-
-
-async def _tiingo_supported_metadata(tickers: list[str]) -> dict[str, dict]:
-    wanted = {ticker.upper() for ticker in tickers}
-    if not wanted:
-        return {}
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(TIINGO_SUPPORTED_TICKERS_TIMEOUT_SECONDS)
-        ) as client:
-            response = await client.get(TIINGO_SUPPORTED_TICKERS_URL)
-            response.raise_for_status()
-        return _parse_tiingo_supported_tickers(response.content, wanted)
-    except (httpx.HTTPError, ValueError, KeyError, zipfile.BadZipFile) as exc:
-        logger.warning(
-            "tiingo_supported_tickers_seed_failed",
-            extra={"error": str(exc)},
-        )
-        return {}
 
 
 def _parse_tiingo_supported_tickers(
@@ -411,35 +370,6 @@ async def _quotes_by_ticker(
         select(InstrumentQuote).where(InstrumentQuote.instrument_id.in_(ids))
     )
     return {by_id[row.instrument_id]: row for row in rows if row.instrument_id in by_id}
-
-
-async def _fill_missing_quotes(
-    session: AsyncSession,
-    instruments: dict[str, Instrument],
-    quotes: dict[str, InstrumentQuote],
-) -> None:
-    missing: list[str] = []
-    for ticker, instrument in instruments.items():
-        quote = quotes.get(ticker)
-        if quote is not None and not quote.is_stale and quote.price > 0:
-            continue
-        if not session_for(jurisdiction_for_ticker(ticker)).allows_live_quotes:
-            continue
-        missing.append(instrument.ticker)
-    if not missing:
-        return
-    fetched = await fetch_quotes(missing)
-    if not fetched:
-        return
-    universe = {
-        live.ticker: [instruments[live.ticker].id]
-        for live in fetched.values()
-        if live.ticker in instruments
-    }
-    if not universe:
-        return
-    await persist_quotes(session, universe, fetched, mark_missing_stale=False)
-    await session.flush()
 
 
 def _quote_status(

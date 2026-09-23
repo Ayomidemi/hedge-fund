@@ -60,8 +60,7 @@ export function InvestFixedIncomeDetail({
         amount,
       });
       toast.success(`Paper order filled for ${product.ticker} · ${order.status}`);
-      router.push("/invest/portfolio");
-      router.refresh();
+      router.push(`/invest/portfolio?placed=${order.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Order failed.");
     } finally {
@@ -168,10 +167,13 @@ export function InvestFixedIncomeDetail({
           <h3 className="text-lg font-semibold">Paper fixed-income order</h3>
           <p className="mt-2 text-sm text-zinc-500">
             Orders use modeled dirty price and settle into face value units.
+            {product.currency !== "USD"
+              ? " Paper cash is USD; this amount converts at the stored FX rate."
+              : ""}
           </p>
           <label className="mt-4 block text-sm">
             <span className="text-xs uppercase tracking-wide text-zinc-500">
-              Cash amount
+              {product.currency} amount
             </span>
             <input
               value={amount}

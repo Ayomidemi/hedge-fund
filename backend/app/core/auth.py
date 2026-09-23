@@ -216,6 +216,8 @@ def _normalized_role(user: AuthenticatedUser) -> str:
 
 
 def user_can_access_invest(user: AuthenticatedUser) -> bool:
+    if not settings.auth_enabled:
+        return True
     role = _normalized_role(user)
     if role in CAPITAL_ROLES:
         return False
@@ -223,10 +225,12 @@ def user_can_access_invest(user: AuthenticatedUser) -> bool:
 
 
 def user_can_access_capital(user: AuthenticatedUser) -> bool:
+    if not settings.auth_enabled:
+        return True
     role = _normalized_role(user)
-    if role in RETAIL_ONLY_ROLES:
-        return False
-    return True
+    if role == "ANONYMOUS":
+        return True
+    return role in ADMIN_ROLES or role in CAPITAL_ROLES
 
 
 def user_can_switch_products(user: AuthenticatedUser) -> bool:

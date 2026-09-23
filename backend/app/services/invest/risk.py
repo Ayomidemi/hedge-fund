@@ -7,6 +7,7 @@ from app.api.schemas.invest import InvestOrderCreate
 from app.models import Instrument, RetailAccount
 from app.services.invest.configuration import default_invest_setting
 from app.services.invest.fixed_income import FixedIncomeProduct, get_fixed_income_product
+from app.services.market_data.sessions import jurisdiction_for_ticker, session_for
 
 MONEY = Decimal("0.01")
 _DEFAULT_RISK_POLICY = default_invest_setting("risk_policy")
@@ -45,6 +46,7 @@ def evaluate_order_risk(
     payload: InvestOrderCreate,
     fixed_income_product: FixedIncomeProduct | None = None,
     policy: dict | None = None,
+    cash_notional: Decimal | None = None,
 ) -> RetailRiskAssessment:
     checks: list[RetailRiskCheck] = []
     risk_policy = _risk_policy(policy)
@@ -78,18 +80,19 @@ def evaluate_order_risk(
         )
     )
 
-    if side == "BUY" and notional is not None:
+    buy_cash = cash_notional if cash_notional is not None else notional
+    if side == "BUY" and buy_cash is not None:
         checks.append(
             _check(
                 "buying_power",
-                notional <= account.cash_balance,
+                buy_cash <= account.cash_balance,
                 "Cash check passed.",
                 "Not enough buying power for this order.",
             )
         )
         if (
             account.cash_balance > 0
-            and notional / account.cash_balance
+            and buy_cash / account.cash_balance
             >= risk_policy["buying_power_concentration_warn_pct"]
         ):
             checks.append(
@@ -102,6 +105,19 @@ def evaluate_order_risk(
             )
 
     product = fixed_income_product or get_fixed_income_product(instrument.ticker)
+    if product is None and asset_class not in {"bond", "cash_equivalent"}:
+        session_state = session_for(jurisdiction_for_ticker(instrument.ticker))
+        if not session_state.is_open:
+            checks.append(
+                RetailRiskCheck(
+                    code="market_hours",
+                    level="warning",
+                    message=(
+                        f"{session_state.label} is closed. Paper still fills at the last mark."
+                    ),
+                    passed=True,
+                )
+            )
     if product is not None:
         order_value = notional
         if order_value is None and payload.quantity is not None and side == "BUY":
@@ -146,7 +162,7 @@ def evaluate_order_risk(
                     level="warning",
                     message=(
                         f"{product.ticker} is denominated in {product.currency}; "
-                        f"paper cash remains recorded in {account.base_currency} without live FX conversion."
+                        f"paper cash is {account.base_currency} and converts at the stored FX rate."
                     ),
                     passed=True,
                 )

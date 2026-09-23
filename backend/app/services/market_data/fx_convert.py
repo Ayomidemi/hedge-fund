@@ -4,6 +4,7 @@ import logging
 from decimal import Decimal
 
 from app.models import FxRate, Instrument, InstrumentQuote
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,46 @@ def price_in_portfolio_base(
         },
     )
     return None
+
+
+def amount_in_base(
+    amount: Decimal,
+    currency: str,
+    base_currency: str,
+    fx_rates: dict[tuple[str, str], FxRate],
+) -> Decimal | None:
+    from_currency = currency.strip().upper()
+    base = base_currency.strip().upper()
+    if from_currency == base:
+        return amount
+    if base == "USD":
+        return convert_to_usd(amount, from_currency, fx_rates)
+    logger.warning(
+        "fx_base_unsupported",
+        extra={"currency": from_currency, "base_currency": base},
+    )
+    return None
+
+
+async def convert_amount_to_base(
+    session: AsyncSession,
+    amount: Decimal,
+    currency: str,
+    base_currency: str,
+) -> Decimal | None:
+    from app.services.market_data.fx_refresh import load_fx_rates, refresh_fx_rates
+
+    converted = amount_in_base(
+        amount, currency, base_currency, await load_fx_rates(session)
+    )
+    if converted is not None:
+        return converted
+    if currency.strip().upper() == base_currency.strip().upper():
+        return amount
+    await refresh_fx_rates(session)
+    return amount_in_base(
+        amount, currency, base_currency, await load_fx_rates(session)
+    )
 
 
 def convert_to_usd(

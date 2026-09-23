@@ -90,8 +90,7 @@ export function InvestInstrumentDetail({
         amount,
       });
       toast.success(`${side} order filled for ${instrument.ticker} - ${order.status}`);
-      router.push("/invest/portfolio");
-      router.refresh();
+      router.push(`/invest/portfolio?placed=${order.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Order failed.");
     } finally {
@@ -280,7 +279,9 @@ export function InvestInstrumentDetail({
             ))}
           </div>
           <label className="mt-4 block text-sm">
-            <span className="text-xs uppercase tracking-wide text-zinc-500">Amount</span>
+            <span className="text-xs uppercase tracking-wide text-zinc-500">
+              Amount ({instrument.currency})
+            </span>
             <input
               value={amount}
               onChange={(event) => {

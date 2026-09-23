@@ -55,6 +55,7 @@ from app.services.brokerage.protocol import (
 from app.services.invest.fixed_income import (
     ensure_fixed_income_instrument,
     fixed_income_price_per_face_db,
+    fixed_income_products_by_tickers_db,
     get_fixed_income_product,
     get_fixed_income_product_db,
     latest_fixed_income_quote,
@@ -67,6 +68,8 @@ from app.services.invest.configuration import (
     get_risk_policy,
 )
 from app.services.invest.risk import evaluate_order_risk
+from app.services.market_data.fx_convert import amount_in_base, convert_amount_to_base
+from app.services.market_data.fx_refresh import load_fx_rates
 from app.services.market_data.quote_cache import get_cached_quote_price
 from app.services.market_radar.watchlist_book import (
     WatchlistValidationError,
@@ -228,7 +231,7 @@ async def get_home(
     broker = get_broker_provider(session, account.broker_provider)
     balances = await broker.get_balances(account.broker_account_id)
     broker_positions = await broker.get_positions(account.broker_account_id)
-    holdings = await _holdings(session, broker_positions)
+    holdings = await _holdings(session, broker_positions, account.base_currency)
     invested = sum((item.market_value for item in holdings), Decimal("0")).quantize(
         MONEY
     )
@@ -290,12 +293,16 @@ async def submit_order(
     if fixed_income_product is not None:
         instrument = await ensure_fixed_income_instrument(session, fixed_income_product)
     risk_policy = await get_risk_policy(session)
+    cash_notional = await _cash_notional_for_order(
+        session, account, instrument, fixed_income_product, payload.amount
+    )
     risk_assessment = evaluate_order_risk(
         account=account,
         instrument=instrument,
         payload=payload,
         fixed_income_product=fixed_income_product,
         policy=risk_policy,
+        cash_notional=cash_notional,
     )
     if risk_assessment.blockers:
         raise InvestValidationError(
@@ -530,8 +537,9 @@ async def list_watchlist(
             )
         )
     } if rows else {}
+    products = await fixed_income_products_by_tickers_db(session, tickers)
     for row in rows:
-        product = await get_fixed_income_product_db(session, row.instrument.ticker)
+        product = products.get(row.instrument.ticker.upper())
         quote = None if product is not None else quotes.get(row.instrument.id)
         ticker_key = row.instrument.ticker.upper()
         items.append(
@@ -876,37 +884,99 @@ async def _require_instrument(session: AsyncSession, ticker: str) -> Instrument:
     )
 
 
-async def _holdings(session: AsyncSession, positions) -> list[InvestHolding]:
+async def _cash_notional_for_order(
+    session: AsyncSession,
+    account: RetailAccount,
+    instrument: Instrument,
+    product,
+    amount: Decimal | None,
+) -> Decimal | None:
+    if amount is None:
+        return None
+    currency = (product.currency if product is not None else instrument.currency) or (
+        account.base_currency
+    )
+    converted = await convert_amount_to_base(
+        session, amount, currency, account.base_currency
+    )
+    if converted is None:
+        raise InvestValidationError(
+            f"No {account.base_currency}/{currency} rate available to paper this order."
+        )
+    return converted
+
+
+async def _holdings(
+    session: AsyncSession, positions, base_currency: str = "USD"
+) -> list[InvestHolding]:
+    symbols = [item.symbol for item in positions]
+    instruments = {
+        row.ticker: row
+        for row in await session.scalars(
+            select(Instrument).where(Instrument.ticker.in_(symbols))
+        )
+    } if symbols else {}
+    products = await fixed_income_products_by_tickers_db(session, symbols)
+    quotes = {
+        quote.instrument_id: quote
+        for quote in await session.scalars(
+            select(InstrumentQuote).where(
+                InstrumentQuote.instrument_id.in_(
+                    [
+                        row.id
+                        for ticker, row in instruments.items()
+                        if ticker not in products
+                    ]
+                )
+            )
+        )
+    } if instruments else {}
+    fx_rates = await load_fx_rates(session)
     holdings: list[InvestHolding] = []
     for item in positions:
-        instrument = await session.scalar(
-            select(Instrument).where(Instrument.ticker == item.symbol)
-        )
-        product = (
+        instrument = instruments.get(item.symbol)
+        product = products.get(item.symbol.upper())
+        quote = (
             None
             if instrument is None
-            else await get_fixed_income_product_db(session, instrument.ticker)
+            else quotes.get(instrument.id)
         )
+        native_price = (
+            None
+            if instrument is None
+            else await fixed_income_price_per_face_db(session, product)
+            if product is not None
+            else quote.price
+            if quote is not None
+            else None
+        )
+        native_currency = (
+            instrument.currency if instrument is not None else base_currency
+        )
+        price = native_price
+        if native_price is not None:
+            converted = amount_in_base(
+                native_price, native_currency, base_currency, fx_rates
+            )
+            if converted is not None:
+                price = converted
         holdings.append(
             InvestHolding(
                 ticker=item.symbol,
                 name=instrument.name if instrument is not None else item.symbol,
                 asset_class=instrument.asset_class if instrument is not None else None,
-                currency=instrument.currency if instrument is not None else "USD",
+                currency=base_currency,
                 quantity=item.quantity,
                 average_cost=item.average_cost,
-                current_price=(
-                    None
-                    if instrument is None
-                    else await fixed_income_price_per_face_db(session, product)
-                    if product is not None
-                    else await get_cached_quote_price(session, item.symbol)
-                ),
+                current_price=price,
                 market_value=item.market_value,
                 allocation_pct=None,
                 unrealized_pnl=item.unrealized_pnl,
                 unrealized_pnl_pct=item.unrealized_pnl_pct,
-                href=_instrument_href(item.symbol),
+                href=_instrument_href(
+                    item.symbol,
+                    instrument.asset_class if instrument is not None else None,
+                ),
             )
         )
     return holdings
@@ -1064,7 +1134,7 @@ async def _watchlist_response(
         href=(
             f"/invest/fixed-income/{instrument.ticker}"
             if product is not None
-            else _instrument_href(instrument.ticker)
+            else _instrument_href(instrument.ticker, instrument.asset_class)
         ),
         notes=row.notes,
         date_added=row.date_added,
@@ -1076,12 +1146,11 @@ async def _watchlist_response(
     )
 
 
-def _instrument_href(ticker: str) -> str:
-    return (
-        f"/invest/fixed-income/{ticker}"
-        if get_fixed_income_product(ticker) is not None
-        else f"/invest/instruments/{ticker}"
-    )
+def _instrument_href(ticker: str, asset_class: str | None = None) -> str:
+    klass = (asset_class or "").strip().lower()
+    if klass in {"bond", "cash_equivalent"} or get_fixed_income_product(ticker) is not None:
+        return f"/invest/fixed-income/{ticker}"
+    return f"/invest/instruments/{ticker}"
 
 
 def _allocation_buckets(

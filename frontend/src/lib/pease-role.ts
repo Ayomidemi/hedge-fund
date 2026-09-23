@@ -61,11 +61,11 @@ export function resolvePeaseRole(user: {
 }
 
 export function canAccessCapital(role: PeaseProductRole | null): boolean {
-  return !role || !RETAIL_ROLES.has(role);
+  return role !== null && (ADMIN_ROLES.has(role) || CAPITAL_ROLES.has(role));
 }
 
 export function canAccessInvest(role: PeaseProductRole | null): boolean {
-  return !role || !CAPITAL_ROLES.has(role);
+  return role === null || !CAPITAL_ROLES.has(role);
 }
 
 export function canSwitchProducts(role: PeaseProductRole | null): boolean {
@@ -73,6 +73,6 @@ export function canSwitchProducts(role: PeaseProductRole | null): boolean {
 }
 
 export function homePathForRole(role: PeaseProductRole | null): string {
-  if (role && RETAIL_ROLES.has(role)) return "/invest";
-  return "/";
+  if (role && (ADMIN_ROLES.has(role) || CAPITAL_ROLES.has(role))) return "/";
+  return "/invest";
 }
