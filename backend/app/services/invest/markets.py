@@ -3,13 +3,17 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
+import httpx
+from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.invest import (
@@ -20,6 +24,8 @@ from app.api.schemas.invest import (
     InvestMarketsResponse,
 )
 from app.api.schemas.operating_core import InstrumentCreate
+from app.core.config import settings
+from app.core.market_constants import QUOTE_HTTP_TIMEOUT_SECONDS
 from app.models import Instrument, InstrumentQuote, InvestMarketBoardItem
 from app.services.invest.fixed_income import (
     fixed_income_response_db,
@@ -31,6 +37,8 @@ from app.services.market_data.sessions import (
     session_for,
 )
 from app.services.portfolio.operating_core import upsert_instrument
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,7 +56,18 @@ class MarketBoardRow:
     sector: str | None
 
 
+@dataclass(frozen=True)
+class MarketBoardSyncResult:
+    requested_count: int
+    matched_count: int
+    updated_count: int
+    missing_tickers: tuple[str, ...]
+    skipped_reason: str | None = None
+
+
 _SEED_DIR = Path(__file__).with_name("seed_data")
+_TIINGO_SUPPORTED_TICKERS_PATH = "/tiingo/daily/supported_tickers.zip"
+_MARKET_BOARD_METADATA_TTL = timedelta(days=1)
 
 
 @lru_cache(maxsize=1)
@@ -155,17 +174,24 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
 
 
 async def market_board_rows(session: AsyncSession) -> list[MarketBoardRow]:
-    await _ensure_market_board_seed_rows(session)
-    records = list(
-        await session.scalars(
-            select(InvestMarketBoardItem)
-            .where(InvestMarketBoardItem.is_active.is_(True))
-            .order_by(
-                InvestMarketBoardItem.display_order.asc(),
-                InvestMarketBoardItem.ticker.asc(),
+    if not await _ensure_market_board_seed_rows(session):
+        return list(DEFAULT_MARKET_BOARD_RULES)
+    try:
+        records = list(
+            await session.scalars(
+                select(InvestMarketBoardItem)
+                .where(InvestMarketBoardItem.is_active.is_(True))
+                .order_by(
+                    InvestMarketBoardItem.display_order.asc(),
+                    InvestMarketBoardItem.ticker.asc(),
+                )
             )
         )
-    )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_market_board_table(exc):
+            raise
+        await _rollback_after_market_board_fallback(session)
+        return list(DEFAULT_MARKET_BOARD_RULES)
     if records:
         return [_board_row_from_record(record) for record in records]
     return list(DEFAULT_MARKET_BOARD_RULES)
@@ -186,34 +212,157 @@ def rates_board_tickers() -> tuple[str, ...]:
     )
 
 
-async def _ensure_market_board_seed_rows(session: AsyncSession) -> None:
-    default_tickers = [row.ticker for row in DEFAULT_MARKET_BOARD_RULES]
-    existing = set(
-        await session.scalars(
-            select(InvestMarketBoardItem.ticker).where(
-                InvestMarketBoardItem.ticker.in_(default_tickers)
+async def sync_market_board_from_tiingo_supported(
+    session: AsyncSession,
+    *,
+    force: bool = False,
+) -> MarketBoardSyncResult:
+    """Refresh listed board metadata from Tiingo's supported-tickers catalog.
+
+    The Markets endpoint should stay a cache reader, so this belongs in a
+    refresh/admin path rather than page-load code.
+    """
+    if not await _ensure_market_board_seed_rows(session):
+        return MarketBoardSyncResult(
+            requested_count=0,
+            matched_count=0,
+            updated_count=0,
+            missing_tickers=(),
+            skipped_reason="market_board_table_missing",
+        )
+    try:
+        records = list(
+            await session.scalars(
+                select(InvestMarketBoardItem)
+                .where(InvestMarketBoardItem.is_active.is_(True))
+                .order_by(
+                    InvestMarketBoardItem.display_order.asc(),
+                    InvestMarketBoardItem.ticker.asc(),
+                )
             )
         )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_market_board_table(exc):
+            raise
+        await _rollback_after_market_board_fallback(session)
+        return MarketBoardSyncResult(
+            requested_count=0,
+            matched_count=0,
+            updated_count=0,
+            missing_tickers=(),
+            skipped_reason="market_board_table_missing",
+        )
+    sync_records = [record for record in records if _uses_tiingo_supported(record)]
+    requested_tickers = {record.ticker.upper() for record in sync_records}
+    if not requested_tickers:
+        return MarketBoardSyncResult(0, 0, 0, ())
+
+    now = datetime.now(timezone.utc)
+    if not force and _board_metadata_is_fresh(sync_records, now):
+        return MarketBoardSyncResult(
+            requested_count=len(requested_tickers),
+            matched_count=len(requested_tickers),
+            updated_count=0,
+            missing_tickers=(),
+            skipped_reason="fresh",
+        )
+
+    if not settings.hf_tiingo_api_key:
+        return MarketBoardSyncResult(
+            requested_count=len(requested_tickers),
+            matched_count=0,
+            updated_count=0,
+            missing_tickers=tuple(sorted(requested_tickers)),
+            skipped_reason="tiingo_api_key_missing",
+        )
+
+    try:
+        payload = await _fetch_tiingo_supported_tickers_zip()
+        metadata_by_ticker = _parse_tiingo_supported_tickers(payload, requested_tickers)
+    except (httpx.HTTPError, ValueError, zipfile.BadZipFile) as exc:
+        logger.warning(
+            "invest_market_board_tiingo_sync_failed",
+            extra={"error": str(exc)},
+        )
+        return MarketBoardSyncResult(
+            requested_count=len(requested_tickers),
+            matched_count=0,
+            updated_count=0,
+            missing_tickers=tuple(sorted(requested_tickers)),
+            skipped_reason="provider_error",
+        )
+
+    existing_instruments = {
+        instrument.ticker.upper(): instrument
+        for instrument in await session.scalars(
+            select(Instrument).where(Instrument.ticker.in_(requested_tickers))
+        )
+    }
+    updated_count = 0
+    for record in sync_records:
+        metadata = metadata_by_ticker.get(record.ticker.upper())
+        if not metadata:
+            continue
+        if _apply_tiingo_metadata_to_board_item(record, metadata, now):
+            updated_count += 1
+        instrument = existing_instruments.get(record.ticker.upper())
+        if instrument is not None:
+            _apply_board_record_to_instrument(instrument, record)
+
+    if updated_count:
+        await session.flush()
+    missing = tuple(sorted(requested_tickers - set(metadata_by_ticker)))
+    return MarketBoardSyncResult(
+        requested_count=len(requested_tickers),
+        matched_count=len(metadata_by_ticker),
+        updated_count=updated_count,
+        missing_tickers=missing,
     )
+
+
+async def _ensure_market_board_seed_rows(session: AsyncSession) -> bool:
+    default_tickers = [row.ticker for row in DEFAULT_MARKET_BOARD_RULES]
+    if not await _market_board_table_exists(session):
+        return False
+    try:
+        existing = set(
+            await session.scalars(
+                select(InvestMarketBoardItem.ticker).where(
+                    InvestMarketBoardItem.ticker.in_(default_tickers)
+                )
+            )
+        )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_market_board_table(exc):
+            raise
+        await _rollback_after_market_board_fallback(session)
+        return False
     missing = [
         (index, rule)
         for index, rule in enumerate(DEFAULT_MARKET_BOARD_RULES, start=1)
         if rule.ticker not in existing
     ]
     if not missing:
-        return
+        return True
 
     now = datetime.now(timezone.utc)
-    for index, rule in missing:
-        session.add(
-            _board_item_from_rule(
-                rule,
-                display_order=index * 10,
-                tiingo_metadata=None,
-                seeded_at=now,
+    try:
+        for index, rule in missing:
+            session.add(
+                _board_item_from_rule(
+                    rule,
+                    display_order=index * 10,
+                    tiingo_metadata=None,
+                    seeded_at=now,
+                )
             )
-        )
-    await session.flush()
+        await session.flush()
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_market_board_table(exc):
+            raise
+        await _rollback_after_market_board_fallback(session)
+        return False
+    return True
 
 
 def _board_item_from_rule(
@@ -237,7 +386,8 @@ def _board_item_from_rule(
             _asset_class_from_tiingo(tiingo_metadata.get("assetType"))
             if tiingo_metadata
             else rule.asset_class
-        ),
+        )
+        or rule.asset_class,
         exchange=_first_metadata_text(tiingo_metadata, "exchange") or rule.exchange,
         currency=(
             _first_metadata_text(tiingo_metadata, "priceCurrency", "currency")
@@ -249,6 +399,75 @@ def _board_item_from_rule(
         source_metadata=_compact_tiingo_metadata(tiingo_metadata),
         is_active=True,
     )
+
+
+async def _fetch_tiingo_supported_tickers_zip() -> bytes:
+    async with httpx.AsyncClient(
+        base_url=settings.tiingo_base_url,
+        timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
+        headers={"Authorization": f"Token {settings.hf_tiingo_api_key}"},
+    ) as client:
+        response = await client.get(_TIINGO_SUPPORTED_TICKERS_PATH)
+        response.raise_for_status()
+        return response.content
+
+
+def _uses_tiingo_supported(record: InvestMarketBoardItem) -> bool:
+    return record.market.upper() == "US" and not record.ticker.upper().endswith(".NG")
+
+
+def _board_metadata_is_fresh(
+    records: list[InvestMarketBoardItem],
+    now: datetime,
+) -> bool:
+    stale_cutoff = now - _MARKET_BOARD_METADATA_TTL
+    return all(
+        record.source == "tiingo_supported_tickers"
+        and record.source_as_of is not None
+        and record.source_as_of >= stale_cutoff
+        for record in records
+    )
+
+
+def _apply_tiingo_metadata_to_board_item(
+    record: InvestMarketBoardItem,
+    tiingo_metadata: dict,
+    synced_at: datetime,
+) -> bool:
+    updates = {
+        "name": _first_metadata_text(tiingo_metadata, "name", "description")
+        or record.name,
+        "asset_class": _asset_class_from_tiingo(tiingo_metadata.get("assetType"))
+        or record.asset_class,
+        "exchange": _first_metadata_text(tiingo_metadata, "exchange")
+        or record.exchange,
+        "currency": (
+            _first_metadata_text(tiingo_metadata, "priceCurrency", "currency")
+            or record.currency
+        ).upper(),
+        "source": "tiingo_supported_tickers",
+        "source_as_of": synced_at,
+        "source_metadata": _compact_tiingo_metadata(tiingo_metadata),
+    }
+    changed = False
+    for key, value in updates.items():
+        if getattr(record, key) == value:
+            continue
+        setattr(record, key, value)
+        changed = True
+    return changed
+
+
+def _apply_board_record_to_instrument(
+    instrument: Instrument,
+    record: InvestMarketBoardItem,
+) -> None:
+    instrument.name = record.name
+    instrument.asset_class = record.asset_class
+    instrument.exchange = record.exchange
+    instrument.currency = record.currency
+    instrument.sector = record.sector
+    instrument.industry = record.group_title
 
 
 def _board_row_from_record(record: InvestMarketBoardItem) -> MarketBoardRow:
@@ -303,8 +522,10 @@ def _first_metadata_text(payload: dict | None, *keys: str) -> str | None:
     return None
 
 
-def _asset_class_from_tiingo(asset_type: object) -> str:
+def _asset_class_from_tiingo(asset_type: object) -> str | None:
     normalized = str(asset_type or "").strip().lower()
+    if not normalized:
+        return None
     if normalized == "etf":
         return "etf"
     if normalized == "stock":
@@ -372,9 +593,7 @@ async def _quotes_by_ticker(
     return {by_id[row.instrument_id]: row for row in rows if row.instrument_id in by_id}
 
 
-def _quote_status(
-    quote: InstrumentQuote | None, ticker: str, now: datetime
-) -> str:
+def _quote_status(quote: InstrumentQuote | None, ticker: str, now: datetime) -> str:
     if quote is None or quote.price <= 0:
         return "unavailable"
     if quote.is_stale:
@@ -382,3 +601,28 @@ def _quote_status(
     if session_for(jurisdiction_for_ticker(ticker), now).is_open:
         return "live"
     return "last_close"
+
+
+def _is_missing_market_board_table(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "invest_market_board_items" in message and (
+        "does not exist" in message
+        or "undefinedtable" in message
+        or "no such table" in message
+    )
+
+
+async def _rollback_after_market_board_fallback(session: AsyncSession) -> None:
+    try:
+        await session.rollback()
+    except Exception:
+        logger.exception("market_board_fallback_rollback_failed")
+
+
+async def _market_board_table_exists(session: AsyncSession) -> bool:
+    connection = await session.connection()
+    return await connection.run_sync(
+        lambda sync_connection: sqlalchemy_inspect(sync_connection).has_table(
+            "invest_market_board_items"
+        )
+    )

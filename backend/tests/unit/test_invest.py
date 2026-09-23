@@ -2,7 +2,7 @@ import io
 import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest import TestCase
+from unittest import IsolatedAsyncioTestCase, TestCase
 
 from app.core.auth import (
     AuthenticatedUser,
@@ -12,7 +12,7 @@ from app.core.auth import (
 from app.core.config import settings
 from app.main import app
 from app.api.schemas.invest import InvestHolding, InvestOrderCreate
-from app.models import Instrument, RetailAccount
+from app.models import Instrument, InvestMarketBoardItem, RetailAccount
 from app.services.brokerage.paper import _buy_size, _fixed_income_buy_size
 from app.services.brokerage.protocol import BrokerValidationError, SubmitOrderRequest
 from app.services.invest.accounts import (
@@ -30,6 +30,7 @@ from app.services.invest.fixed_income import (
 )
 from app.services.invest.markets import (
     DEFAULT_MARKET_BOARD_RULES,
+    _apply_tiingo_metadata_to_board_item,
     _board_item_from_rule,
     _parse_tiingo_supported_tickers,
     board_tickers,
@@ -71,6 +72,35 @@ class InvestPermissionTests(TestCase):
         self.assertIsInstance(settings.invest_paper_starting_cash, Decimal)
         self.assertGreaterEqual(settings.invest_paper_starting_cash, Decimal("100.00"))
 
+    def test_invest_policy_parsers_fallback_on_bad_values(self) -> None:
+        from app.services.invest.configuration import (
+            parse_paper_broker_policy,
+            parse_risk_policy,
+        )
+
+        risk_policy = parse_risk_policy(
+            {
+                "allowed_sides": [],
+                "buying_power_concentration_warn_pct": "500",
+                "fixed_income_fx_warning_enabled": "false",
+            }
+        )
+        self.assertEqual(risk_policy.allowed_sides, frozenset({"BUY", "SELL"}))
+        self.assertEqual(
+            risk_policy.buying_power_concentration_warn_pct,
+            Decimal("0.50"),
+        )
+        self.assertFalse(risk_policy.fixed_income_fx_warning_enabled)
+
+        broker_policy = parse_paper_broker_policy(
+            {
+                "concentration_warn_pct": "NaN",
+                "price_precision": "0",
+            }
+        )
+        self.assertEqual(broker_policy.concentration_warn_pct, Decimal("0.25"))
+        self.assertEqual(broker_policy.price_precision, Decimal("0.000001"))
+
     def test_profile_permissions_keep_retail_out_of_capital_controls(self) -> None:
         user = AuthenticatedUser(id="u1", email="r@example.com", role="RETAIL_USER")
         permissions = {item.code: item.enabled for item in _profile_permissions(user)}
@@ -87,7 +117,10 @@ class InvestPermissionTests(TestCase):
 
     def test_pease_view_uses_factor_scores_without_fund_outputs(self) -> None:
         from app.api.schemas.ticker_intelligence import TickerMetricsInput
-        from app.services.invest.research import pease_view_from_scorecard, retail_stance
+        from app.services.invest.research import (
+            pease_view_from_scorecard,
+            retail_stance,
+        )
         from app.services.ticker_intelligence.scoring import score_ticker
 
         strong = score_ticker(
@@ -138,7 +171,10 @@ class InvestPermissionTests(TestCase):
 
     def test_pease_view_uses_price_path_for_listed_funds(self) -> None:
         from app.api.schemas.ticker_intelligence import TickerMetricsInput
-        from app.services.invest.research import pease_view_from_scorecard, retail_stance
+        from app.services.invest.research import (
+            pease_view_from_scorecard,
+            retail_stance,
+        )
         from app.services.ticker_intelligence.scoring import score_ticker
 
         metrics = TickerMetricsInput(
@@ -469,7 +505,9 @@ class InvestMarketsBoardTests(TestCase):
         self.assertEqual(parsed["SPY"]["priceCurrency"], "USD")
 
     def test_seed_item_uses_tiingo_metadata_when_available(self) -> None:
-        spy_rule = next(row for row in DEFAULT_MARKET_BOARD_RULES if row.ticker == "SPY")
+        spy_rule = next(
+            row for row in DEFAULT_MARKET_BOARD_RULES if row.ticker == "SPY"
+        )
         seeded = _board_item_from_rule(
             spy_rule,
             display_order=10,
@@ -488,6 +526,39 @@ class InvestMarketsBoardTests(TestCase):
         self.assertEqual(seeded.exchange, "NYSE Arca")
         self.assertEqual(seeded.source, "tiingo_supported_tickers")
         self.assertEqual(seeded.source_metadata["assetType"], "ETF")
+
+    def test_board_item_can_refresh_tiingo_metadata(self) -> None:
+        row = InvestMarketBoardItem(
+            ticker="SHY",
+            label="1-3Y Treasury ETF",
+            name="iShares 1-3 Year Treasury Bond ETF",
+            market="US",
+            board_group="rates",
+            group_title="Rates board",
+            group_description="Treasury duration proxies.",
+            display_order=20,
+            asset_class="etf",
+            exchange="ARCA",
+            currency="USD",
+            sector="Fixed Income",
+        )
+
+        changed = _apply_tiingo_metadata_to_board_item(
+            row,
+            {
+                "ticker": "SHY",
+                "exchange": "NYSE Arca",
+                "assetType": "ETF",
+                "priceCurrency": "USD",
+                "startDate": "2002-07-22",
+            },
+            datetime(2026, 9, 23, tzinfo=timezone.utc),
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(row.exchange, "NYSE Arca")
+        self.assertEqual(row.source, "tiingo_supported_tickers")
+        self.assertEqual(row.source_metadata["startDate"], "2002-07-22")
 
 
 class InvestNewsTickerTests(TestCase):
@@ -562,7 +633,11 @@ class InvestNewsTickerTests(TestCase):
         from types import SimpleNamespace
         from uuid import uuid4
 
-        from app.services.invest.news import _merge_income_stories, _pagination, _slice_page
+        from app.services.invest.news import (
+            _merge_income_stories,
+            _pagination,
+            _slice_page,
+        )
 
         stories = [
             SimpleNamespace(
@@ -730,16 +805,6 @@ class InvestPortfolioResponseTests(TestCase):
         )
         self.assertFalse(assessment.blockers)
 
-    def test_price_universe_includes_invest_books(self) -> None:
-        import inspect
-
-        from app.services.market_data import universe
-
-        source = inspect.getsource(universe.build_price_universe)
-        self.assertIn("RetailPosition", source)
-        self.assertIn("RetailWatchlistItem", source)
-        self.assertIn("InvestMarketBoardItem", source)
-
     def test_allocation_buckets_include_cash_and_fixed_income(self) -> None:
         holdings = [
             InvestHolding(
@@ -764,3 +829,66 @@ class InvestPortfolioResponseTests(TestCase):
         by_name = {bucket.name: bucket for bucket in buckets}
         self.assertEqual(by_name["Cash"].allocation_pct, Decimal("1.00"))
         self.assertEqual(by_name["Fixed income"].allocation_pct, Decimal("99.00"))
+
+
+class InvestPriceUniverseTests(IsolatedAsyncioTestCase):
+    async def test_price_universe_includes_invest_books(self) -> None:
+        from uuid import uuid4
+
+        from app.services.market_data.universe import build_price_universe
+
+        retail_position_id = uuid4()
+        watchlist_id = uuid4()
+        board_id = uuid4()
+        session = _FakeScalarsSession(
+            [
+                [],
+                [retail_position_id],
+                [watchlist_id],
+                ["BIL"],
+                [board_id],
+                [],
+                [],
+                [],
+                [
+                    Instrument(
+                        id=retail_position_id,
+                        ticker="TLT",
+                        name="iShares 20+ Year Treasury Bond ETF",
+                        asset_class="etf",
+                        exchange="ARCA",
+                        currency="USD",
+                    ),
+                    Instrument(
+                        id=watchlist_id,
+                        ticker="GTCO",
+                        name="Guaranty Trust Holding Company",
+                        asset_class="equity",
+                        exchange="NGX",
+                        currency="NGN",
+                    ),
+                    Instrument(
+                        id=board_id,
+                        ticker="BIL",
+                        name="SPDR Bloomberg 1-3 Month T-Bill ETF",
+                        asset_class="etf",
+                        exchange="ARCA",
+                        currency="USD",
+                    ),
+                ],
+            ]
+        )
+
+        universe = await build_price_universe(session)
+
+        self.assertEqual(universe["TLT"], [retail_position_id])
+        self.assertEqual(universe["GTCO.NG"], [watchlist_id])
+        self.assertEqual(universe["BIL"], [board_id])
+
+
+class _FakeScalarsSession:
+    def __init__(self, results: list[list]) -> None:
+        self._results = iter(results)
+
+    async def scalars(self, statement):
+        return next(self._results)

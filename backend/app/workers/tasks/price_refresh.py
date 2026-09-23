@@ -22,6 +22,7 @@ from app.core.market_constants import PRICE_MARKET_HOURS_ONLY, PRICE_STALE_AFTER
 from app.db.session import engine_options
 from app.models import Instrument, InstrumentQuote, PriceRefreshRun
 from app.services.administration.system_log import record_system_log
+from app.services.invest.markets import sync_market_board_from_tiingo_supported
 from app.services.market_data.fx_refresh import FxRefreshResult, refresh_fx_rates
 from app.services.market_data.ingestion import IngestionResult, ingest_quotes
 from app.services.market_data.mark_to_market import MarkResult, mark_open_positions
@@ -60,6 +61,18 @@ async def _run() -> None:
 
 async def _refresh_cycle(session: AsyncSession) -> None:
     started_at = datetime.now(timezone.utc)
+
+    board_sync = await sync_market_board_from_tiingo_supported(session)
+    if board_sync.updated_count:
+        logger.info(
+            "invest_market_board_metadata_synced",
+            extra={
+                "requested_count": board_sync.requested_count,
+                "matched_count": board_sync.matched_count,
+                "updated_count": board_sync.updated_count,
+                "missing_tickers": list(board_sync.missing_tickers),
+            },
+        )
 
     # FX rates are needed around the clock for NGN → USD conversion, even when
     # US equity quotes are skipped outside regular hours.
@@ -231,8 +244,7 @@ async def _filter_stream_fallback_universe(
     us_tickers = [
         ticker
         for ticker in universe
-        if jurisdiction_for_ticker(ticker) == "US"
-        and is_market_open("US", now)
+        if jurisdiction_for_ticker(ticker) == "US" and is_market_open("US", now)
     ]
     if not us_tickers:
         return universe
@@ -255,5 +267,7 @@ async def _filter_stream_fallback_universe(
     }
     skipped = len(universe) - len(filtered)
     if skipped:
-        logger.info("price_refresh_skipped_stream_fresh", extra={"ticker_count": skipped})
+        logger.info(
+            "price_refresh_skipped_stream_fresh", extra={"ticker_count": skipped}
+        )
     return filtered

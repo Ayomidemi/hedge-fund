@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -8,7 +9,9 @@ from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
+from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.invest import (
@@ -25,6 +28,8 @@ from app.models import (
     InvestYieldCurvePoint,
 )
 from app.services.portfolio.operating_core import upsert_instrument
+
+logger = logging.getLogger(__name__)
 
 PRICE = Decimal("0.0001")
 MONEY = Decimal("0.01")
@@ -138,7 +143,9 @@ def _seed_decimal(value) -> Decimal | None:
     return Decimal(str(value))
 
 
-FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = _load_seed_fixed_income_products()
+FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
+    _load_seed_fixed_income_products()
+)
 
 
 def get_fixed_income_product(ticker: str) -> FixedIncomeProduct | None:
@@ -155,17 +162,28 @@ async def fixed_income_products_by_tickers_db(
     wanted = {ticker.strip().upper() for ticker in tickers if ticker and ticker.strip()}
     if not wanted:
         return {}
-    await ensure_fixed_income_seed_products(session)
-    rows = await session.scalars(
-        select(InvestFixedIncomeProductRecord).where(
-            InvestFixedIncomeProductRecord.ticker.in_(wanted)
+    if not await ensure_fixed_income_seed_products(session):
+        return {
+            product.ticker: product
+            for product in FIXED_INCOME_PRODUCTS
+            if product.ticker in wanted
+        }
+    try:
+        rows = await session.scalars(
+            select(InvestFixedIncomeProductRecord).where(
+                InvestFixedIncomeProductRecord.ticker.in_(wanted)
+            )
         )
-    )
-    return {
-        row.ticker: _product_from_record(row)
-        for row in rows
-        if row.is_active
-    }
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_fixed_income_table(exc):
+            raise
+        await _rollback_after_fixed_income_fallback(session)
+        return {
+            product.ticker: product
+            for product in FIXED_INCOME_PRODUCTS
+            if product.ticker in wanted
+        }
+    return {row.ticker: _product_from_record(row) for row in rows if row.is_active}
 
 
 async def get_fixed_income_product_db(
@@ -199,20 +217,27 @@ async def search_fixed_income_products_db(
     *,
     market: str | None = None,
 ) -> list[FixedIncomeProduct]:
-    await ensure_fixed_income_seed_products(session)
+    if not await ensure_fixed_income_seed_products(session):
+        return search_fixed_income_products(query, market=market)
     normalized_query = query.strip().upper()
     normalized_market = (market or "").strip().upper()
-    rows = list(
-        await session.scalars(
-            select(InvestFixedIncomeProductRecord)
-            .where(InvestFixedIncomeProductRecord.is_active.is_(True))
-            .order_by(
-                InvestFixedIncomeProductRecord.market.asc(),
-                InvestFixedIncomeProductRecord.instrument_type.asc(),
-                InvestFixedIncomeProductRecord.ticker.asc(),
+    try:
+        rows = list(
+            await session.scalars(
+                select(InvestFixedIncomeProductRecord)
+                .where(InvestFixedIncomeProductRecord.is_active.is_(True))
+                .order_by(
+                    InvestFixedIncomeProductRecord.market.asc(),
+                    InvestFixedIncomeProductRecord.instrument_type.asc(),
+                    InvestFixedIncomeProductRecord.ticker.asc(),
+                )
             )
         )
-    )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_fixed_income_table(exc):
+            raise
+        await _rollback_after_fixed_income_fallback(session)
+        return search_fixed_income_products(query, market=market)
     products: list[FixedIncomeProduct] = []
     for row in rows:
         if normalized_market and normalized_market not in {"ALL", row.market}:
@@ -227,23 +252,53 @@ async def search_fixed_income_products_db(
     return products
 
 
-async def ensure_fixed_income_seed_products(session: AsyncSession) -> None:
+async def ensure_fixed_income_seed_products(session: AsyncSession) -> bool:
     default_tickers = [product.ticker for product in FIXED_INCOME_PRODUCTS]
-    existing = {
-        ticker
-        for ticker in await session.scalars(
-            select(InvestFixedIncomeProductRecord.ticker).where(
-                InvestFixedIncomeProductRecord.ticker.in_(default_tickers)
+    if not await _fixed_income_table_exists(session, "invest_fixed_income_products"):
+        return False
+    try:
+        existing = {
+            ticker
+            for ticker in await session.scalars(
+                select(InvestFixedIncomeProductRecord.ticker).where(
+                    InvestFixedIncomeProductRecord.ticker.in_(default_tickers)
+                )
+            )
+        }
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_fixed_income_table(exc):
+            raise
+        await _rollback_after_fixed_income_fallback(session)
+        return False
+    missing = [
+        product for product in FIXED_INCOME_PRODUCTS if product.ticker not in existing
+    ]
+    if not missing:
+        return True
+    try:
+        for product in missing:
+            session.add(_record_from_product(product))
+        await session.flush()
+        rows = list(
+            await session.scalars(
+                select(InvestFixedIncomeProductRecord).where(
+                    InvestFixedIncomeProductRecord.ticker.in_(
+                        [product.ticker for product in missing]
+                    )
+                )
             )
         )
-    }
-    missing = [product for product in FIXED_INCOME_PRODUCTS if product.ticker not in existing]
-    if not missing:
-        return
-    for product in missing:
-        session.add(_record_from_product(product))
-    await session.flush()
-    await refresh_fixed_income_quotes(session, missing)
+        if not await _fixed_income_table_exists(session, "invest_fixed_income_quotes"):
+            return True
+        await refresh_fixed_income_quotes(
+            session, [_product_from_record(record) for record in rows]
+        )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_fixed_income_table(exc):
+            raise
+        await _rollback_after_fixed_income_fallback(session)
+        return False
+    return True
 
 
 async def refresh_fixed_income_quotes(
@@ -251,20 +306,41 @@ async def refresh_fixed_income_quotes(
     products: list[FixedIncomeProduct] | None = None,
 ) -> list[FixedIncomeQuote]:
     if products is None:
-        records = list(
-            await session.scalars(
-                select(InvestFixedIncomeProductRecord).where(
-                    InvestFixedIncomeProductRecord.is_active.is_(True)
+        if not await _fixed_income_table_exists(
+            session, "invest_fixed_income_products"
+        ):
+            products = list(FIXED_INCOME_PRODUCTS)
+        else:
+            try:
+                records = list(
+                    await session.scalars(
+                        select(InvestFixedIncomeProductRecord).where(
+                            InvestFixedIncomeProductRecord.is_active.is_(True)
+                        )
+                    )
                 )
-            )
-        )
-        products = [_product_from_record(record) for record in records]
+                products = [_product_from_record(record) for record in records]
+            except (OperationalError, ProgrammingError) as exc:
+                if not _is_missing_fixed_income_table(exc):
+                    raise
+                await _rollback_after_fixed_income_fallback(session)
+                products = list(FIXED_INCOME_PRODUCTS)
+    elif not await _fixed_income_table_exists(session, "invest_fixed_income_quotes"):
+        return [fixed_income_quote(product) for product in products]
 
     quotes: list[FixedIncomeQuote] = []
     for product in products:
         quote = await latest_fixed_income_quote(session, product, refresh_if_stale=True)
         quotes.append(quote)
-    await _ensure_model_yield_curves(session, products)
+    if await _fixed_income_table_exists(
+        session, "invest_yield_curves"
+    ) and await _fixed_income_table_exists(session, "invest_yield_curve_points"):
+        try:
+            await _ensure_model_yield_curves(session, products)
+        except (OperationalError, ProgrammingError) as exc:
+            if not _is_missing_fixed_income_table(exc):
+                raise
+            await _rollback_after_fixed_income_fallback(session)
     return quotes
 
 
@@ -276,13 +352,21 @@ async def latest_fixed_income_quote(
 ) -> FixedIncomeQuote:
     if product.db_id is None:
         return fixed_income_quote(product)
+    if not await _fixed_income_table_exists(session, "invest_fixed_income_quotes"):
+        return fixed_income_quote(product)
 
-    record = await session.scalar(
-        select(InvestFixedIncomeQuoteRecord)
-        .where(InvestFixedIncomeQuoteRecord.product_id == product.db_id)
-        .order_by(InvestFixedIncomeQuoteRecord.source_as_of.desc())
-        .limit(1)
-    )
+    try:
+        record = await session.scalar(
+            select(InvestFixedIncomeQuoteRecord)
+            .where(InvestFixedIncomeQuoteRecord.product_id == product.db_id)
+            .order_by(InvestFixedIncomeQuoteRecord.source_as_of.desc())
+            .limit(1)
+        )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_fixed_income_table(exc):
+            raise
+        await _rollback_after_fixed_income_fallback(session)
+        return fixed_income_quote(product)
     now = datetime.now(timezone.utc)
     if record is not None:
         stale_after = _aware_datetime(record.stale_after)
@@ -290,8 +374,13 @@ async def latest_fixed_income_quote(
         return _quote_from_record(product, record, now=now)
 
     quote = fixed_income_quote(product, as_of=now)
-    session.add(_quote_record_from_quote(product, quote))
-    await session.flush()
+    try:
+        session.add(_quote_record_from_quote(product, quote))
+        await session.flush()
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_fixed_income_table(exc):
+            raise
+        await _rollback_after_fixed_income_fallback(session)
     return quote
 
 
@@ -506,9 +595,11 @@ def _product_from_record(
         issuer=record.issuer,
         instrument_type=record.instrument_type,
         tenor=record.tenor,
-        maturity_date=record.maturity_date.isoformat()
-        if record.maturity_date is not None
-        else None,
+        maturity_date=(
+            record.maturity_date.isoformat()
+            if record.maturity_date is not None
+            else None
+        ),
         maturity_days=record.maturity_days,
         indicative_yield_pct=record.indicative_yield_pct,
         coupon_rate_pct=record.coupon_rate_pct,
@@ -576,10 +667,13 @@ def _quote_from_record(
         accrued_interest_per_100=record.accrued_interest or Decimal("0"),
         dirty_price_per_100=record.dirty_price or Decimal("0"),
         yield_to_maturity_pct=record.yield_to_maturity_pct,
-        next_coupon_date=_date_text(record.next_coupon_date)
-        if record.next_coupon_date is not None
-        else None,
-        face_value_increment=record.face_value_increment or product.face_value_increment,
+        next_coupon_date=(
+            _date_text(record.next_coupon_date)
+            if record.next_coupon_date is not None
+            else None
+        ),
+        face_value_increment=record.face_value_increment
+        or product.face_value_increment,
         quote_status="stale_model" if stale else record.quote_status,
         quote_source=record.source,
         quote_stale=stale,
@@ -732,7 +826,10 @@ def _project_cashflows(
     settlement: date,
     maturity: date,
 ) -> list[FixedIncomeCashflow]:
-    if product.instrument_type == "treasury_bill" or product.coupon_frequency_per_year <= 0:
+    if (
+        product.instrument_type == "treasury_bill"
+        or product.coupon_frequency_per_year <= 0
+    ):
         return [
             FixedIncomeCashflow(
                 payment_date=maturity.isoformat(),
@@ -743,9 +840,10 @@ def _project_cashflows(
         ]
 
     period_days = max(round(365 / product.coupon_frequency_per_year), 1)
-    coupon = ((product.coupon_rate_pct or Decimal("0")) / Decimal(product.coupon_frequency_per_year)).quantize(
-        MONEY, rounding=ROUND_HALF_UP
-    )
+    coupon = (
+        (product.coupon_rate_pct or Decimal("0"))
+        / Decimal(product.coupon_frequency_per_year)
+    ).quantize(MONEY, rounding=ROUND_HALF_UP)
     dates: list[date] = []
     payment_date = maturity
     while payment_date > settlement:
@@ -794,7 +892,7 @@ def _coupon_bond_dirty_price(
     periodic_yield = Decimal("1") + (annual_yield / Decimal(frequency))
     price = Decimal("0")
     for index, flow in enumerate(cashflows, start=1):
-        price += flow.amount_per_100 / (periodic_yield ** index)
+        price += flow.amount_per_100 / (periodic_yield**index)
     return price
 
 
@@ -806,7 +904,7 @@ def _accrued_interest(
     if not product.coupon_rate_pct or product.coupon_frequency_per_year <= 0:
         return Decimal("0")
     period_days = max(round(365 / product.coupon_frequency_per_year), 1)
-    coupon = (product.coupon_rate_pct / Decimal(product.coupon_frequency_per_year))
+    coupon = product.coupon_rate_pct / Decimal(product.coupon_frequency_per_year)
     next_coupon = maturity
     while next_coupon - timedelta(days=period_days) > settlement:
         next_coupon -= timedelta(days=period_days)
@@ -822,3 +920,34 @@ def _price(value: Decimal) -> Decimal:
 
 def _percent(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _is_missing_fixed_income_table(exc: Exception) -> bool:
+    message = str(exc).lower()
+    table_names = (
+        "invest_fixed_income_products",
+        "invest_fixed_income_quotes",
+        "invest_yield_curves",
+        "invest_yield_curve_points",
+    )
+    return any(table_name in message for table_name in table_names) and (
+        "does not exist" in message
+        or "undefinedtable" in message
+        or "no such table" in message
+    )
+
+
+async def _rollback_after_fixed_income_fallback(session: AsyncSession) -> None:
+    try:
+        await session.rollback()
+    except Exception:
+        logger.exception("fixed_income_fallback_rollback_failed")
+
+
+async def _fixed_income_table_exists(session: AsyncSession, table_name: str) -> bool:
+    connection = await session.connection()
+    return await connection.run_sync(
+        lambda sync_connection: sqlalchemy_inspect(sync_connection).has_table(
+            table_name
+        )
+    )

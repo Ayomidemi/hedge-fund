@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import InvestSetting
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_INVEST_SETTINGS: dict[str, Any] = {
     "home_quick_actions": [
@@ -180,40 +187,93 @@ DEFAULT_INVEST_SETTINGS: dict[str, Any] = {
 }
 
 
+@dataclass(frozen=True)
+class InvestRiskPolicy:
+    supported_asset_classes: frozenset[str]
+    allowed_sides: frozenset[str]
+    allowed_order_types: frozenset[str]
+    buying_power_concentration_warn_pct: Decimal
+    fixed_income_fx_warning_enabled: bool
+
+
+@dataclass(frozen=True)
+class PaperBrokerPolicy:
+    allowed_order_types: frozenset[str]
+    allowed_sides: frozenset[str]
+    concentration_warn_pct: Decimal
+    instant_fills: bool
+    quantity_precision: Decimal
+    price_precision: Decimal
+    money_precision: Decimal
+
+
 def default_invest_setting(key: str) -> Any:
     return deepcopy(DEFAULT_INVEST_SETTINGS.get(key))
 
 
 async def ensure_invest_settings(
     session: AsyncSession, keys: list[str] | None = None
-) -> None:
-    wanted = keys or list(DEFAULT_INVEST_SETTINGS)
-    existing = set(
-        await session.scalars(
-            select(InvestSetting.key).where(InvestSetting.key.in_(wanted))
-        )
-    )
-    for key in wanted:
-        if key in existing:
-            continue
-        session.add(
-            InvestSetting(
-                key=key,
-                payload=default_invest_setting(key),
-                is_active=True,
+) -> bool:
+    wanted = [
+        key
+        for key in (keys or list(DEFAULT_INVEST_SETTINGS))
+        if key in DEFAULT_INVEST_SETTINGS
+    ]
+    if not wanted:
+        return True
+    if not await _invest_settings_table_exists(session):
+        return False
+    try:
+        existing = set(
+            await session.scalars(
+                select(InvestSetting.key).where(InvestSetting.key.in_(wanted))
             )
         )
-    await session.flush()
+        for key in wanted:
+            if key in existing:
+                continue
+            session.add(
+                InvestSetting(
+                    key=key,
+                    payload=default_invest_setting(key),
+                    is_active=True,
+                )
+            )
+        await session.flush()
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_invest_settings_table(exc):
+            raise
+        await _rollback_after_settings_fallback(session)
+        logger.warning(
+            "invest_settings_table_missing",
+            extra={"keys": wanted, "error": str(exc)},
+        )
+        return False
+    return True
 
 
 async def get_invest_setting(session: AsyncSession, key: str) -> Any:
     fallback = default_invest_setting(key)
-    await ensure_invest_settings(session, [key])
-    record = await session.scalar(
-        select(InvestSetting)
-        .where(InvestSetting.key == key)
-        .where(InvestSetting.is_active.is_(True))
-    )
+    if fallback is None:
+        return None
+    settings_available = await ensure_invest_settings(session, [key])
+    if not settings_available:
+        return fallback
+    try:
+        record = await session.scalar(
+            select(InvestSetting)
+            .where(InvestSetting.key == key)
+            .where(InvestSetting.is_active.is_(True))
+        )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_invest_settings_table(exc):
+            raise
+        await _rollback_after_settings_fallback(session)
+        logger.warning(
+            "invest_setting_fell_back_to_default",
+            extra={"key": key, "error": str(exc)},
+        )
+        return fallback
     if record is None:
         return fallback
     return _merge_default(fallback, record.payload)
@@ -221,31 +281,75 @@ async def get_invest_setting(session: AsyncSession, key: str) -> Any:
 
 async def get_home_quick_actions(session: AsyncSession) -> list[dict[str, str]]:
     payload = await get_invest_setting(session, "home_quick_actions")
-    return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, list):
+        payload = default_invest_setting("home_quick_actions")
+    actions: list[dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        href = str(item.get("href") or "")
+        if href.rstrip("/") == "/invest/orders":
+            item = {**item, "href": "/invest/portfolio"}
+        actions.append(item)
+    return actions
 
 
 async def get_search_defaults(session: AsyncSession) -> dict[str, Any]:
-    return await get_invest_setting(session, "search_defaults")
+    payload = await get_invest_setting(session, "search_defaults")
+    return (
+        payload
+        if isinstance(payload, dict)
+        else default_invest_setting("search_defaults")
+    )
 
 
 async def get_risk_policy(session: AsyncSession) -> dict[str, Any]:
-    return await get_invest_setting(session, "risk_policy")
+    payload = await get_invest_setting(session, "risk_policy")
+    return (
+        payload if isinstance(payload, dict) else default_invest_setting("risk_policy")
+    )
+
+
+async def get_typed_risk_policy(session: AsyncSession) -> InvestRiskPolicy:
+    return parse_risk_policy(await get_risk_policy(session))
 
 
 async def get_paper_broker_policy(session: AsyncSession) -> dict[str, Any]:
-    return await get_invest_setting(session, "paper_broker_policy")
+    payload = await get_invest_setting(session, "paper_broker_policy")
+    return (
+        payload
+        if isinstance(payload, dict)
+        else default_invest_setting("paper_broker_policy")
+    )
+
+
+async def get_typed_paper_broker_policy(session: AsyncSession) -> PaperBrokerPolicy:
+    return parse_paper_broker_policy(await get_paper_broker_policy(session))
 
 
 async def get_news_policy(session: AsyncSession) -> dict[str, Any]:
-    return await get_invest_setting(session, "news_policy")
+    payload = await get_invest_setting(session, "news_policy")
+    return (
+        payload if isinstance(payload, dict) else default_invest_setting("news_policy")
+    )
 
 
 async def get_discover_policy(session: AsyncSession) -> dict[str, Any]:
-    return await get_invest_setting(session, "discover_policy")
+    payload = await get_invest_setting(session, "discover_policy")
+    return (
+        payload
+        if isinstance(payload, dict)
+        else default_invest_setting("discover_policy")
+    )
 
 
 async def get_profile_policy(session: AsyncSession) -> dict[str, Any]:
-    return await get_invest_setting(session, "profile_policy")
+    payload = await get_invest_setting(session, "profile_policy")
+    return (
+        payload
+        if isinstance(payload, dict)
+        else default_invest_setting("profile_policy")
+    )
 
 
 async def get_invest_ui_config(session: AsyncSession) -> dict[str, Any]:
@@ -254,12 +358,97 @@ async def get_invest_ui_config(session: AsyncSession) -> dict[str, Any]:
     return {
         "search": search,
         "news": {
-            "headlines_page_size": int(news.get("headlines_page_size", 10)),
-            "section_page_size": int(news.get("section_page_size", 8)),
-            "ticker_page_size": int(news.get("ticker_page_size", 8)),
-            "refresh_ms": int(news.get("refresh_ms", 60000)),
+            "headlines_page_size": _int_setting(
+                news, "headlines_page_size", 10, minimum=1, maximum=50
+            ),
+            "section_page_size": _int_setting(
+                news, "section_page_size", 8, minimum=1, maximum=50
+            ),
+            "ticker_page_size": _int_setting(
+                news, "ticker_page_size", 8, minimum=1, maximum=50
+            ),
+            "refresh_ms": _int_setting(
+                news, "refresh_ms", 60000, minimum=5000, maximum=300000
+            ),
         },
     }
+
+
+def parse_risk_policy(payload: dict[str, Any] | None = None) -> InvestRiskPolicy:
+    source = _merged_payload("risk_policy", payload)
+    fallback = DEFAULT_INVEST_SETTINGS["risk_policy"]
+    return InvestRiskPolicy(
+        supported_asset_classes=_string_set(
+            source.get("supported_asset_classes"),
+            fallback["supported_asset_classes"],
+            case="lower",
+        ),
+        allowed_sides=_string_set(
+            source.get("allowed_sides"),
+            fallback["allowed_sides"],
+            case="upper",
+        ),
+        allowed_order_types=_string_set(
+            source.get("allowed_order_types"),
+            fallback["allowed_order_types"],
+            case="lower",
+        ),
+        buying_power_concentration_warn_pct=_decimal_setting(
+            source,
+            "buying_power_concentration_warn_pct",
+            Decimal("0.50"),
+            minimum=Decimal("0"),
+            maximum=Decimal("1"),
+        ),
+        fixed_income_fx_warning_enabled=_bool_setting(
+            source.get("fixed_income_fx_warning_enabled"), True
+        ),
+    )
+
+
+def parse_paper_broker_policy(
+    payload: dict[str, Any] | None = None,
+) -> PaperBrokerPolicy:
+    source = _merged_payload("paper_broker_policy", payload)
+    fallback = DEFAULT_INVEST_SETTINGS["paper_broker_policy"]
+    return PaperBrokerPolicy(
+        allowed_order_types=_string_set(
+            source.get("allowed_order_types"),
+            fallback["allowed_order_types"],
+            case="lower",
+        ),
+        allowed_sides=_string_set(
+            source.get("allowed_sides"),
+            fallback["allowed_sides"],
+            case="upper",
+        ),
+        concentration_warn_pct=_decimal_setting(
+            source,
+            "concentration_warn_pct",
+            Decimal("0.25"),
+            minimum=Decimal("0"),
+            maximum=Decimal("1"),
+        ),
+        instant_fills=_bool_setting(source.get("instant_fills"), True),
+        quantity_precision=_decimal_setting(
+            source,
+            "quantity_precision",
+            Decimal("0.00000001"),
+            minimum=Decimal("0.00000001"),
+        ),
+        price_precision=_decimal_setting(
+            source,
+            "price_precision",
+            Decimal("0.000001"),
+            minimum=Decimal("0.000001"),
+        ),
+        money_precision=_decimal_setting(
+            source,
+            "money_precision",
+            Decimal("0.01"),
+            minimum=Decimal("0.01"),
+        ),
+    )
 
 
 def _merge_default(fallback: Any, override: Any) -> Any:
@@ -271,3 +460,108 @@ def _merge_default(fallback: Any, override: Any) -> Any:
     if override is None:
         return deepcopy(fallback)
     return deepcopy(override)
+
+
+def _merged_payload(key: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+    fallback = default_invest_setting(key)
+    if not isinstance(fallback, dict):
+        return {}
+    if not isinstance(payload, dict):
+        return fallback
+    merged = _merge_default(fallback, payload)
+    return merged if isinstance(merged, dict) else fallback
+
+
+def _string_set(value: Any, fallback: list[str], *, case: str) -> frozenset[str]:
+    source = value if isinstance(value, (list, tuple, set)) else fallback
+    normalized: list[str] = []
+    for item in source:
+        text = str(item).strip()
+        if not text:
+            continue
+        normalized.append(text.upper() if case == "upper" else text.lower())
+    if not normalized:
+        return _string_set(fallback, fallback, case=case)
+    return frozenset(normalized)
+
+
+def _decimal_setting(
+    payload: dict[str, Any],
+    key: str,
+    fallback: Decimal,
+    *,
+    minimum: Decimal | None = None,
+    maximum: Decimal | None = None,
+) -> Decimal:
+    value = _decimal(payload.get(key), fallback)
+    if minimum is not None and value < minimum:
+        return fallback
+    if maximum is not None and value > maximum:
+        return fallback
+    return value
+
+
+def _decimal(value: Any, fallback: Decimal) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return fallback
+    if not parsed.is_finite():
+        return fallback
+    return parsed
+
+
+def _int_setting(
+    payload: dict[str, Any],
+    key: str,
+    fallback: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    try:
+        value = int(payload.get(key, fallback))
+    except (TypeError, ValueError):
+        return fallback
+    if minimum is not None and value < minimum:
+        return fallback
+    if maximum is not None and value > maximum:
+        return fallback
+    return value
+
+
+def _bool_setting(value: Any, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return fallback
+
+
+def _is_missing_invest_settings_table(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "invest_settings" in message and (
+        "does not exist" in message
+        or "undefinedtable" in message
+        or "no such table" in message
+    )
+
+
+async def _rollback_after_settings_fallback(session: AsyncSession) -> None:
+    try:
+        await session.rollback()
+    except Exception:
+        logger.exception("invest_settings_fallback_rollback_failed")
+
+
+async def _invest_settings_table_exists(session: AsyncSession) -> bool:
+    connection = await session.connection()
+    return await connection.run_sync(
+        lambda sync_connection: sqlalchemy_inspect(sync_connection).has_table(
+            "invest_settings"
+        )
+    )

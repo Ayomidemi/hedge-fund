@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.market_constants import (
@@ -56,13 +57,20 @@ async def build_price_universe(session: AsyncSession) -> dict[str, list[uuid.UUI
     instrument_ids.update(
         await session.scalars(select(RetailWatchlistItem.instrument_id).distinct())
     )
-    board_tickers = list(
-        await session.scalars(
-            select(InvestMarketBoardItem.ticker).where(
-                InvestMarketBoardItem.is_active.is_(True)
+    try:
+        board_tickers = list(
+            await session.scalars(
+                select(InvestMarketBoardItem.ticker).where(
+                    InvestMarketBoardItem.is_active.is_(True)
+                )
             )
         )
-    )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_market_board_table(exc):
+            raise
+        await _rollback_after_invest_board_fallback(session)
+        logger.warning("price_universe_skipped_missing_invest_market_board")
+        board_tickers = []
     if board_tickers:
         instrument_ids.update(
             await session.scalars(
@@ -119,3 +127,19 @@ def quote_symbol_for(instrument: Instrument) -> str:
     if (instrument.exchange or "").strip().upper() in _NG_EXCHANGES:
         return f"{ticker}.NG"
     return ticker
+
+
+def _is_missing_market_board_table(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "invest_market_board_items" in message and (
+        "does not exist" in message
+        or "undefinedtable" in message
+        or "no such table" in message
+    )
+
+
+async def _rollback_after_invest_board_fallback(session: AsyncSession) -> None:
+    try:
+        await session.rollback()
+    except Exception:
+        logger.exception("price_universe_invest_board_rollback_failed")

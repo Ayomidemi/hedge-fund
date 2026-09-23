@@ -5,13 +5,16 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from app.api.schemas.invest import InvestOrderCreate
 from app.models import Instrument, RetailAccount
-from app.services.invest.configuration import default_invest_setting
-from app.services.invest.fixed_income import FixedIncomeProduct, get_fixed_income_product
+from app.services.invest.configuration import InvestRiskPolicy, parse_risk_policy
+from app.services.invest.fixed_income import (
+    FixedIncomeProduct,
+    get_fixed_income_product,
+)
 from app.services.market_data.sessions import jurisdiction_for_ticker, session_for
 
 MONEY = Decimal("0.01")
-_DEFAULT_RISK_POLICY = default_invest_setting("risk_policy")
-SUPPORTED_ASSET_CLASSES = set(_DEFAULT_RISK_POLICY["supported_asset_classes"])
+_DEFAULT_RISK_POLICY = parse_risk_policy()
+SUPPORTED_ASSET_CLASSES = set(_DEFAULT_RISK_POLICY.supported_asset_classes)
 
 
 @dataclass(frozen=True)
@@ -45,11 +48,13 @@ def evaluate_order_risk(
     instrument: Instrument,
     payload: InvestOrderCreate,
     fixed_income_product: FixedIncomeProduct | None = None,
-    policy: dict | None = None,
+    policy: dict | InvestRiskPolicy | None = None,
     cash_notional: Decimal | None = None,
 ) -> RetailRiskAssessment:
     checks: list[RetailRiskCheck] = []
-    risk_policy = _risk_policy(policy)
+    risk_policy = (
+        policy if isinstance(policy, InvestRiskPolicy) else parse_risk_policy(policy)
+    )
     asset_class = instrument.asset_class.strip().lower()
     side = payload.side.strip().upper()
     order_type = payload.order_type.strip().lower()
@@ -58,7 +63,7 @@ def evaluate_order_risk(
     checks.append(
         _check(
             "product_eligibility",
-            asset_class in risk_policy["supported_asset_classes"],
+            asset_class in risk_policy.supported_asset_classes,
             f"{instrument.asset_class} is eligible for Pease Invest paper trading.",
             f"{instrument.asset_class} is not currently eligible for Pease Invest.",
         )
@@ -66,7 +71,7 @@ def evaluate_order_risk(
     checks.append(
         _check(
             "order_type",
-            order_type in risk_policy["allowed_order_types"],
+            order_type in risk_policy.allowed_order_types,
             "Market order accepted for the current paper provider.",
             "Pease Invest paper V1 only accepts market orders.",
         )
@@ -74,7 +79,7 @@ def evaluate_order_risk(
     checks.append(
         _check(
             "side",
-            side in risk_policy["allowed_sides"],
+            side in risk_policy.allowed_sides,
             "Order side accepted.",
             "Order side must be BUY or SELL.",
         )
@@ -93,7 +98,7 @@ def evaluate_order_risk(
         if (
             account.cash_balance > 0
             and buy_cash / account.cash_balance
-            >= risk_policy["buying_power_concentration_warn_pct"]
+            >= risk_policy.buying_power_concentration_warn_pct
         ):
             checks.append(
                 RetailRiskCheck(
@@ -153,7 +158,7 @@ def evaluate_order_risk(
             )
         )
         if (
-            risk_policy["fixed_income_fx_warning_enabled"]
+            risk_policy.fixed_income_fx_warning_enabled
             and product.currency != account.base_currency
         ):
             checks.append(
@@ -171,31 +176,9 @@ def evaluate_order_risk(
     return RetailRiskAssessment(tuple(checks))
 
 
-def _risk_policy(policy: dict | None) -> dict:
-    source = policy or _DEFAULT_RISK_POLICY
-    return {
-        "supported_asset_classes": {
-            str(item).strip().lower()
-            for item in source.get("supported_asset_classes", SUPPORTED_ASSET_CLASSES)
-        },
-        "allowed_sides": {
-            str(item).strip().upper()
-            for item in source.get("allowed_sides", ["BUY", "SELL"])
-        },
-        "allowed_order_types": {
-            str(item).strip().lower()
-            for item in source.get("allowed_order_types", ["market"])
-        },
-        "buying_power_concentration_warn_pct": Decimal(
-            str(source.get("buying_power_concentration_warn_pct", "0.50"))
-        ),
-        "fixed_income_fx_warning_enabled": bool(
-            source.get("fixed_income_fx_warning_enabled", True)
-        ),
-    }
-
-
-def _check(code: str, passed: bool, pass_message: str, fail_message: str) -> RetailRiskCheck:
+def _check(
+    code: str, passed: bool, pass_message: str, fail_message: str
+) -> RetailRiskCheck:
     return RetailRiskCheck(
         code=code,
         level="info" if passed else "blocker",

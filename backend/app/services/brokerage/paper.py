@@ -8,7 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Instrument, RetailAccount, RetailOrder, RetailPosition, RetailTransaction
+from app.models import (
+    Instrument,
+    RetailAccount,
+    RetailOrder,
+    RetailPosition,
+    RetailTransaction,
+)
 from app.services.brokerage.protocol import (
     BrokerAccount,
     BrokerBalances,
@@ -26,12 +32,14 @@ from app.services.invest.fixed_income import (
     fixed_income_products_by_tickers_db,
     get_fixed_income_product_db,
 )
-from app.services.invest.configuration import get_paper_broker_policy
+from app.services.invest.configuration import get_typed_paper_broker_policy
 from app.services.market_data.fx_convert import amount_in_base, convert_amount_to_base
 from app.services.market_data.fx_refresh import load_fx_rates
-from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
+from app.services.market_data.quote_cache import (
+    get_cached_quote_price,
+    get_or_fetch_quote_price,
+)
 
-CONCENTRATION_WARN_PCT = Decimal("0.25")
 QTY = Decimal("0.00000001")
 MONEY = Decimal("0.01")
 PRICE = Decimal("0.000001")
@@ -43,7 +51,9 @@ class PaperBrokerProvider:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def create_account(self, *, user_id: str, currency: str = "USD") -> BrokerAccount:
+    async def create_account(
+        self, *, user_id: str, currency: str = "USD"
+    ) -> BrokerAccount:
         raise BrokerError("Paper accounts are created by the Invest account service.")
 
     async def get_account(self, broker_account_id: str) -> BrokerAccount:
@@ -82,7 +92,9 @@ class PaperBrokerProvider:
                 mark, native_currency, account.base_currency, fx_rates
             )
             price = cash_mark if cash_mark is not None else mark
-            market_value = (row.quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
+            market_value = (row.quantity * price).quantize(
+                MONEY, rounding=ROUND_HALF_UP
+            )
             unrealized = (market_value - row.cost_basis).quantize(
                 MONEY, rounding=ROUND_HALF_UP
             )
@@ -107,23 +119,12 @@ class PaperBrokerProvider:
         self, broker_account_id: str, request: SubmitOrderRequest
     ) -> BrokerOrder:
         account = await self._load_account(broker_account_id)
-        policy = await get_paper_broker_policy(self.session)
+        policy = await get_typed_paper_broker_policy(self.session)
         side = request.side.strip().upper()
         order_type = request.order_type.strip().lower()
-        allowed_sides = {
-            str(item).strip().upper()
-            for item in policy.get("allowed_sides", ["BUY", "SELL"])
-        }
-        allowed_order_types = {
-            str(item).strip().lower()
-            for item in policy.get("allowed_order_types", ["market"])
-        }
-        concentration_warn_pct = Decimal(
-            str(policy.get("concentration_warn_pct", CONCENTRATION_WARN_PCT))
-        )
-        if side not in allowed_sides:
+        if side not in policy.allowed_sides:
             raise BrokerValidationError("Order side must be BUY or SELL.")
-        if order_type not in allowed_order_types:
+        if order_type not in policy.allowed_order_types:
             raise BrokerValidationError("Paper V1 only accepts market orders.")
 
         instrument = await self._load_instrument(request.symbol)
@@ -170,7 +171,8 @@ class PaperBrokerProvider:
             equity = await self._equity(account)
             if (
                 equity > 0
-                and (cash_notional / (equity + cash_notional)) >= concentration_warn_pct
+                and (cash_notional / (equity + cash_notional))
+                >= policy.concentration_warn_pct
             ):
                 warnings.append(
                     f"This purchase would be a large share of your portfolio "
@@ -219,7 +221,9 @@ class PaperBrokerProvider:
             status="FILLED",
             submitted_at=now,
             filled_at=now,
-            average_fill_price=mark.quantize(PRICE, rounding=ROUND_HALF_UP),
+            average_fill_price=mark.quantize(
+                policy.price_precision, rounding=ROUND_HALF_UP
+            ),
             filled_quantity=quantity,
             broker_provider=self.provider_code,
             broker_order_id=broker_order_id,
@@ -229,7 +233,9 @@ class PaperBrokerProvider:
         await self.session.flush()
         return _order_snapshot(order, instrument.ticker)
 
-    async def cancel_order(self, broker_account_id: str, broker_order_id: str) -> BrokerOrder:
+    async def cancel_order(
+        self, broker_account_id: str, broker_order_id: str
+    ) -> BrokerOrder:
         account = await self._load_account(broker_account_id)
         order = await self.session.scalar(
             select(RetailOrder)
@@ -280,7 +286,9 @@ class PaperBrokerProvider:
             for row in rows
         ]
 
-    async def deposit(self, broker_account_id: str, request: CashRequest) -> BrokerBalances:
+    async def deposit(
+        self, broker_account_id: str, request: CashRequest
+    ) -> BrokerBalances:
         account = await self._load_account(broker_account_id)
         amount = _positive_money(request.amount)
         account.cash_balance = (account.cash_balance + amount).quantize(MONEY)
@@ -298,7 +306,9 @@ class PaperBrokerProvider:
         await self.session.flush()
         return _balances(account)
 
-    async def withdraw(self, broker_account_id: str, request: CashRequest) -> BrokerBalances:
+    async def withdraw(
+        self, broker_account_id: str, request: CashRequest
+    ) -> BrokerBalances:
         account = await self._load_account(broker_account_id)
         amount = _positive_money(request.amount)
         if amount > account.cash_balance:
@@ -318,7 +328,9 @@ class PaperBrokerProvider:
         await self.session.flush()
         return _balances(account)
 
-    async def reset_account(self, broker_account_id: str, starting_cash: Decimal) -> BrokerAccount:
+    async def reset_account(
+        self, broker_account_id: str, starting_cash: Decimal
+    ) -> BrokerAccount:
         account = await self._load_account(broker_account_id)
         starting_cash = starting_cash.quantize(MONEY)
         adjustment = (starting_cash - account.cash_balance).quantize(MONEY)
@@ -452,7 +464,9 @@ class PaperBrokerProvider:
         )
         realized = (proceeds - sold_cost).quantize(MONEY, rounding=ROUND_HALF_UP)
         position.quantity = (position.quantity - quantity).quantize(QTY)
-        position.cost_basis = (position.average_cost * position.quantity).quantize(MONEY)
+        position.cost_basis = (position.average_cost * position.quantity).quantize(
+            MONEY
+        )
         position.realized_pnl = (position.realized_pnl + realized).quantize(MONEY)
         account.cash_balance = (account.cash_balance + proceeds).quantize(MONEY)
         if position.quantity <= 0:
@@ -593,7 +607,9 @@ def _order_snapshot(order: RetailOrder, symbol: str) -> BrokerOrder:
     )
 
 
-def _transaction_description(action: str, quantity: Decimal, instrument: Instrument) -> str:
+def _transaction_description(
+    action: str, quantity: Decimal, instrument: Instrument
+) -> str:
     if _looks_like_fixed_income(instrument):
         return f"{action} {quantity} face value of {instrument.ticker}."
     return f"{action} {quantity} {instrument.ticker}."

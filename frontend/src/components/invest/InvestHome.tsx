@@ -55,9 +55,9 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
             <Link href="/invest/markets" className={buttonPrimaryClassName}>
               Explore fixed income
             </Link>
-            <Link href="/invest/markets" className={buttonSecondaryClassName}>
+            {/* <Link href="/invest/markets" className={buttonSecondaryClassName}>
               Search
-            </Link>
+            </Link> */}
           </div>
         </div>
 

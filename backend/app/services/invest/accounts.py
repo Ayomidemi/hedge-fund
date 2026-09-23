@@ -65,7 +65,7 @@ from app.services.invest.configuration import (
     default_invest_setting,
     get_home_quick_actions,
     get_profile_policy,
-    get_risk_policy,
+    get_typed_risk_policy,
 )
 from app.services.invest.risk import evaluate_order_risk
 from app.services.market_data.fx_convert import amount_in_base, convert_amount_to_base
@@ -292,7 +292,7 @@ async def submit_order(
     fixed_income_product = await get_fixed_income_product_db(session, instrument.ticker)
     if fixed_income_product is not None:
         instrument = await ensure_fixed_income_instrument(session, fixed_income_product)
-    risk_policy = await get_risk_policy(session)
+    risk_policy = await get_typed_risk_policy(session)
     cash_notional = await _cash_notional_for_order(
         session, account, instrument, fixed_income_product, payload.amount
     )
