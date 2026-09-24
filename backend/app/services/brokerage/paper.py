@@ -161,7 +161,7 @@ class PaperBrokerProvider:
                     face_increment,
                 )
                 warnings.append(
-                    "Fixed-income paper fill uses modeled dirty price; quantity is face value."
+                    "Fixed-income paper fill uses stored dirty price; quantity is face value."
                 )
             else:
                 quantity, notional = _buy_size(request, mark)
@@ -197,7 +197,7 @@ class PaperBrokerProvider:
             )
             if fixed_income_product is not None:
                 warnings.append(
-                    "Fixed-income paper fill uses modeled dirty price; quantity is face value."
+                    "Fixed-income paper fill uses stored dirty price; quantity is face value."
                 )
             cash_notional = await self._cash_amount(account, instrument, notional)
             native_ccy = (instrument.currency or account.base_currency).upper()

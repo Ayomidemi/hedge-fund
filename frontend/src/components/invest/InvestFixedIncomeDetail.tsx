@@ -121,15 +121,19 @@ export function InvestFixedIncomeDetail({
             label="Face increment"
             value={money(product.face_value_increment, product.currency)}
           />
-          <Detail label="Quote source" value={product.quote_source ?? "Pending"} />
+          <Detail
+            label="Quote quality"
+            value={product.quote_quality_label ?? "Pending"}
+          />
+          <Detail label="Provider" value={quoteProviderLabel(product)} />
           <Detail label="Quote time" value={quoteTimeLabel(product.quote_as_of)} />
           <Detail
+            label="Fresh until"
+            value={quoteTimeLabel(product.quote_stale_after)}
+          />
+          <Detail
             label="Quote status"
-            value={
-              product.quote_stale
-                ? "Stale"
-                : product.quote_status?.replaceAll("_", " ") ?? "Indicative"
-            }
+            value={quoteStatusLabel(product)}
           />
         </div>
       </section>
@@ -138,7 +142,7 @@ export function InvestFixedIncomeDetail({
         <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
           <h3 className="text-lg font-semibold">Projected cashflows</h3>
           <p className="mt-2 text-sm text-zinc-500">
-            Amounts are shown per 100 face value using the current indicative model.
+            Amounts are shown per 100 face value using the current quote assumptions.
           </p>
           <ul className="mt-4 divide-y divide-zinc-100 dark:divide-zinc-900">
             {product.cashflows.map((flow) => (
@@ -166,7 +170,10 @@ export function InvestFixedIncomeDetail({
         >
           <h3 className="text-lg font-semibold">Paper fixed-income order</h3>
           <p className="mt-2 text-sm text-zinc-500">
-            Orders use modeled dirty price and settle into face value units.
+            Orders use the displayed dirty price and settle into face value units.
+            {product.quote_quality === "seed_model"
+              ? " This mark is a model fallback."
+              : ""}
             {product.currency !== "USD"
               ? " Paper cash is USD; this amount converts at the stored FX rate."
               : ""}
@@ -317,4 +324,14 @@ function quoteTimeLabel(value: string | null) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function quoteProviderLabel(product: InvestFixedIncomeProduct) {
+  return product.quote_provider_label ?? product.quote_source ?? "Pending";
+}
+
+function quoteStatusLabel(product: InvestFixedIncomeProduct) {
+  if (product.quote_stale) return "Stale";
+  if (product.quote_is_live) return "Live";
+  return product.quote_status?.replaceAll("_", " ") ?? "Indicative";
 }

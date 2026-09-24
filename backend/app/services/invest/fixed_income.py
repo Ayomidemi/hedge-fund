@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
@@ -27,6 +27,15 @@ from app.models import (
     InvestYieldCurve,
     InvestYieldCurvePoint,
 )
+from app.services.invest.fixed_income_providers import (
+    IMPLEMENTED_MODEL_PROVIDER,
+    QUOTE_QUALITY_SEED_MODEL,
+    fixed_income_provider_plan,
+    provider_label,
+    quote_quality_is_live,
+    quote_quality_label,
+    stale_after_for_quality,
+)
 from app.services.portfolio.operating_core import upsert_instrument
 
 logger = logging.getLogger(__name__)
@@ -34,7 +43,7 @@ logger = logging.getLogger(__name__)
 PRICE = Decimal("0.0001")
 MONEY = Decimal("0.01")
 FACE_VALUE = Decimal("100")
-QUOTE_FRESH_FOR = timedelta(hours=18)
+QUOTE_FRESH_FOR = IMPLEMENTED_MODEL_PROVIDER.freshness
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,7 @@ class FixedIncomeCashflow:
 @dataclass(frozen=True)
 class FixedIncomeQuote:
     as_of: datetime
+    stale_after: datetime
     settlement_date: str
     maturity_date: str
     days_to_maturity: int
@@ -91,8 +101,24 @@ class FixedIncomeQuote:
     face_value_increment: Decimal
     quote_status: str
     quote_source: str
+    quote_provider: str
+    quote_provider_label: str
+    quote_quality: str
+    quote_quality_label: str
+    quote_type: str
+    quote_is_live: bool
     quote_stale: bool
     pricing_assumptions: tuple[str, ...]
+    provider_security_id: str | None = None
+    bid_price_per_100: Decimal | None = None
+    ask_price_per_100: Decimal | None = None
+    mid_price_per_100: Decimal | None = None
+    last_price_per_100: Decimal | None = None
+    bid_yield_pct: Decimal | None = None
+    ask_yield_pct: Decimal | None = None
+    mid_yield_pct: Decimal | None = None
+    last_yield_pct: Decimal | None = None
+    raw_payload: dict = field(default_factory=dict)
 
 
 _SEED_DIR = Path(__file__).with_name("seed_data")
@@ -436,26 +462,42 @@ def fixed_income_quote(
             ),
             None,
         )
+    clean_price_per_100 = _price(clean_price)
+    accrued_interest_per_100 = _price(accrued_interest)
+    dirty_price_per_100 = _price(dirty_price)
+    yield_to_maturity_pct = (
+        _percent(product.indicative_yield_pct)
+        if product.indicative_yield_pct is not None
+        else None
+    )
+    quote_provider = IMPLEMENTED_MODEL_PROVIDER.provider
+    quote_quality = QUOTE_QUALITY_SEED_MODEL
+    stale_after = stale_after_for_quality(quote_quality, quote_as_of)
 
     return FixedIncomeQuote(
         as_of=quote_as_of,
+        stale_after=stale_after,
         settlement_date=settlement.isoformat(),
         maturity_date=maturity.isoformat(),
         days_to_maturity=days_to_maturity,
-        clean_price_per_100=_price(clean_price),
-        accrued_interest_per_100=_price(accrued_interest),
-        dirty_price_per_100=_price(dirty_price),
-        yield_to_maturity_pct=(
-            _percent(product.indicative_yield_pct)
-            if product.indicative_yield_pct is not None
-            else None
-        ),
+        clean_price_per_100=clean_price_per_100,
+        accrued_interest_per_100=accrued_interest_per_100,
+        dirty_price_per_100=dirty_price_per_100,
+        yield_to_maturity_pct=yield_to_maturity_pct,
         next_coupon_date=next_coupon_date,
         face_value_increment=product.face_value_increment,
         quote_status="indicative_model",
         quote_source=product.quote_source,
+        quote_provider=quote_provider,
+        quote_provider_label=provider_label(quote_provider),
+        quote_quality=quote_quality,
+        quote_quality_label=quote_quality_label(quote_quality),
+        quote_type="model",
+        quote_is_live=quote_quality_is_live(quote_quality),
         quote_stale=False,
         pricing_assumptions=_pricing_assumptions(product),
+        mid_price_per_100=dirty_price_per_100,
+        mid_yield_pct=yield_to_maturity_pct,
     )
 
 
@@ -521,8 +563,23 @@ def fixed_income_response(
         face_value_increment=quote.face_value_increment,
         quote_status=quote.quote_status,
         quote_source=quote.quote_source,
+        quote_provider=quote.quote_provider,
+        quote_provider_label=quote.quote_provider_label,
+        quote_quality=quote.quote_quality,
+        quote_quality_label=quote.quote_quality_label,
+        quote_type=quote.quote_type,
         quote_as_of=quote.as_of,
+        quote_stale_after=quote.stale_after,
+        quote_is_live=quote.quote_is_live,
         quote_stale=quote.quote_stale,
+        bid_price=quote.bid_price_per_100,
+        ask_price=quote.ask_price_per_100,
+        mid_price=quote.mid_price_per_100,
+        last_price=quote.last_price_per_100,
+        bid_yield_pct=quote.bid_yield_pct,
+        ask_yield_pct=quote.ask_yield_pct,
+        mid_yield_pct=quote.mid_yield_pct,
+        last_yield_pct=quote.last_yield_pct,
         minimum_order_amount=product.minimum_order_amount,
         liquidity=product.liquidity,
         risk_level=product.risk_level,
@@ -644,10 +701,23 @@ def _quote_record_from_quote(
         ),
         face_value_increment=quote.face_value_increment,
         quote_status=quote.quote_status,
+        quote_provider=quote.quote_provider,
+        quote_quality=quote.quote_quality,
+        quote_type=quote.quote_type,
+        provider_security_id=quote.provider_security_id,
+        bid_price=quote.bid_price_per_100,
+        ask_price=quote.ask_price_per_100,
+        mid_price=quote.mid_price_per_100,
+        last_price=quote.last_price_per_100,
+        bid_yield_pct=quote.bid_yield_pct,
+        ask_yield_pct=quote.ask_yield_pct,
+        mid_yield_pct=quote.mid_yield_pct,
+        last_yield_pct=quote.last_yield_pct,
         source=quote.quote_source,
         source_as_of=quote.as_of,
-        stale_after=quote.as_of + QUOTE_FRESH_FOR,
-        assumptions=_assumption_payload(product),
+        stale_after=quote.stale_after,
+        assumptions=_assumption_payload(product, quote),
+        raw_payload=quote.raw_payload,
     )
 
 
@@ -658,8 +728,11 @@ def _quote_from_record(
     now: datetime,
 ) -> FixedIncomeQuote:
     stale = _aware_datetime(record.stale_after) <= now
+    quote_provider = _record_text(record, "quote_provider", "internal_model")
+    quote_quality = _record_text(record, "quote_quality", QUOTE_QUALITY_SEED_MODEL)
     return FixedIncomeQuote(
         as_of=_aware_datetime(record.source_as_of),
+        stale_after=_aware_datetime(record.stale_after),
         settlement_date=_date_text(record.settlement_date),
         maturity_date=_date_text(record.maturity_date),
         days_to_maturity=record.days_to_maturity or 0,
@@ -676,7 +749,23 @@ def _quote_from_record(
         or product.face_value_increment,
         quote_status="stale_model" if stale else record.quote_status,
         quote_source=record.source,
+        quote_provider=quote_provider,
+        quote_provider_label=provider_label(quote_provider),
+        quote_quality=quote_quality,
+        quote_quality_label=quote_quality_label(quote_quality),
+        quote_type=_record_text(record, "quote_type", "model"),
+        quote_is_live=quote_quality_is_live(quote_quality),
         quote_stale=stale,
+        provider_security_id=getattr(record, "provider_security_id", None),
+        bid_price_per_100=getattr(record, "bid_price", None),
+        ask_price_per_100=getattr(record, "ask_price", None),
+        mid_price_per_100=getattr(record, "mid_price", None),
+        last_price_per_100=getattr(record, "last_price", None),
+        bid_yield_pct=getattr(record, "bid_yield_pct", None),
+        ask_yield_pct=getattr(record, "ask_yield_pct", None),
+        mid_yield_pct=getattr(record, "mid_yield_pct", None),
+        last_yield_pct=getattr(record, "last_yield_pct", None),
+        raw_payload=getattr(record, "raw_payload", None) or {},
         pricing_assumptions=_pricing_assumptions(product, record.assumptions),
     )
 
@@ -728,7 +817,27 @@ def _date_text(value: date | None) -> str:
     return value.isoformat() if value is not None else ""
 
 
-def _assumption_payload(product: FixedIncomeProduct) -> dict:
+def _record_text(
+    record: InvestFixedIncomeQuoteRecord,
+    field_name: str,
+    fallback: str,
+) -> str:
+    value = getattr(record, field_name, None)
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text or fallback
+
+
+def _assumption_payload(
+    product: FixedIncomeProduct,
+    quote: FixedIncomeQuote | None = None,
+) -> dict:
+    quote_provider = quote.quote_provider if quote is not None else "internal_model"
+    quote_quality = (
+        quote.quote_quality if quote is not None else QUOTE_QUALITY_SEED_MODEL
+    )
+    provider_plan = fixed_income_provider_plan(product)
     return {
         "day_count_convention": product.day_count_convention,
         "compounding_basis": product.compounding_basis,
@@ -736,6 +845,20 @@ def _assumption_payload(product: FixedIncomeProduct) -> dict:
         "business_day_calendar": "Mon-Fri",
         "coupon_frequency_per_year": product.coupon_frequency_per_year,
         "source": product.quote_source,
+        "quote_provider": quote_provider,
+        "quote_provider_label": provider_label(quote_provider),
+        "quote_quality": quote_quality,
+        "quote_quality_label": quote_quality_label(quote_quality),
+        "provider_plan": [
+            {
+                "provider": capability.provider,
+                "label": capability.label,
+                "source": capability.source,
+                "quote_quality": capability.quote_quality,
+                "status": capability.status,
+            }
+            for capability in provider_plan[:5]
+        ],
     }
 
 
@@ -743,8 +866,15 @@ def _pricing_assumptions(
     product: FixedIncomeProduct, payload: dict | None = None
 ) -> tuple[str, ...]:
     assumptions = payload or _assumption_payload(product)
+    quote_quality = str(
+        assumptions.get("quote_quality") or QUOTE_QUALITY_SEED_MODEL
+    ).strip()
+    quote_provider = str(assumptions.get("quote_provider") or "internal_model").strip()
     return (
-        f"Yield source: {assumptions.get('source', product.quote_source)}.",
+        (
+            f"Quote quality: {quote_quality_label(quote_quality)} "
+            f"from {provider_label(quote_provider)}."
+        ),
         (
             f"Day count: {assumptions.get('day_count_convention', product.day_count_convention)}; "
             f"business days use {assumptions.get('business_day_calendar', 'Mon-Fri')}."
@@ -754,8 +884,29 @@ def _pricing_assumptions(
             f"Coupon frequency: {assumptions.get('coupon_frequency_per_year', product.coupon_frequency_per_year)} "
             f"per year; compounding basis: {assumptions.get('compounding_basis', product.compounding_basis)}."
         ),
-        "Paper quote only; not a live auction or executable venue quote.",
+        _provider_plan_note(assumptions),
     )
+
+
+def _provider_plan_note(assumptions: dict) -> str:
+    provider_plan = assumptions.get("provider_plan")
+    if not isinstance(provider_plan, list):
+        return "Provider ladder pending; model fallback is active."
+    enabled = [
+        str(item.get("label"))
+        for item in provider_plan
+        if isinstance(item, dict) and item.get("status") == "enabled"
+    ]
+    planned = [
+        str(item.get("label"))
+        for item in provider_plan
+        if isinstance(item, dict) and item.get("status") == "planned"
+    ]
+    if enabled:
+        return f"Enabled provider path: {', '.join(enabled[:3])}."
+    if planned:
+        return f"Provider path prepared for: {', '.join(planned[:3])}."
+    return "Provider ladder pending; model fallback is active."
 
 
 def _fixed_income_risk_checks(
@@ -774,8 +925,11 @@ def _fixed_income_risk_checks(
         ),
         InvestRiskCheckResponse(
             code="quote_source",
-            level="review",
-            message=f"Price uses {quote.quote_source} with modeled settlement assumptions.",
+            level="info" if quote.quote_is_live else "review",
+            message=(
+                f"Price uses {quote.quote_quality_label.lower()} "
+                f"from {quote.quote_provider_label}."
+            ),
             passed=True,
         ),
         InvestRiskCheckResponse(
@@ -933,6 +1087,8 @@ def _is_missing_fixed_income_table(exc: Exception) -> bool:
     return any(table_name in message for table_name in table_names) and (
         "does not exist" in message
         or "undefinedtable" in message
+        or "undefinedcolumn" in message
+        or "no such column" in message
         or "no such table" in message
     )
 

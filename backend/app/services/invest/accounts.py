@@ -1264,7 +1264,7 @@ async def _home_headlines(
     lines: list[str] = []
     if today_change is None:
         lines.append(
-            "No live day mark on listed names yet. Cash and bills use last close or modeled yield."
+            "No live day mark on listed names yet. Cash and bills use source-labeled fixed-income marks."
         )
     elif today_change > 0:
         lines.append(

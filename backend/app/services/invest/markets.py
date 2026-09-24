@@ -148,21 +148,27 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
             )
         )
 
+    fixed_income = []
+    for product in await search_fixed_income_products_db(session):
+        fixed_income.append(await fixed_income_response_db(session, product))
+
+    quality_counts: dict[str, int] = {}
+    for product in fixed_income:
+        quality = product.quote_quality or "unknown"
+        quality_counts[quality] = quality_counts.get(quality, 0) + 1
+    model_count = quality_counts.get("seed_model", 0)
+
     open_labels = [item.label for item in sessions if item.is_open]
     if open_labels:
         summary = (
             f"{', '.join(open_labels)}. {live_count} live marks on the board. "
-            "Fixed-income products use modeled yield and settlement; listed funds show live or last-close market context."
+            f"Fixed-income marks carry source quality; {model_count} are model fallback marks."
         )
     else:
         summary = (
             "US and NGX cash sessions are closed. Showing last marks where we have them. "
-            "Fixed-income products use modeled yield and settlement; listed funds show last-close market context."
+            f"Fixed-income marks carry source quality; {model_count} are model fallback marks."
         )
-
-    fixed_income = []
-    for product in await search_fixed_income_products_db(session):
-        fixed_income.append(await fixed_income_response_db(session, product))
 
     return InvestMarketsResponse(
         generated_at=now,

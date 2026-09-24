@@ -22,6 +22,7 @@ from app.core.market_constants import PRICE_MARKET_HOURS_ONLY, PRICE_STALE_AFTER
 from app.db.session import engine_options
 from app.models import Instrument, InstrumentQuote, PriceRefreshRun
 from app.services.administration.system_log import record_system_log
+from app.services.invest.fixed_income import refresh_fixed_income_quotes
 from app.services.invest.markets import sync_market_board_from_tiingo_supported
 from app.services.market_data.fx_refresh import FxRefreshResult, refresh_fx_rates
 from app.services.market_data.ingestion import IngestionResult, ingest_quotes
@@ -71,6 +72,21 @@ async def _refresh_cycle(session: AsyncSession) -> None:
                 "matched_count": board_sync.matched_count,
                 "updated_count": board_sync.updated_count,
                 "missing_tickers": list(board_sync.missing_tickers),
+            },
+        )
+
+    fixed_income_quotes = await refresh_fixed_income_quotes(session)
+    if fixed_income_quotes:
+        quality_counts: dict[str, int] = {}
+        for quote in fixed_income_quotes:
+            quality_counts[quote.quote_quality] = (
+                quality_counts.get(quote.quote_quality, 0) + 1
+            )
+        logger.info(
+            "invest_fixed_income_quotes_refreshed",
+            extra={
+                "quote_count": len(fixed_income_quotes),
+                "quality_counts": quality_counts,
             },
         )
 

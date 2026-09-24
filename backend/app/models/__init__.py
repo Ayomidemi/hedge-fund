@@ -515,7 +515,9 @@ class PreTradeRiskCheck(Base, TimestampMixin):
     portfolio_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("portfolios.id"), nullable=False, index=True
     )
-    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     decision: Mapped[str] = mapped_column(String(32), nullable=False)
     risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
     cash_impact: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
@@ -724,7 +726,9 @@ class NewsPollRun(Base, TimestampMixin):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
-    trigger: Mapped[str] = mapped_column(String(32), nullable=False, default="scheduled")
+    trigger: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="scheduled"
+    )
     target_scope: Mapped[str | None] = mapped_column(String(32), index=True)
     target_key: Mapped[str | None] = mapped_column(String(128), index=True)
     provider_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -733,7 +737,9 @@ class NewsPollRun(Base, TimestampMixin):
     items_updated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     cache_hit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    provider_plan: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    provider_plan: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     errors: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
     notes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
@@ -1177,7 +1183,9 @@ class RadarUniverseMember(Base, TimestampMixin):
     jurisdiction: Mapped[str] = mapped_column(String(8), nullable=False)
     sector: Mapped[str | None] = mapped_column(String(128))
     industry: Mapped[str | None] = mapped_column(String(128))
-    asset_class: Mapped[str] = mapped_column(String(32), nullable=False, default="equity")
+    asset_class: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="equity"
+    )
     exchange: Mapped[str | None] = mapped_column(String(64))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     source: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1256,9 +1264,7 @@ class PriceRefreshRun(Base, TimestampMixin):
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     errors: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
 
-    __table_args__ = (
-        Index("ix_price_refresh_runs_started_at", "started_at"),
-    )
+    __table_args__ = (Index("ix_price_refresh_runs_started_at", "started_at"),)
 
 
 class RadarRun(Base, TimestampMixin):
@@ -1319,7 +1325,9 @@ class RadarSnapshot(Base, TimestampMixin):
     jurisdiction: Mapped[str] = mapped_column(String(8), nullable=False)
     sector: Mapped[str | None] = mapped_column(String(128))
     industry: Mapped[str | None] = mapped_column(String(128))
-    asset_class: Mapped[str] = mapped_column(String(32), nullable=False, default="equity")
+    asset_class: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="equity"
+    )
     exchange: Mapped[str | None] = mapped_column(String(64))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     source: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1577,8 +1585,12 @@ class InvestFixedIncomeProduct(Base, TimestampMixin):
     coupon_rate_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     coupon_frequency_per_year: Mapped[int] = mapped_column(Integer, nullable=False)
     settlement_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    minimum_order_amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
-    face_value_increment: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    minimum_order_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False
+    )
+    face_value_increment: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False
+    )
     liquidity: Mapped[str] = mapped_column(String(64), nullable=False)
     risk_level: Mapped[str] = mapped_column(String(64), nullable=False)
     expected_payout: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1634,6 +1646,22 @@ class InvestFixedIncomeQuote(Base, TimestampMixin):
     next_coupon_date: Mapped[date | None] = mapped_column(Date)
     face_value_increment: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     quote_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_provider: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="internal_model"
+    )
+    quote_quality: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="seed_model"
+    )
+    quote_type: Mapped[str] = mapped_column(String(32), nullable=False, default="model")
+    provider_security_id: Mapped[str | None] = mapped_column(String(128))
+    bid_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    ask_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    mid_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    last_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    bid_yield_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    ask_yield_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    mid_yield_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    last_yield_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     source: Mapped[str] = mapped_column(String(64), nullable=False)
     source_as_of: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -1642,6 +1670,7 @@ class InvestFixedIncomeQuote(Base, TimestampMixin):
         DateTime(timezone=True), nullable=False
     )
     assumptions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     product: Mapped["InvestFixedIncomeProduct"] = relationship(back_populates="quotes")
 
@@ -1652,6 +1681,11 @@ class InvestFixedIncomeQuote(Base, TimestampMixin):
             "source_as_of",
         ),
         Index("ix_invest_fixed_income_quotes_stale_after", "stale_after"),
+        Index(
+            "ix_invest_fixed_income_quotes_provider_quality",
+            "quote_provider",
+            "quote_quality",
+        ),
     )
 
 
@@ -1669,9 +1703,7 @@ class InvestYieldCurve(Base, TimestampMixin):
         "metadata", JSONB, nullable=False, default=dict
     )
 
-    points: Mapped[list["InvestYieldCurvePoint"]] = relationship(
-        back_populates="curve"
-    )
+    points: Mapped[list["InvestYieldCurvePoint"]] = relationship(back_populates="curve")
 
     __table_args__ = (
         UniqueConstraint(
@@ -1753,7 +1785,9 @@ class RetailOrder(Base, TimestampMixin):
         ForeignKey("instruments.id"), nullable=False, index=True
     )
     side: Mapped[str] = mapped_column(String(8), nullable=False)
-    order_type: Mapped[str] = mapped_column(String(16), nullable=False, default="market")
+    order_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="market"
+    )
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
     notional: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
@@ -1774,7 +1808,9 @@ class RetailOrder(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_invest_orders_account_submitted", "account_id", "submitted_at"),
-        UniqueConstraint("broker_provider", "broker_order_id", name="uq_invest_broker_order"),
+        UniqueConstraint(
+            "broker_provider", "broker_order_id", name="uq_invest_broker_order"
+        ),
     )
 
 
@@ -1801,7 +1837,9 @@ class RetailPosition(Base, TimestampMixin):
     instrument: Mapped["Instrument"] = relationship()
 
     __table_args__ = (
-        UniqueConstraint("account_id", "instrument_id", name="uq_invest_position_instrument"),
+        UniqueConstraint(
+            "account_id", "instrument_id", name="uq_invest_position_instrument"
+        ),
     )
 
 
@@ -1853,5 +1891,7 @@ class RetailWatchlistItem(Base, TimestampMixin):
     instrument: Mapped["Instrument"] = relationship()
 
     __table_args__ = (
-        UniqueConstraint("user_id", "instrument_id", name="uq_invest_watchlist_instrument"),
+        UniqueConstraint(
+            "user_id", "instrument_id", name="uq_invest_watchlist_instrument"
+        ),
     )

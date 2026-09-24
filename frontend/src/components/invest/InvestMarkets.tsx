@@ -99,12 +99,12 @@ export function InvestMarketsBoard({
                 <h2 className="mt-1 text-lg font-semibold">Yield shelf</h2>
               </div>
               <p className="text-xs font-medium uppercase text-emerald-700 dark:text-emerald-300">
-                Modeled paper orders
+                Source quality shown
               </p>
             </div>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-500">
-              Bills and bonds show modeled yield, clean price, accrued interest,
-              dirty price, settlement, and projected payout before order entry.
+              Bills and bonds show yield, clean price, accrued interest, dirty
+              price, settlement, quote quality, and projected payout before order entry.
             </p>
           </div>
           <div className="p-5 sm:p-6">

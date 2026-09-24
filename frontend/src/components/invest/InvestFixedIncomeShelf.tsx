@@ -118,9 +118,9 @@ export function InvestFixedIncomeShelf({
           sublabel={selected?.ticker ?? "No product selected"}
         />
         <ShelfStat
-          label="Quote source"
-          value={selected?.quote_source ?? "Pending"}
-          sublabel={selected ? quoteAge(selected) : "No product selected"}
+          label="Quote quality"
+          value={selected?.quote_quality_label ?? "Pending"}
+          sublabel={selected ? quoteSummary(selected) : "No product selected"}
         />
       </div>
 
@@ -145,6 +145,7 @@ export function InvestFixedIncomeShelf({
                       <span className="rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                         {product.market}
                       </span>
+                      <QuoteBadge product={product} />
                     </div>
                     <p className="mt-1 truncate text-sm text-zinc-500">
                       {product.issuer} · {product.currency} ·{" "}
@@ -176,13 +177,11 @@ export function InvestFixedIncomeShelf({
                   <h3 className="mt-1 font-semibold">{selected.ticker}</h3>
                 </div>
                 <span
-                  className={`rounded-md px-2 py-1 text-xs font-medium ${
-                    selected.quote_stale
-                      ? "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-200"
-                      : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200"
-                  }`}
+                  className={`rounded-md px-2 py-1 text-xs font-medium ${quoteBadgeClass(
+                    selected,
+                  )}`}
                 >
-                  {selected.quote_stale ? "stale" : "current"}
+                  {selected.quote_quality_label ?? "Pending"}
                 </span>
               </div>
 
@@ -265,7 +264,7 @@ export function InvestFixedIncomeShelf({
               ) : null}
 
               <p className="mt-4 text-xs text-zinc-500">
-                {quoteAge(selected)} · {selected.quote_status ?? "indicative"}
+                {quoteSummary(selected)} · {selected.quote_status ?? "indicative"}
               </p>
 
               <div className="mt-4 flex flex-col gap-2">
@@ -344,6 +343,18 @@ function ShelfStat({
   );
 }
 
+function QuoteBadge({ product }: { product: InvestFixedIncomeProduct }) {
+  return (
+    <span
+      className={`rounded-md px-2 py-1 text-xs font-medium ${quoteBadgeClass(
+        product,
+      )}`}
+    >
+      {product.quote_quality_label ?? "Pending"}
+    </span>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
@@ -409,4 +420,23 @@ function quoteAge(product: InvestFixedIncomeProduct) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(product.quote_as_of));
+}
+
+function quoteSummary(product: InvestFixedIncomeProduct) {
+  const provider =
+    product.quote_provider_label ?? product.quote_source ?? "Provider pending";
+  return `${provider} · ${quoteAge(product)}`;
+}
+
+function quoteBadgeClass(product: InvestFixedIncomeProduct) {
+  if (product.quote_stale) {
+    return "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-200";
+  }
+  if (product.quote_is_live) {
+    return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200";
+  }
+  if (product.quote_quality === "seed_model") {
+    return "bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-200";
+  }
+  return "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200";
 }

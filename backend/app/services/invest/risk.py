@@ -148,10 +148,10 @@ def evaluate_order_risk(
         )
         checks.append(
             RetailRiskCheck(
-                code="fixed_income_model_price",
+                code="fixed_income_quote_price",
                 level="review",
                 message=(
-                    "Paper fill uses an indicative fixed-income model price, including "
+                    "Paper fill uses the fixed-income quote service mark, including "
                     "settlement and accrued-interest assumptions."
                 ),
                 passed=True,

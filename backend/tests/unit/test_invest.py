@@ -28,6 +28,7 @@ from app.services.invest.fixed_income import (
     get_fixed_income_product,
     search_fixed_income_products,
 )
+from app.services.invest.fixed_income_providers import fixed_income_provider_plan
 from app.services.invest.markets import (
     DEFAULT_MARKET_BOARD_RULES,
     _apply_tiingo_metadata_to_board_item,
@@ -321,11 +322,37 @@ class FixedIncomeScopeTests(TestCase):
         self.assertIsNotNone(response.dirty_price)
         self.assertIsNotNone(response.settlement_date)
         self.assertEqual(response.quote_source, "model_seed")
+        self.assertEqual(response.quote_provider, "internal_model")
+        self.assertEqual(response.quote_provider_label, "Internal pricing model")
+        self.assertEqual(response.quote_quality, "seed_model")
+        self.assertEqual(response.quote_quality_label, "Model fallback")
+        self.assertEqual(response.quote_type, "model")
+        self.assertFalse(response.quote_is_live)
         self.assertFalse(response.quote_stale)
         self.assertIsNotNone(response.quote_as_of)
+        self.assertIsNotNone(response.quote_stale_after)
+        self.assertEqual(response.mid_price, response.dirty_price)
+        self.assertEqual(response.mid_yield_pct, response.yield_to_maturity_pct)
         self.assertTrue(response.pricing_assumptions)
         self.assertTrue(response.risk_checks)
         self.assertTrue(response.cashflows)
+
+    def test_fixed_income_provider_plan_points_to_real_data_ladder(self) -> None:
+        us_bill = get_fixed_income_product("US-TBILL-13W")
+        ng_bill = get_fixed_income_product("NG-TBILL-182D")
+        assert us_bill is not None
+        assert ng_bill is not None
+
+        us_providers = [item.provider for item in fixed_income_provider_plan(us_bill)]
+        ng_providers = [item.provider for item in fixed_income_provider_plan(ng_bill)]
+
+        self.assertEqual(us_providers[0], "internal_model")
+        self.assertIn("treasury_fiscal_data", us_providers)
+        self.assertIn("fred_curve", us_providers)
+        self.assertIn("tiingo_proxy", us_providers)
+        self.assertEqual(ng_providers[0], "internal_model")
+        self.assertIn("fmdq", ng_providers)
+        self.assertIn("cbn", ng_providers)
 
     def test_us_cash_bills_point_to_listed_paper_proxy(self) -> None:
         bill = get_fixed_income_product("US-TBILL-13W")
@@ -367,7 +394,7 @@ class FixedIncomeScopeTests(TestCase):
         self.assertNotIn("fixed_income_execution", blocker_codes)
         self.assertFalse(assessment.blockers)
         self.assertIn(
-            "Paper fill uses an indicative fixed-income model price, including settlement and accrued-interest assumptions.",
+            "Paper fill uses the fixed-income quote service mark, including settlement and accrued-interest assumptions.",
             assessment.warnings,
         )
 

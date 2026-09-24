@@ -218,8 +218,23 @@ class InvestFixedIncomeProductResponse(BaseModel):
     face_value_increment: Decimal | None = None
     quote_status: str | None = None
     quote_source: str | None = None
+    quote_provider: str | None = None
+    quote_provider_label: str | None = None
+    quote_quality: str | None = None
+    quote_quality_label: str | None = None
+    quote_type: str | None = None
     quote_as_of: datetime | None = None
+    quote_stale_after: datetime | None = None
+    quote_is_live: bool = False
     quote_stale: bool = False
+    bid_price: Decimal | None = None
+    ask_price: Decimal | None = None
+    mid_price: Decimal | None = None
+    last_price: Decimal | None = None
+    bid_yield_pct: Decimal | None = None
+    ask_yield_pct: Decimal | None = None
+    mid_yield_pct: Decimal | None = None
+    last_yield_pct: Decimal | None = None
     minimum_order_amount: Decimal
     liquidity: str
     risk_level: str

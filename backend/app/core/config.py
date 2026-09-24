@@ -55,6 +55,18 @@ class Settings(BaseSettings):
     hf_tiingo_stream_reconnect_max_seconds: int = 60
     hf_tiingo_stream_subscription_refresh_seconds: int = 300
     hf_tiingo_stream_max_tickers: int = 250
+    hf_alpaca_broker_api_key: str | None = None
+    hf_alpaca_broker_api_secret: str | None = None
+    hf_alpaca_broker_base_url: str = "https://broker-api.alpaca.markets"
+    hf_fmdq_api_key: str | None = None
+    hf_fmdq_base_url: str = "https://api.fmdqgroup.com"
+    hf_fred_api_key: str | None = None
+    hf_fred_base_url: str = "https://api.stlouisfed.org/fred"
+    hf_fiscal_data_base_url: str = (
+        "https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
+    )
+    hf_cbn_base_url: str = "https://www.cbn.gov.ng"
+    hf_dmo_base_url: str = "https://www.dmo.gov.ng"
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
     hf_news_poll_interval_seconds: int = 300
@@ -182,6 +194,30 @@ class Settings(BaseSettings):
     @property
     def tiingo_base_url(self) -> str:
         return self.hf_tiingo_base_url.strip().rstrip("/")
+
+    @property
+    def alpaca_broker_base_url(self) -> str:
+        return self.hf_alpaca_broker_base_url.strip().rstrip("/")
+
+    @property
+    def fmdq_base_url(self) -> str:
+        return self.hf_fmdq_base_url.strip().rstrip("/")
+
+    @property
+    def fred_base_url(self) -> str:
+        return self.hf_fred_base_url.strip().rstrip("/")
+
+    @property
+    def fiscal_data_base_url(self) -> str:
+        return self.hf_fiscal_data_base_url.strip().rstrip("/")
+
+    @property
+    def cbn_base_url(self) -> str:
+        return self.hf_cbn_base_url.strip().rstrip("/")
+
+    @property
+    def dmo_base_url(self) -> str:
+        return self.hf_dmo_base_url.strip().rstrip("/")
 
     @property
     def tiingo_stream_enabled(self) -> bool:
