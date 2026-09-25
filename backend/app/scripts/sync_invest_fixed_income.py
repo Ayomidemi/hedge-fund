@@ -35,7 +35,7 @@ def main() -> None:
         "--limit",
         type=int,
         default=None,
-        help="Maximum Treasury auction rows to fetch.",
+        help="Maximum rows to fetch per configured provider source.",
     )
     args = parser.parse_args()
     asyncio.run(_run(args.force, args.limit))

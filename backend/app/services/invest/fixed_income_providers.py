@@ -179,14 +179,15 @@ FIXED_INCOME_PROVIDER_CAPABILITIES: tuple[FixedIncomeProviderCapability, ...] = 
         provider="fmdq",
         label="FMDQ",
         source="fmdq_market_data",
-        quote_quality=QUOTE_QUALITY_EXECUTABLE,
-        freshness=QUOTE_QUALITY_FRESHNESS[QUOTE_QUALITY_EXECUTABLE],
+        quote_quality=QUOTE_QUALITY_EVALUATED,
+        freshness=QUOTE_QUALITY_FRESHNESS[QUOTE_QUALITY_EVALUATED],
         markets=frozenset({"NG"}),
         instrument_types=frozenset(
             {"treasury_bill", "government_bond", "commercial_paper"}
         ),
-        credential_settings=("hf_fmdq_api_key",),
-        notes=("Candidate source for Nigerian fixed-income market data.",),
+        credential_settings=("hf_fmdq_api_key", "hf_fmdq_fixed_income_path"),
+        implemented=True,
+        notes=("Configurable JSON source for Nigerian fixed-income market data.",),
     ),
     FixedIncomeProviderCapability(
         provider="cbn",
@@ -195,7 +196,9 @@ FIXED_INCOME_PROVIDER_CAPABILITIES: tuple[FixedIncomeProviderCapability, ...] = 
         quote_quality=QUOTE_QUALITY_OFFICIAL_AUCTION,
         freshness=QUOTE_QUALITY_FRESHNESS[QUOTE_QUALITY_OFFICIAL_AUCTION],
         markets=frozenset({"NG"}),
-        instrument_types=frozenset({"treasury_bill"}),
+        instrument_types=frozenset({"treasury_bill", "government_bond"}),
+        quote_sources=frozenset({"cbn_official"}),
+        implemented=True,
         notes=("Official Nigerian auction and rates context.",),
     ),
     FixedIncomeProviderCapability(

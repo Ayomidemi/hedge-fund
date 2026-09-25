@@ -82,6 +82,8 @@ async def _refresh_cycle(session: AsyncSession) -> None:
     if fixed_income_sync.upserted_count or fixed_income_sync.skipped_reason not in {
         None,
         "fresh",
+        "no_provider_rows",
+        "provider_backoff",
     }:
         logger.info(
             "invest_fixed_income_products_synced",

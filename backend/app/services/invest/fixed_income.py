@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import lru_cache
+from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -33,6 +36,7 @@ from app.models import (
 from app.services.invest.fixed_income_providers import (
     FixedIncomeProviderCapability,
     IMPLEMENTED_MODEL_PROVIDER,
+    QUOTE_QUALITY_EVALUATED,
     QUOTE_QUALITY_OFFICIAL_AUCTION,
     QUOTE_QUALITY_SEED_MODEL,
     fixed_income_provider_plan,
@@ -140,6 +144,16 @@ class FixedIncomeProductSyncResult:
 
 _SEED_DIR = Path(__file__).with_name("seed_data")
 _TREASURY_AUCTIONS_PATH = "/v1/accounting/od/auctions_query"
+_CBN_GOVERNMENT_SECURITY_DRILLDOWN_PATHS = (
+    "/rates/GovtSecuritiesDrillDown.html",
+    "/rates/GovtSecuritiesDrillDown.asp",
+)
+_CBN_MARKET_SEGMENTS = (
+    ("NTBP", "Nigerian Treasury Bills"),
+    ("FGNB", "FGN Bonds"),
+)
+_FIXED_INCOME_PROVIDER_ERROR_BACKOFF = timedelta(hours=1)
+_fixed_income_provider_retry_after: dict[str, datetime] = {}
 _TREASURY_AUCTION_FIELDS = (
     "record_date",
     "cusip",
@@ -230,10 +244,28 @@ def _row_decimal_any(row: dict, *keys: str) -> Decimal | None:
 def _row_date(value) -> date | None:
     if value in (None, ""):
         return None
-    try:
-        return date.fromisoformat(str(value).strip()[:10])
-    except ValueError:
+    text = str(value).strip()
+    if not text or text.lower() in {"null", "n/a", "na"}:
         return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        pass
+    normalized = text.replace(",", "").replace("Sept-", "Sep-")
+    for date_format in (
+        "%B-%d-%Y",
+        "%b-%d-%Y",
+        "%d-%B-%Y",
+        "%d-%b-%Y",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+    ):
+        try:
+            return datetime.strptime(normalized, date_format).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _treasury_instrument_type(security_type: str) -> str | None:
@@ -312,6 +344,520 @@ def _compact_treasury_payload(row: dict) -> dict:
         for key in _TREASURY_AUCTION_FIELDS
         if row.get(key) not in (None, "")
     }
+
+
+def _row_value_any(row: dict, *keys: str) -> Any:
+    if not row:
+        return None
+    normalized_row = {
+        _normalized_source_key(str(key)): value for key, value in row.items()
+    }
+    for key in keys:
+        if key in row:
+            return row.get(key)
+        value = normalized_row.get(_normalized_source_key(key))
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _row_text_any(row: dict, *keys: str) -> str:
+    value = _row_value_any(row, *keys)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _row_decimal_field_any(row: dict, *keys: str) -> Decimal | None:
+    return _row_decimal_any(
+        {_normalized_source_key(str(key)): value for key, value in row.items()},
+        *(_normalized_source_key(key) for key in keys),
+    )
+
+
+def _row_date_any(row: dict, *keys: str) -> date | None:
+    for key in keys:
+        parsed = _row_date(_row_value_any(row, key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _normalized_source_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+
+
+def _tenor_days_from_text(value: str) -> int | None:
+    text = value.strip().lower()
+    if not text:
+        return None
+    day_match = re.search(r"(\d+)\s*-?\s*(?:day|days|d)\b", text)
+    if day_match:
+        return int(day_match.group(1))
+    week_match = re.search(r"(\d+)\s*-?\s*(?:week|weeks|w)\b", text)
+    if week_match:
+        return int(week_match.group(1)) * 7
+    month_match = re.search(r"(\d+)\s*-?\s*(?:month|months|m)\b", text)
+    if month_match:
+        return int(month_match.group(1)) * 30
+    year_match = re.search(r"(\d+)\s*-?\s*(?:year|years|y)\b", text)
+    if year_match:
+        return int(year_match.group(1)) * 365
+    return None
+
+
+def _tenor_label_from_days(days: int | None, fallback: str) -> str:
+    if days is None:
+        return fallback.strip() or "Marketable"
+    normalized_fallback = fallback.strip().lower()
+    if "day" in normalized_fallback or normalized_fallback.endswith("d"):
+        return f"{days}-Day"
+    if "week" in normalized_fallback or normalized_fallback.endswith("w"):
+        return f"{days // 7}-Week" if days % 7 == 0 else f"{days}-Day"
+    if days % 365 == 0:
+        years = days // 365
+        return f"{years}-Year" if years == 1 else f"{years}-Year"
+    if days % 30 == 0 and days >= 30:
+        return f"{days // 30}-Month"
+    if days % 7 == 0 and days <= 364:
+        return f"{days // 7}-Week"
+    return f"{days}-Day"
+
+
+def _duration_token(days: int | None, tenor: str) -> str:
+    if days is not None:
+        return f"{days}D"
+    token = re.sub(r"[^A-Z0-9]+", "", tenor.upper())
+    return token[:10] or "TERM"
+
+
+class _HTMLTableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[str]]] = []
+        self._table_stack = 0
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+        self._current_table: list[list[str]] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        _ = attrs
+        tag = tag.lower()
+        if tag == "table":
+            self._table_stack += 1
+            if self._table_stack == 1:
+                self._current_table = []
+        elif tag == "tr" and self._current_table is not None:
+            self._row = []
+        elif tag in {"td", "th"} and self._row is not None:
+            self._cell = []
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"td", "th"} and self._cell is not None and self._row is not None:
+            cell = re.sub(r"\s+", " ", " ".join(self._cell)).strip()
+            self._row.append(cell)
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            if self._current_table is not None and any(self._row):
+                self._current_table.append(self._row)
+            self._row = None
+        elif tag == "table" and self._table_stack:
+            if self._table_stack == 1 and self._current_table is not None:
+                self.tables.append(self._current_table)
+                self._current_table = None
+            self._table_stack -= 1
+
+
+_CBN_HEADER_ALIASES = {
+    "auction_date": {"auction date", "date of auction"},
+    "security_type": {"security type"},
+    "description": {"description"},
+    "tenor": {"tenor"},
+    "auction_no": {"auction no"},
+    "auction_week": {"auction week", "week"},
+    "maturity_date": {"maturity date"},
+    "total_subscription": {"total subscription n mn", "subscriptions n mn"},
+    "total_successful": {"total successful n mn"},
+    "range_bid": {"range bid", "range of bid rates"},
+    "successful_bid_rates": {"successful bid rates"},
+    "rate": {"rate", "marginal rate"},
+    "true_yield": {"true yield"},
+    "amount_offered": {"amount offered n mn"},
+    "total_amount_repaid": {"total amount repaid n mn"},
+    "net_type": {"net type"},
+    "net_value": {"net value n mn", "net sales"},
+}
+
+
+def _parse_cbn_government_security_rows(
+    html: str,
+    *,
+    market_code: str,
+    market_label: str,
+) -> list[dict]:
+    parser = _HTMLTableParser()
+    parser.feed(html)
+    parsed_rows: list[dict] = []
+    for table in parser.tables:
+        header_index: int | None = None
+        headers: list[str | None] = []
+        for index, row in enumerate(table):
+            candidate = [_canonical_cbn_header(cell) for cell in row]
+            candidate_keys = {key for key in candidate if key}
+            if {"auction_date", "security_type", "maturity_date"}.issubset(
+                candidate_keys
+            ):
+                header_index = index
+                headers = candidate
+                break
+        if header_index is None:
+            continue
+        for raw_cells in table[header_index + 1 :]:
+            cells = [cell.strip() for cell in raw_cells]
+            if len(cells) < 3 or not any(cells):
+                continue
+            row = {
+                key: cells[index]
+                for index, key in enumerate(headers)
+                if key and index < len(cells) and cells[index]
+            }
+            if not {"auction_date", "security_type", "maturity_date"}.issubset(row):
+                continue
+            row["source_market_code"] = market_code
+            row["source_market_label"] = market_label
+            parsed_rows.append(row)
+    return parsed_rows
+
+
+def _canonical_cbn_header(value: str) -> str | None:
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    for key, aliases in _CBN_HEADER_ALIASES.items():
+        if normalized in aliases:
+            return key
+    return None
+
+
+def _cbn_instrument_type(row: dict) -> str | None:
+    market_code = _row_text_any(row, "source_market_code").upper()
+    text = (
+        f"{_row_text_any(row, 'security_type')} "
+        f"{_row_text_any(row, 'source_market_label')}"
+    ).lower()
+    if market_code == "FGNB" or "bond" in text:
+        return "government_bond"
+    if market_code == "NTBP" or "treasury bill" in text or "ntb" in text:
+        return "treasury_bill"
+    return None
+
+
+def _coupon_from_security_text(value: str) -> Decimal | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", value)
+    if not match:
+        return None
+    try:
+        return _percent(Decimal(match.group(1)))
+    except InvalidOperation:
+        return None
+
+
+def _ngn_fixed_income_ticker(
+    instrument_type: str,
+    *,
+    maturity: date,
+    maturity_days: int | None,
+    tenor: str,
+) -> str:
+    prefix = "NG-TBILL" if instrument_type == "treasury_bill" else "NG-FGN"
+    ticker = f"{prefix}-{_duration_token(maturity_days, tenor)}-{maturity:%Y%m%d}"
+    return ticker[:32]
+
+
+def _compact_cbn_payload(row: dict) -> dict:
+    keep = {
+        "auction_date",
+        "security_type",
+        "tenor",
+        "maturity_date",
+        "total_subscription",
+        "total_successful",
+        "range_bid",
+        "successful_bid_rates",
+        "rate",
+        "true_yield",
+        "amount_offered",
+        "source_market_code",
+        "source_market_label",
+    }
+    return {key: value for key, value in row.items() if key in keep and value}
+
+
+def _product_from_cbn_government_security_row(
+    row: dict,
+    *,
+    synced_at: datetime,
+) -> FixedIncomeProduct | None:
+    instrument_type = _cbn_instrument_type(row)
+    maturity = _row_date_any(row, "maturity_date")
+    auction_date = _row_date_any(row, "auction_date", "date_of_auction")
+    if instrument_type is None or maturity is None:
+        return None
+
+    raw_tenor = _row_text_any(row, "tenor")
+    maturity_days = _tenor_days_from_text(raw_tenor)
+    if maturity_days is None and auction_date is not None:
+        maturity_days = max((maturity - auction_date).days, 0)
+    tenor = _tenor_label_from_days(maturity_days, raw_tenor)
+    indicative_yield = _row_decimal_field_any(
+        row,
+        "true_yield",
+        "rate",
+        "marginal_rate",
+        "successful_bid_rates",
+    )
+    if indicative_yield is None:
+        return None
+    indicative_yield = _percent(indicative_yield)
+
+    security_type = _row_text_any(row, "security_type")
+    coupon_rate = Decimal("0") if instrument_type == "treasury_bill" else None
+    if instrument_type == "government_bond":
+        coupon_rate = _coupon_from_security_text(security_type)
+        if coupon_rate is None:
+            return None
+
+    ticker = _ngn_fixed_income_ticker(
+        instrument_type,
+        maturity=maturity,
+        maturity_days=maturity_days,
+        tenor=tenor,
+    )
+    provider_security_id = "|".join(
+        part
+        for part in (
+            _row_text_any(row, "source_market_code").upper(),
+            security_type,
+            tenor,
+            maturity.isoformat(),
+        )
+        if part
+    )
+    issuer = (
+        "Federal Government of Nigeria"
+        if instrument_type == "government_bond"
+        else "Central Bank of Nigeria"
+    )
+    return FixedIncomeProduct(
+        ticker=ticker,
+        name=(
+            f"Nigeria Treasury Bill {tenor} {maturity.isoformat()}"
+            if instrument_type == "treasury_bill"
+            else f"FGN Bond {tenor} {maturity.isoformat()}"
+        ),
+        market="NG",
+        currency="NGN",
+        issuer=issuer,
+        instrument_type=instrument_type,
+        tenor=tenor,
+        maturity_date=maturity.isoformat(),
+        maturity_days=maturity_days,
+        indicative_yield_pct=indicative_yield,
+        coupon_rate_pct=coupon_rate,
+        coupon_frequency_per_year=0 if instrument_type == "treasury_bill" else 2,
+        settlement_days=2,
+        minimum_order_amount=Decimal("100000.00"),
+        face_value_increment=Decimal("1000.00"),
+        liquidity="Medium",
+        risk_level="Medium" if instrument_type == "treasury_bill" else "Moderate",
+        expected_payout=(
+            "Discount bill; face value is repaid at maturity."
+            if instrument_type == "treasury_bill"
+            else "Semiannual coupons plus principal repayment at maturity."
+        ),
+        trade_status="paper_tradable",
+        asset_class="cash_equivalent" if instrument_type == "treasury_bill" else "bond",
+        exchange="CBN",
+        proxy_ticker=None,
+        proxy_label=None,
+        retail_notes=(
+            "Official CBN auction data; secondary-market execution can differ.",
+        ),
+        day_count_convention="ACT/365",
+        compounding_basis="simple",
+        quote_source="cbn_official",
+        provider_security_id=provider_security_id or ticker,
+        source_as_of=synced_at,
+        source_payload=_compact_cbn_payload(row),
+    )
+
+
+def _fmdq_instrument_type(row: dict) -> str | None:
+    text = " ".join(
+        _row_text_any(
+            row,
+            key,
+        )
+        for key in (
+            "instrument_type",
+            "asset_type",
+            "security_type",
+            "type",
+            "name",
+            "security_name",
+        )
+    ).lower()
+    if "commercial paper" in text or text == "cp":
+        return "commercial_paper"
+    if "treasury bill" in text or "t-bill" in text or "ntb" in text:
+        return "treasury_bill"
+    if "bond" in text or "fgn" in text:
+        return "government_bond"
+    return None
+
+
+def _json_rows(payload: Any) -> list[dict]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("data", "results", "items", "securities", "bonds", "instruments"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+        if isinstance(rows, dict):
+            nested = _json_rows(rows)
+            if nested:
+                return nested
+    return []
+
+
+def _compact_fmdq_payload(row: dict) -> dict:
+    keep = {
+        "ticker",
+        "symbol",
+        "isin",
+        "security_id",
+        "name",
+        "security_name",
+        "instrument_type",
+        "security_type",
+        "tenor",
+        "maturity_date",
+        "yield",
+        "yield_to_maturity",
+        "ytm",
+        "mid_yield",
+        "last_yield",
+        "clean_price",
+        "dirty_price",
+        "mid_price",
+        "last_price",
+        "bid_price",
+        "ask_price",
+        "as_of",
+        "date",
+        "last_update",
+    }
+    normalized = {_normalized_source_key(str(key)): value for key, value in row.items()}
+    return {key: value for key, value in normalized.items() if key in keep and value}
+
+
+def _product_from_fmdq_fixed_income_row(
+    row: dict,
+    *,
+    synced_at: datetime,
+) -> FixedIncomeProduct | None:
+    instrument_type = _fmdq_instrument_type(row)
+    maturity = _row_date_any(row, "maturity_date", "maturity", "redemption_date")
+    name = _row_text_any(row, "name", "security_name", "instrument_name")
+    provider_security_id = _row_text_any(
+        row, "isin", "security_id", "instrument_id", "ticker", "symbol"
+    )
+    if instrument_type is None or maturity is None or not provider_security_id:
+        return None
+
+    raw_tenor = _row_text_any(row, "tenor", "term")
+    issue_date = _row_date_any(row, "issue_date", "auction_date", "date")
+    maturity_days = _tenor_days_from_text(raw_tenor)
+    if maturity_days is None and issue_date is not None:
+        maturity_days = max((maturity - issue_date).days, 0)
+    tenor = _tenor_label_from_days(maturity_days, raw_tenor)
+    indicative_yield = _row_decimal_field_any(
+        row,
+        "yield_to_maturity",
+        "ytm",
+        "mid_yield",
+        "last_yield",
+        "yield",
+    )
+    clean_price = _row_decimal_field_any(row, "clean_price", "mid_price", "last_price")
+    if indicative_yield is None and clean_price is None:
+        return None
+
+    coupon_rate = (
+        Decimal("0")
+        if instrument_type == "treasury_bill"
+        else _row_decimal_field_any(row, "coupon_rate", "coupon", "interest_rate")
+        or _coupon_from_security_text(name)
+    )
+    ticker = _row_text_any(row, "ticker", "symbol").upper()
+    if not ticker:
+        ticker = _ngn_fixed_income_ticker(
+            instrument_type,
+            maturity=maturity,
+            maturity_days=maturity_days,
+            tenor=tenor,
+        )
+    return FixedIncomeProduct(
+        ticker=ticker[:32],
+        name=name or f"NGN fixed income {tenor} {maturity.isoformat()}",
+        market="NG",
+        currency="NGN",
+        issuer=(
+            "Federal Government of Nigeria"
+            if instrument_type in {"treasury_bill", "government_bond"}
+            else _row_text_any(row, "issuer") or "Nigerian issuer"
+        ),
+        instrument_type=instrument_type,
+        tenor=tenor,
+        maturity_date=maturity.isoformat(),
+        maturity_days=maturity_days,
+        indicative_yield_pct=(
+            _percent(indicative_yield) if indicative_yield is not None else None
+        ),
+        coupon_rate_pct=_percent(coupon_rate) if coupon_rate is not None else None,
+        coupon_frequency_per_year=0 if instrument_type == "treasury_bill" else 2,
+        settlement_days=2,
+        minimum_order_amount=Decimal("100000.00"),
+        face_value_increment=Decimal("1000.00"),
+        liquidity=_row_text_any(row, "liquidity") or "Medium",
+        risk_level="Medium",
+        expected_payout=(
+            "Discount bill; face value is repaid at maturity."
+            if instrument_type == "treasury_bill"
+            else "Coupons plus principal repayment at maturity."
+        ),
+        trade_status="paper_tradable",
+        asset_class="cash_equivalent" if instrument_type == "treasury_bill" else "bond",
+        exchange="FMDQ",
+        proxy_ticker=None,
+        proxy_label=None,
+        retail_notes=("FMDQ market data; execution venue pricing can still differ.",),
+        day_count_convention="ACT/365",
+        compounding_basis="simple",
+        quote_source="fmdq_market_data",
+        provider_security_id=provider_security_id,
+        source_as_of=(
+            _as_datetime(_row_date_any(row, "as_of", "date", "last_update"))
+            if _row_date_any(row, "as_of", "date", "last_update") is not None
+            else synced_at
+        ),
+        source_payload=_compact_fmdq_payload(row),
+    )
 
 
 FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
@@ -492,40 +1038,75 @@ async def sync_fixed_income_products_from_providers(
         )
 
     now = datetime.now(timezone.utc)
+    requested_limit = max(
+        1, min(limit or settings.hf_invest_fixed_income_sync_limit, 100)
+    )
+    requested_count = 0
+    source_products: list[FixedIncomeProduct] = []
+    provider_errors: list[str] = []
+    provider_backoffs: list[str] = []
+    skipped_sources: list[str] = []
     try:
-        if not force and await _treasury_products_are_fresh(session, now):
+        for source in _fixed_income_sync_sources():
+            if source == "fmdq_market_data" and not _fmdq_fixed_income_configured():
+                skipped_sources.append(source)
+                continue
+            if not force and await _fixed_income_source_products_are_fresh(
+                session, source, now
+            ):
+                skipped_sources.append(source)
+                continue
+            if not force and _fixed_income_provider_sync_is_backing_off(source, now):
+                provider_backoffs.append(source)
+                continue
+            requested_count += requested_limit
+            try:
+                products = await _fetch_fixed_income_products_for_source(
+                    source,
+                    requested_limit,
+                    synced_at=now,
+                )
+            except (httpx.HTTPError, ValueError) as exc:
+                provider_errors.append(source)
+                _set_fixed_income_provider_sync_backoff(source, now)
+                logger.warning(
+                    "invest_fixed_income_provider_sync_failed",
+                    extra={
+                        "provider": _fixed_income_provider_name_for_source(source),
+                        "source": source,
+                        "error": str(exc),
+                    },
+                )
+                continue
+            if not products:
+                _set_fixed_income_provider_sync_backoff(source, now)
+                continue
+            _clear_fixed_income_provider_sync_backoff(source)
+            source_products.extend(products)
+
+        if not source_products:
+            skipped_reason = _fixed_income_sync_skipped_reason(
+                provider_errors=provider_errors,
+                provider_backoffs=provider_backoffs,
+                skipped_sources=skipped_sources,
+            )
             return FixedIncomeProductSyncResult(
-                requested_count=0,
+                requested_count=requested_count,
                 matched_count=0,
                 upserted_count=0,
                 quote_count=0,
-                skipped_reason="fresh",
+                skipped_reason=skipped_reason,
             )
 
-        requested_limit = max(
-            1, min(limit or settings.hf_invest_fixed_income_sync_limit, 100)
-        )
-        rows = await _fetch_us_treasury_auction_rows(requested_limit)
-        products = [
-            product
-            for row in rows
-            if (
-                product := _product_from_treasury_auction_row(
-                    row,
-                    synced_at=now,
-                )
-            )
-            is not None
-        ]
-        upserted = await _upsert_fixed_income_products(session, products)
-        quotes = await _persist_official_product_quotes(session, upserted, as_of=now)
+        upserted = await _upsert_fixed_income_products(session, source_products)
+        quotes = await _persist_provider_product_quotes(session, upserted, as_of=now)
     except (httpx.HTTPError, ValueError) as exc:
         logger.warning(
             "invest_fixed_income_provider_sync_failed",
-            extra={"provider": "treasury_fiscal_data", "error": str(exc)},
+            extra={"provider": "unknown", "error": str(exc)},
         )
         return FixedIncomeProductSyncResult(
-            requested_count=limit or settings.hf_invest_fixed_income_sync_limit,
+            requested_count=requested_count or requested_limit,
             matched_count=0,
             upserted_count=0,
             quote_count=0,
@@ -544,8 +1125,8 @@ async def sync_fixed_income_products_from_providers(
         )
 
     return FixedIncomeProductSyncResult(
-        requested_count=requested_limit,
-        matched_count=len(products),
+        requested_count=requested_count,
+        matched_count=len(source_products),
         upserted_count=len(upserted),
         quote_count=len(quotes),
     )
@@ -674,6 +1255,10 @@ async def _quote_from_provider_capability(
     _ = session
     if capability.provider == "treasury_fiscal_data":
         return _official_treasury_quote(product, as_of=as_of)
+    if capability.provider == "cbn":
+        return _official_ngn_quote(product, as_of=as_of)
+    if capability.provider == "fmdq":
+        return _fmdq_market_quote(product, as_of=as_of)
     if capability.provider == IMPLEMENTED_MODEL_PROVIDER.provider:
         return fixed_income_quote(product, as_of=as_of)
     logger.warning(
@@ -778,8 +1363,79 @@ def fixed_income_quote(
     )
 
 
-async def _treasury_products_are_fresh(
+def _fixed_income_sync_sources() -> tuple[str, ...]:
+    return ("treasury_official", "fmdq_market_data", "cbn_official")
+
+
+def _fixed_income_provider_name_for_source(source: str) -> str:
+    providers = {
+        "treasury_official": "treasury_fiscal_data",
+        "fmdq_market_data": "fmdq",
+        "cbn_official": "cbn",
+    }
+    return providers.get(source, source)
+
+
+def _fixed_income_sync_skipped_reason(
+    *,
+    provider_errors: list[str],
+    provider_backoffs: list[str],
+    skipped_sources: list[str],
+) -> str:
+    if provider_errors:
+        return "provider_error"
+    if provider_backoffs:
+        return "provider_backoff"
+    configured_sources = [
+        source
+        for source in _fixed_income_sync_sources()
+        if source != "fmdq_market_data" or _fmdq_fixed_income_configured()
+    ]
+    if configured_sources and all(
+        source in skipped_sources for source in configured_sources
+    ):
+        return "fresh"
+    return "no_provider_rows"
+
+
+def _fmdq_fixed_income_configured() -> bool:
+    return bool(settings.hf_fmdq_api_key and settings.fmdq_fixed_income_path)
+
+
+def _fixed_income_provider_sync_is_backing_off(
+    source: str,
+    now: datetime | None = None,
+) -> bool:
+    retry_after = _fixed_income_provider_retry_after.get(source)
+    if retry_after is None:
+        return False
+    return _aware_datetime(retry_after) > _aware_datetime(
+        now or datetime.now(timezone.utc)
+    )
+
+
+def _set_fixed_income_provider_sync_backoff(
+    source: str,
+    now: datetime | None = None,
+) -> datetime:
+    retry_after = (
+        _aware_datetime(now or datetime.now(timezone.utc))
+        + _FIXED_INCOME_PROVIDER_ERROR_BACKOFF
+    )
+    _fixed_income_provider_retry_after[source] = retry_after
+    return retry_after
+
+
+def _clear_fixed_income_provider_sync_backoff(source: str | None = None) -> None:
+    if source is None:
+        _fixed_income_provider_retry_after.clear()
+        return
+    _fixed_income_provider_retry_after.pop(source, None)
+
+
+async def _fixed_income_source_products_are_fresh(
     session: AsyncSession,
+    source: str,
     now: datetime,
 ) -> bool:
     ttl_seconds = max(settings.hf_invest_fixed_income_sync_ttl_seconds, 60)
@@ -788,12 +1444,60 @@ async def _treasury_products_are_fresh(
         select(InvestFixedIncomeProductRecord.updated_at)
         .where(
             InvestFixedIncomeProductRecord.is_active.is_(True),
-            InvestFixedIncomeProductRecord.quote_source == "treasury_official",
+            InvestFixedIncomeProductRecord.quote_source == source,
         )
         .order_by(InvestFixedIncomeProductRecord.updated_at.desc())
         .limit(1)
     )
     return latest_sync is not None and _aware_datetime(latest_sync) >= stale_cutoff
+
+
+async def _fetch_fixed_income_products_for_source(
+    source: str,
+    limit: int,
+    *,
+    synced_at: datetime,
+) -> list[FixedIncomeProduct]:
+    if source == "treasury_official":
+        rows = await _fetch_us_treasury_auction_rows(limit)
+        return [
+            product
+            for row in rows
+            if (
+                product := _product_from_treasury_auction_row(
+                    row,
+                    synced_at=synced_at,
+                )
+            )
+            is not None
+        ]
+    if source == "cbn_official":
+        rows = await _fetch_cbn_government_security_rows(limit)
+        return [
+            product
+            for row in rows
+            if (
+                product := _product_from_cbn_government_security_row(
+                    row,
+                    synced_at=synced_at,
+                )
+            )
+            is not None
+        ]
+    if source == "fmdq_market_data":
+        rows = await _fetch_fmdq_fixed_income_rows(limit)
+        return [
+            product
+            for row in rows
+            if (
+                product := _product_from_fmdq_fixed_income_row(
+                    row,
+                    synced_at=synced_at,
+                )
+            )
+            is not None
+        ]
+    return []
 
 
 async def _fetch_us_treasury_auction_rows(limit: int) -> list[dict]:
@@ -815,6 +1519,63 @@ async def _fetch_us_treasury_auction_rows(limit: int) -> list[dict]:
     if not isinstance(rows, list):
         raise ValueError("Treasury Fiscal Data response did not include data rows.")
     return [row for row in rows if isinstance(row, dict)]
+
+
+async def _fetch_cbn_government_security_rows(limit: int) -> list[dict]:
+    rows: list[dict] = []
+    last_error: httpx.HTTPError | None = None
+    async with httpx.AsyncClient(
+        base_url=settings.cbn_base_url,
+        timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
+    ) as client:
+        for market_code, market_label in _CBN_MARKET_SEGMENTS:
+            for path in _CBN_GOVERNMENT_SECURITY_DRILLDOWN_PATHS:
+                try:
+                    response = await client.get(
+                        path,
+                        params={"market": market_code},
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    last_error = exc
+                    continue
+                parsed = _parse_cbn_government_security_rows(
+                    response.text,
+                    market_code=market_code,
+                    market_label=market_label,
+                )
+                if parsed:
+                    rows.extend(parsed)
+                    break
+            if len(rows) >= limit:
+                break
+    if not rows and last_error is not None:
+        raise last_error
+    return rows[:limit]
+
+
+async def _fetch_fmdq_fixed_income_rows(limit: int) -> list[dict]:
+    path = settings.fmdq_fixed_income_path
+    api_key = settings.hf_fmdq_api_key
+    if not path or not api_key:
+        return []
+
+    headers = {"Accept": "application/json"}
+    header_name = settings.fmdq_api_key_header
+    if header_name.lower() == "authorization":
+        headers[header_name] = f"Bearer {api_key}"
+    else:
+        headers[header_name] = api_key
+
+    async with httpx.AsyncClient(
+        base_url=settings.fmdq_base_url,
+        timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
+        headers=headers,
+    ) as client:
+        response = await client.get(path, params={"limit": str(limit)})
+        response.raise_for_status()
+        rows = _json_rows(response.json())
+    return rows[:limit]
 
 
 def _product_from_treasury_auction_row(
@@ -917,7 +1678,7 @@ async def _upsert_fixed_income_products(
     return [_product_from_record(record) for record in records if record.is_active]
 
 
-async def _persist_official_product_quotes(
+async def _persist_provider_product_quotes(
     session: AsyncSession,
     products: list[FixedIncomeProduct],
     *,
@@ -925,7 +1686,7 @@ async def _persist_official_product_quotes(
 ) -> list[FixedIncomeQuote]:
     quotes: list[FixedIncomeQuote] = []
     for product in products:
-        quote = _official_treasury_quote(product, as_of=as_of)
+        quote = _provider_quote_from_product(product, as_of=as_of)
         if quote is None:
             continue
         session.add(_quote_record_from_quote(product, quote))
@@ -933,6 +1694,20 @@ async def _persist_official_product_quotes(
     if quotes:
         await session.flush()
     return quotes
+
+
+def _provider_quote_from_product(
+    product: FixedIncomeProduct,
+    *,
+    as_of: datetime,
+) -> FixedIncomeQuote | None:
+    if product.quote_source == "treasury_official":
+        return _official_treasury_quote(product, as_of=as_of)
+    if product.quote_source == "cbn_official":
+        return _official_ngn_quote(product, as_of=as_of)
+    if product.quote_source == "fmdq_market_data":
+        return _fmdq_market_quote(product, as_of=as_of)
+    return None
 
 
 def _official_treasury_quote(
@@ -1030,6 +1805,158 @@ def _official_treasury_quote(
         mid_yield_pct=yield_pct,
         last_yield_pct=yield_pct,
         raw_payload=payload,
+    )
+
+
+def _official_ngn_quote(
+    product: FixedIncomeProduct,
+    *,
+    as_of: datetime,
+) -> FixedIncomeQuote | None:
+    if product.quote_source != "cbn_official" or not product.provider_security_id:
+        return None
+
+    quote_as_of = _aware_datetime(product.source_as_of or as_of)
+    base_quote = fixed_income_quote(product, as_of=as_of)
+    payload = product.source_payload or {}
+    yield_pct = _row_decimal_field_any(
+        payload,
+        "true_yield",
+        "rate",
+        "marginal_rate",
+        "successful_bid_rates",
+    )
+    if yield_pct is None:
+        yield_pct = base_quote.yield_to_maturity_pct
+    else:
+        yield_pct = _percent(yield_pct)
+
+    quote_quality = QUOTE_QUALITY_OFFICIAL_AUCTION
+    stale_after = stale_after_for_quality(quote_quality, quote_as_of)
+    quote_stale = stale_after <= datetime.now(timezone.utc)
+    quote = FixedIncomeQuote(
+        as_of=quote_as_of,
+        stale_after=stale_after,
+        settlement_date=base_quote.settlement_date,
+        maturity_date=base_quote.maturity_date,
+        days_to_maturity=base_quote.days_to_maturity,
+        clean_price_per_100=base_quote.clean_price_per_100,
+        accrued_interest_per_100=base_quote.accrued_interest_per_100,
+        dirty_price_per_100=base_quote.dirty_price_per_100,
+        yield_to_maturity_pct=yield_pct,
+        next_coupon_date=base_quote.next_coupon_date,
+        face_value_increment=product.face_value_increment,
+        quote_status="stale_quote" if quote_stale else "official_reference",
+        quote_source=product.quote_source,
+        quote_provider="cbn",
+        quote_provider_label=provider_label("cbn"),
+        quote_quality=quote_quality,
+        quote_quality_label=quote_quality_label(quote_quality),
+        quote_type="official_reference",
+        quote_is_live=False,
+        quote_stale=quote_stale,
+        pricing_assumptions=(),
+        provider_security_id=product.provider_security_id,
+        mid_price_per_100=base_quote.dirty_price_per_100,
+        last_price_per_100=base_quote.clean_price_per_100,
+        mid_yield_pct=yield_pct,
+        last_yield_pct=yield_pct,
+        raw_payload=payload,
+    )
+    return FixedIncomeQuote(
+        **{
+            **quote.__dict__,
+            "pricing_assumptions": _pricing_assumptions(
+                product,
+                _assumption_payload(product, quote),
+            ),
+        }
+    )
+
+
+def _fmdq_market_quote(
+    product: FixedIncomeProduct,
+    *,
+    as_of: datetime,
+) -> FixedIncomeQuote | None:
+    if product.quote_source != "fmdq_market_data" or not product.provider_security_id:
+        return None
+
+    quote_as_of = _aware_datetime(product.source_as_of or as_of)
+    base_quote = fixed_income_quote(product, as_of=as_of)
+    payload = product.source_payload or {}
+    clean_price = _price(
+        _row_decimal_field_any(payload, "clean_price")
+        or _row_decimal_field_any(payload, "last_price")
+        or base_quote.clean_price_per_100
+    )
+    dirty_price = _price(
+        _row_decimal_field_any(payload, "dirty_price", "mid_price")
+        or clean_price + base_quote.accrued_interest_per_100
+    )
+    yield_pct = _row_decimal_field_any(
+        payload,
+        "yield_to_maturity",
+        "ytm",
+        "mid_yield",
+        "last_yield",
+        "yield",
+    )
+    if yield_pct is None:
+        yield_pct = base_quote.yield_to_maturity_pct
+    else:
+        yield_pct = _percent(yield_pct)
+
+    quote_quality = QUOTE_QUALITY_EVALUATED
+    stale_after = stale_after_for_quality(quote_quality, quote_as_of)
+    quote_stale = stale_after <= datetime.now(timezone.utc)
+    quote = FixedIncomeQuote(
+        as_of=quote_as_of,
+        stale_after=stale_after,
+        settlement_date=base_quote.settlement_date,
+        maturity_date=base_quote.maturity_date,
+        days_to_maturity=base_quote.days_to_maturity,
+        clean_price_per_100=clean_price,
+        accrued_interest_per_100=base_quote.accrued_interest_per_100,
+        dirty_price_per_100=dirty_price,
+        yield_to_maturity_pct=yield_pct,
+        next_coupon_date=base_quote.next_coupon_date,
+        face_value_increment=product.face_value_increment,
+        quote_status="stale_quote" if quote_stale else "provider_reference",
+        quote_source=product.quote_source,
+        quote_provider="fmdq",
+        quote_provider_label=provider_label("fmdq"),
+        quote_quality=quote_quality,
+        quote_quality_label=quote_quality_label(quote_quality),
+        quote_type="evaluated",
+        quote_is_live=False,
+        quote_stale=quote_stale,
+        pricing_assumptions=(),
+        provider_security_id=product.provider_security_id,
+        bid_price_per_100=(
+            _price(_row_decimal_field_any(payload, "bid_price"))
+            if _row_decimal_field_any(payload, "bid_price") is not None
+            else None
+        ),
+        ask_price_per_100=(
+            _price(_row_decimal_field_any(payload, "ask_price"))
+            if _row_decimal_field_any(payload, "ask_price") is not None
+            else None
+        ),
+        mid_price_per_100=dirty_price,
+        last_price_per_100=clean_price,
+        mid_yield_pct=yield_pct,
+        last_yield_pct=yield_pct,
+        raw_payload=payload,
+    )
+    return FixedIncomeQuote(
+        **{
+            **quote.__dict__,
+            "pricing_assumptions": _pricing_assumptions(
+                product,
+                _assumption_payload(product, quote),
+            ),
+        }
     )
 
 

@@ -27,6 +27,7 @@ from app.api.schemas.operating_core import InstrumentCreate
 from app.core.market_constants import QUOTE_HTTP_TIMEOUT_SECONDS
 from app.models import Instrument, InstrumentQuote, InvestMarketBoardItem
 from app.services.invest.fixed_income import (
+    FixedIncomeProduct,
     fixed_income_response_db,
     search_fixed_income_products_db,
 )
@@ -70,6 +71,7 @@ _TIINGO_SUPPORTED_TICKERS_URL = (
 )
 _MARKET_BOARD_METADATA_TTL = timedelta(days=1)
 _MARKET_BOARD_PROVIDER_ERROR_BACKOFF = timedelta(hours=6)
+_FIXED_INCOME_SHELF_MARKET_LIMITS = {"NG": 8, "US": 12}
 _market_board_sync_failure_until: datetime | None = None
 
 
@@ -151,8 +153,11 @@ async def build_invest_markets(session: AsyncSession) -> InvestMarketsResponse:
             )
         )
 
+    fixed_income_products = _fixed_income_shelf_products(
+        await search_fixed_income_products_db(session)
+    )
     fixed_income = []
-    for product in await search_fixed_income_products_db(session):
+    for product in fixed_income_products:
         fixed_income.append(await fixed_income_response_db(session, product))
 
     open_labels = [item.label for item in sessions if item.is_open]
@@ -213,6 +218,57 @@ def rates_board_tickers() -> tuple[str, ...]:
     return tuple(
         row.ticker for row in DEFAULT_MARKET_BOARD_RULES if row.group == "rates"
     )
+
+
+def _fixed_income_shelf_products(
+    products: list[FixedIncomeProduct],
+) -> list[FixedIncomeProduct]:
+    grouped: dict[str, list[FixedIncomeProduct]] = {}
+    for product in products:
+        grouped.setdefault(product.market.upper(), []).append(product)
+
+    ordered_markets = [market for market in ("NG", "US") if market in grouped] + sorted(
+        market for market in grouped if market not in {"NG", "US"}
+    )
+
+    selected: list[FixedIncomeProduct] = []
+    for market in ordered_markets:
+        limit = _FIXED_INCOME_SHELF_MARKET_LIMITS.get(market, 6)
+        selected.extend(sorted(grouped[market], key=_fixed_income_shelf_rank)[:limit])
+    return selected
+
+
+def _fixed_income_shelf_rank(product: FixedIncomeProduct) -> tuple:
+    return (
+        product.quote_source == "model_seed",
+        _fixed_income_instrument_rank(product.instrument_type),
+        _fixed_income_maturity_days(product),
+        product.ticker,
+    )
+
+
+def _fixed_income_instrument_rank(instrument_type: str) -> int:
+    order = {
+        "treasury_bill": 0,
+        "treasury_note": 1,
+        "government_bond": 2,
+        "inflation_linked_bond": 3,
+        "floating_rate_note": 4,
+        "commercial_paper": 5,
+    }
+    return order.get(instrument_type, 9)
+
+
+def _fixed_income_maturity_days(product: FixedIncomeProduct) -> int:
+    if product.maturity_days is not None:
+        return product.maturity_days
+    if product.maturity_date is None:
+        return 999999
+    try:
+        maturity = datetime.fromisoformat(product.maturity_date).date()
+    except ValueError:
+        return 999999
+    return max((maturity - datetime.now(timezone.utc).date()).days, 0)
 
 
 async def sync_market_board_from_tiingo_supported(

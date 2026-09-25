@@ -29,8 +29,13 @@ from app.services.invest.accounts import (
     _withheld_capital_signals,
 )
 from app.services.invest.fixed_income import (
+    _fmdq_market_quote,
+    _official_ngn_quote,
     _official_treasury_quote,
+    _parse_cbn_government_security_rows,
     _preferred_fixed_income_records,
+    _product_from_cbn_government_security_row,
+    _product_from_fmdq_fixed_income_row,
     _product_from_treasury_auction_row,
     _record_from_product,
     _quote_from_record,
@@ -49,6 +54,7 @@ from app.services.invest.markets import (
     _apply_tiingo_metadata_to_board_item,
     _board_item_from_rule,
     _clear_market_board_sync_backoff,
+    _fixed_income_shelf_products,
     _market_board_sync_is_backing_off,
     _parse_tiingo_supported_tickers,
     _set_market_board_sync_backoff,
@@ -433,6 +439,114 @@ class FixedIncomeScopeTests(TestCase):
         self.assertEqual(quote.yield_to_maturity_pct, Decimal("4.51"))
         self.assertFalse(quote.quote_is_live)
 
+    def test_cbn_table_rows_map_to_ngn_fixed_income_products(self) -> None:
+        html = """
+        <table>
+          <tr>
+            <th>Auction Date</th><th>Security Type</th><th>Tenor</th>
+            <th>Maturity Date</th><th>Total Subscription (N mn)</th>
+            <th>Total Successful (N mn)</th><th>Range Bid</th>
+            <th>Successful Bid Rates</th><th>Rate</th><th>True Yield</th>
+            <th>Amount Offered (N mn)</th>
+          </tr>
+          <tr>
+            <td>September-16-2026</td><td>NTB</td><td>182Day</td>
+            <td>March-17-2027</td><td>450,940.0000</td>
+            <td>419,730.0000</td><td>18.2000 - 20.0000</td>
+            <td>18.2000 - 19.0500</td><td>19.0500</td>
+            <td>19.7000</td><td>200,000.0000</td>
+          </tr>
+        </table>
+        """
+        rows = _parse_cbn_government_security_rows(
+            html,
+            market_code="NTBP",
+            market_label="Nigerian Treasury Bills",
+        )
+        synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        product = _product_from_cbn_government_security_row(
+            rows[0],
+            synced_at=synced_at,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(product)
+        assert product is not None
+        self.assertEqual(product.ticker, "NG-TBILL-182D-20270317")
+        self.assertEqual(product.market, "NG")
+        self.assertEqual(product.currency, "NGN")
+        self.assertEqual(product.quote_source, "cbn_official")
+        self.assertEqual(product.provider_security_id, "NTBP|NTB|182-Day|2027-03-17")
+        self.assertEqual(product.indicative_yield_pct, Decimal("19.70"))
+        self.assertEqual(product.source_as_of, synced_at)
+
+    def test_official_ngn_quote_uses_cbn_provider_metadata(self) -> None:
+        synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        product = _product_from_cbn_government_security_row(
+            {
+                "auction_date": "September-16-2026",
+                "security_type": "NTB",
+                "tenor": "91Day",
+                "maturity_date": "December-16-2026",
+                "rate": "18.5000",
+                "true_yield": "18.9400",
+                "source_market_code": "NTBP",
+                "source_market_label": "Nigerian Treasury Bills",
+            },
+            synced_at=synced_at,
+        )
+        assert product is not None
+
+        quote = _official_ngn_quote(product, as_of=synced_at)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote.quote_provider, "cbn")
+        self.assertEqual(quote.quote_provider_label, "CBN")
+        self.assertEqual(quote.quote_quality, "official_auction")
+        self.assertEqual(quote.quote_type, "official_reference")
+        self.assertEqual(quote.provider_security_id, product.provider_security_id)
+        self.assertEqual(quote.yield_to_maturity_pct, Decimal("18.94"))
+        self.assertFalse(quote.quote_is_live)
+
+    def test_fmdq_row_maps_to_ngn_market_data_product_and_quote(self) -> None:
+        synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        product = _product_from_fmdq_fixed_income_row(
+            {
+                "symbol": "FGN-2031",
+                "isin": "NGFGN2031S01",
+                "security_name": "12.50% FGN Bond 2031",
+                "security_type": "FGN Bond",
+                "tenor": "5-Year",
+                "maturity_date": "2031-09-16",
+                "coupon_rate": "12.50",
+                "yield_to_maturity": "17.25",
+                "clean_price": "92.125",
+                "dirty_price": "93.500",
+                "bid_price": "92.000",
+                "ask_price": "92.250",
+                "as_of": "2026-09-25",
+            },
+            synced_at=synced_at,
+        )
+        assert product is not None
+
+        quote = _fmdq_market_quote(product, as_of=synced_at)
+
+        self.assertEqual(product.ticker, "FGN-2031")
+        self.assertEqual(product.quote_source, "fmdq_market_data")
+        self.assertEqual(product.provider_security_id, "NGFGN2031S01")
+        self.assertEqual(product.coupon_rate_pct, Decimal("12.50"))
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote.quote_provider, "fmdq")
+        self.assertEqual(quote.quote_quality, "evaluated_price")
+        self.assertEqual(quote.quote_type, "evaluated")
+        self.assertEqual(quote.clean_price_per_100, Decimal("92.1250"))
+        self.assertEqual(quote.dirty_price_per_100, Decimal("93.5000"))
+        self.assertEqual(quote.bid_price_per_100, Decimal("92.0000"))
+        self.assertEqual(quote.ask_price_per_100, Decimal("92.2500"))
+
     def test_provider_products_hide_matching_seed_rows(self) -> None:
         seed_product = get_fixed_income_product("US-TBILL-13W")
         ng_product = get_fixed_income_product("NG-TBILL-182D")
@@ -572,14 +686,30 @@ class FixedIncomeScopeTests(TestCase):
             },
             synced_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
         )
+        official_ng_bill = _product_from_cbn_government_security_row(
+            {
+                "auction_date": "September-16-2026",
+                "security_type": "NTB",
+                "tenor": "91Day",
+                "maturity_date": "December-16-2026",
+                "rate": "18.5000",
+                "source_market_code": "NTBP",
+                "source_market_label": "Nigerian Treasury Bills",
+            },
+            synced_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+        )
         assert us_bill is not None
         assert ng_bill is not None
         assert official_bill is not None
+        assert official_ng_bill is not None
 
         us_providers = [item.provider for item in fixed_income_provider_plan(us_bill)]
         ng_providers = [item.provider for item in fixed_income_provider_plan(ng_bill)]
         official_providers = [
             item.provider for item in fixed_income_provider_plan(official_bill)
+        ]
+        official_ng_providers = [
+            item.provider for item in fixed_income_provider_plan(official_ng_bill)
         ]
 
         self.assertEqual(us_providers[0], "internal_model")
@@ -587,9 +717,10 @@ class FixedIncomeScopeTests(TestCase):
         self.assertIn("fred_curve", us_providers)
         self.assertIn("tiingo_proxy", us_providers)
         self.assertEqual(official_providers[0], "treasury_fiscal_data")
+        self.assertEqual(official_ng_providers[0], "cbn")
         self.assertEqual(ng_providers[0], "internal_model")
         self.assertIn("fmdq", ng_providers)
-        self.assertIn("cbn", ng_providers)
+        self.assertNotIn("cbn", ng_providers)
 
     def test_us_cash_bills_point_to_listed_paper_proxy(self) -> None:
         bill = get_fixed_income_product("US-TBILL-13W")
@@ -746,6 +877,39 @@ class InvestMarketsBoardTests(TestCase):
         self.assertEqual(
             rates_board_tickers(),
             ("BIL", "SHY", "IEF", "TLT"),
+        )
+
+    def test_fixed_income_shelf_keeps_ngn_visible_when_us_sync_expands(self) -> None:
+        ng_bill = get_fixed_income_product("NG-TBILL-182D")
+        ng_bond = get_fixed_income_product("FGN-BOND-2029")
+        assert ng_bill is not None
+        assert ng_bond is not None
+        synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        us_products = [
+            _product_from_treasury_auction_row(
+                {
+                    "cusip": f"912797A{index:02d}",
+                    "security_type": "Bill",
+                    "security_term": "13-Week",
+                    "auction_date": "2026-09-24",
+                    "issue_date": "2026-09-29",
+                    "maturity_date": "2026-12-29",
+                    "high_investment_rate": "4.512",
+                },
+                synced_at=synced_at,
+            )
+            for index in range(20)
+        ]
+        products = [ng_bill, ng_bond] + [
+            product for product in us_products if product is not None
+        ]
+
+        shelf = _fixed_income_shelf_products(products)
+
+        self.assertEqual([product.market for product in shelf[:2]], ["NG", "NG"])
+        self.assertLessEqual(
+            len([product for product in shelf if product.market == "US"]),
+            12,
         )
 
     def test_tiingo_supported_tickers_parser_filters_requested_symbols(self) -> None:

@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     hf_alpaca_broker_base_url: str = "https://broker-api.alpaca.markets"
     hf_fmdq_api_key: str | None = None
     hf_fmdq_base_url: str = "https://api.fmdqgroup.com"
+    hf_fmdq_fixed_income_path: str | None = None
+    hf_fmdq_api_key_header: str = "Authorization"
     hf_fred_api_key: str | None = None
     hf_fred_base_url: str = "https://api.stlouisfed.org/fred"
     hf_fiscal_data_base_url: str = (
@@ -204,6 +206,16 @@ class Settings(BaseSettings):
     @property
     def fmdq_base_url(self) -> str:
         return self.hf_fmdq_base_url.strip().rstrip("/")
+
+    @property
+    def fmdq_fixed_income_path(self) -> str | None:
+        if not self.hf_fmdq_fixed_income_path:
+            return None
+        return self.hf_fmdq_fixed_income_path.strip()
+
+    @property
+    def fmdq_api_key_header(self) -> str:
+        return self.hf_fmdq_api_key_header.strip() or "Authorization"
 
     @property
     def fred_base_url(self) -> str:
