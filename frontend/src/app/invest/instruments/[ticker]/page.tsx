@@ -4,10 +4,13 @@ import { getServerAccessToken } from "@/lib/supabase/server";
 
 export default async function InvestInstrumentPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ ticker: string }>;
+  searchParams: Promise<{ order?: string }>;
 }) {
   const { ticker } = await params;
+  const query = await searchParams;
   let instrument: InvestInstrument | null = null;
   const accessToken = await getServerAccessToken();
   try {
@@ -24,5 +27,10 @@ export default async function InvestInstrumentPage({
     );
   }
 
-  return <InvestInstrumentDetail instrument={instrument} />;
+  return (
+    <InvestInstrumentDetail
+      instrument={instrument}
+      initialTab={query.order === "1" ? "order" : "overview"}
+    />
+  );
 }

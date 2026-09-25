@@ -1609,6 +1609,9 @@ class InvestFixedIncomeProduct(Base, TimestampMixin):
     quote_source: Mapped[str] = mapped_column(
         String(64), nullable=False, default="model_seed"
     )
+    provider_security_id: Mapped[str | None] = mapped_column(String(128))
+    source_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     quotes: Mapped[list["InvestFixedIncomeQuote"]] = relationship(
@@ -1623,6 +1626,11 @@ class InvestFixedIncomeProduct(Base, TimestampMixin):
             "is_active",
             "market",
             "instrument_type",
+        ),
+        Index(
+            "ix_invest_fixed_income_products_provider_security",
+            "quote_source",
+            "provider_security_id",
         ),
     )
 

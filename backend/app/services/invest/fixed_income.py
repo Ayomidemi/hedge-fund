@@ -4,11 +4,12 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -19,6 +20,8 @@ from app.api.schemas.invest import (
     InvestFixedIncomeProductResponse,
     InvestRiskCheckResponse,
 )
+from app.core.config import settings
+from app.core.market_constants import QUOTE_HTTP_TIMEOUT_SECONDS
 from app.api.schemas.operating_core import InstrumentCreate
 from app.models import (
     Instrument,
@@ -28,7 +31,9 @@ from app.models import (
     InvestYieldCurvePoint,
 )
 from app.services.invest.fixed_income_providers import (
+    FixedIncomeProviderCapability,
     IMPLEMENTED_MODEL_PROVIDER,
+    QUOTE_QUALITY_OFFICIAL_AUCTION,
     QUOTE_QUALITY_SEED_MODEL,
     fixed_income_provider_plan,
     provider_label,
@@ -75,6 +80,9 @@ class FixedIncomeProduct:
     day_count_convention: str = "ACT/365"
     compounding_basis: str = "simple"
     quote_source: str = "model_seed"
+    provider_security_id: str | None = None
+    source_as_of: datetime | None = None
+    source_payload: dict = field(default_factory=dict)
     db_id: UUID | None = None
 
 
@@ -121,7 +129,33 @@ class FixedIncomeQuote:
     raw_payload: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class FixedIncomeProductSyncResult:
+    requested_count: int
+    matched_count: int
+    upserted_count: int
+    quote_count: int
+    skipped_reason: str | None = None
+
+
 _SEED_DIR = Path(__file__).with_name("seed_data")
+_TREASURY_AUCTIONS_PATH = "/v1/accounting/od/auctions_query"
+_TREASURY_AUCTION_FIELDS = (
+    "record_date",
+    "cusip",
+    "security_type",
+    "security_term",
+    "auction_date",
+    "issue_date",
+    "maturity_date",
+    "high_yield",
+    "high_investment_rate",
+    "high_discnt_rate",
+    "int_rate",
+    "price_per100",
+    "total_accepted",
+    "offering_amt",
+)
 
 
 @lru_cache(maxsize=1)
@@ -167,6 +201,117 @@ def _seed_decimal(value) -> Decimal | None:
     if value is None:
         return None
     return Decimal(str(value))
+
+
+def _row_text(row: dict, key: str) -> str:
+    value = row.get(key)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _row_decimal_any(row: dict, *keys: str) -> Decimal | None:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        text = str(value).strip().replace(",", "").rstrip("%")
+        if not text or text.lower() in {"null", "n/a", "na"}:
+            continue
+        try:
+            parsed = Decimal(text)
+        except InvalidOperation:
+            continue
+        if parsed.is_finite():
+            return parsed
+    return None
+
+
+def _row_date(value) -> date | None:
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(value).strip()[:10])
+    except ValueError:
+        return None
+
+
+def _treasury_instrument_type(security_type: str) -> str | None:
+    normalized = security_type.strip().lower()
+    if normalized == "bill":
+        return "treasury_bill"
+    if normalized == "note":
+        return "treasury_note"
+    if normalized == "bond":
+        return "government_bond"
+    if normalized in {"tips", "tip"} or "inflation" in normalized:
+        return "inflation_linked_bond"
+    if normalized in {"frn", "floating rate note"} or "floating" in normalized:
+        return "floating_rate_note"
+    return None
+
+
+def _treasury_security_label(security_type: str) -> str:
+    instrument_type = _treasury_instrument_type(security_type)
+    labels = {
+        "treasury_bill": "Bill",
+        "treasury_note": "Note",
+        "government_bond": "Bond",
+        "inflation_linked_bond": "TIPS",
+        "floating_rate_note": "FRN",
+    }
+    return labels.get(instrument_type or "", security_type.strip().title())
+
+
+def _treasury_coupon_frequency(instrument_type: str) -> int:
+    if instrument_type == "treasury_bill":
+        return 0
+    if instrument_type == "floating_rate_note":
+        return 4
+    return 2
+
+
+def _treasury_auction_yield(row: dict, *, is_bill: bool) -> Decimal | None:
+    if is_bill:
+        value = _row_decimal_any(
+            row,
+            "high_investment_rate",
+            "investment_rate",
+            "high_discnt_rate",
+            "high_discount_rate",
+            "high_yield",
+        )
+    else:
+        value = _row_decimal_any(row, "high_yield", "high_investment_rate")
+    return _percent(value) if value is not None else None
+
+
+def _treasury_expected_payout(instrument_type: str) -> str:
+    if instrument_type == "treasury_bill":
+        return "Discount bill; face value is repaid at maturity."
+    if instrument_type == "floating_rate_note":
+        return "Floating coupons plus principal repayment at maturity."
+    if instrument_type == "inflation_linked_bond":
+        return "Inflation-adjusted coupon and principal repayment at maturity."
+    return "Coupons plus principal repayment at maturity."
+
+
+def _treasury_proxy_ticker(instrument_type: str) -> str | None:
+    if instrument_type == "treasury_bill":
+        return "BIL"
+    if instrument_type in {"treasury_note", "floating_rate_note"}:
+        return "SHY"
+    if instrument_type == "inflation_linked_bond":
+        return "TIP"
+    return "IEF"
+
+
+def _compact_treasury_payload(row: dict) -> dict:
+    return {
+        key: row.get(key)
+        for key in _TREASURY_AUCTION_FIELDS
+        if row.get(key) not in (None, "")
+    }
 
 
 FIXED_INCOME_PRODUCTS: tuple[FixedIncomeProduct, ...] = (
@@ -264,6 +409,7 @@ async def search_fixed_income_products_db(
             raise
         await _rollback_after_fixed_income_fallback(session)
         return search_fixed_income_products(query, market=market)
+    rows = _preferred_fixed_income_records(rows)
     products: list[FixedIncomeProduct] = []
     for row in rows:
         if normalized_market and normalized_market not in {"ALL", row.market}:
@@ -327,6 +473,84 @@ async def ensure_fixed_income_seed_products(session: AsyncSession) -> bool:
     return True
 
 
+async def sync_fixed_income_products_from_providers(
+    session: AsyncSession,
+    *,
+    force: bool = False,
+    limit: int | None = None,
+) -> FixedIncomeProductSyncResult:
+    """Sync provider-backed fixed-income products into the local registry."""
+    if not await _fixed_income_table_exists(
+        session, "invest_fixed_income_products"
+    ) or not await _fixed_income_table_exists(session, "invest_fixed_income_quotes"):
+        return FixedIncomeProductSyncResult(
+            requested_count=0,
+            matched_count=0,
+            upserted_count=0,
+            quote_count=0,
+            skipped_reason="fixed_income_tables_missing",
+        )
+
+    now = datetime.now(timezone.utc)
+    try:
+        if not force and await _treasury_products_are_fresh(session, now):
+            return FixedIncomeProductSyncResult(
+                requested_count=0,
+                matched_count=0,
+                upserted_count=0,
+                quote_count=0,
+                skipped_reason="fresh",
+            )
+
+        requested_limit = max(
+            1, min(limit or settings.hf_invest_fixed_income_sync_limit, 100)
+        )
+        rows = await _fetch_us_treasury_auction_rows(requested_limit)
+        products = [
+            product
+            for row in rows
+            if (
+                product := _product_from_treasury_auction_row(
+                    row,
+                    synced_at=now,
+                )
+            )
+            is not None
+        ]
+        upserted = await _upsert_fixed_income_products(session, products)
+        quotes = await _persist_official_product_quotes(session, upserted, as_of=now)
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning(
+            "invest_fixed_income_provider_sync_failed",
+            extra={"provider": "treasury_fiscal_data", "error": str(exc)},
+        )
+        return FixedIncomeProductSyncResult(
+            requested_count=limit or settings.hf_invest_fixed_income_sync_limit,
+            matched_count=0,
+            upserted_count=0,
+            quote_count=0,
+            skipped_reason="provider_error",
+        )
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_missing_fixed_income_table(exc):
+            raise
+        await _rollback_after_fixed_income_fallback(session)
+        return FixedIncomeProductSyncResult(
+            requested_count=0,
+            matched_count=0,
+            upserted_count=0,
+            quote_count=0,
+            skipped_reason="fixed_income_tables_missing",
+        )
+
+    return FixedIncomeProductSyncResult(
+        requested_count=requested_limit,
+        matched_count=len(products),
+        upserted_count=len(upserted),
+        quote_count=len(quotes),
+    )
+
+
 async def refresh_fixed_income_quotes(
     session: AsyncSession,
     products: list[FixedIncomeProduct] | None = None,
@@ -352,7 +576,10 @@ async def refresh_fixed_income_quotes(
                 await _rollback_after_fixed_income_fallback(session)
                 products = list(FIXED_INCOME_PRODUCTS)
     elif not await _fixed_income_table_exists(session, "invest_fixed_income_quotes"):
-        return [fixed_income_quote(product) for product in products]
+        quotes = []
+        for product in products:
+            quotes.append(await source_fixed_income_quote(session, product))
+        return quotes
 
     quotes: list[FixedIncomeQuote] = []
     for product in products:
@@ -377,9 +604,9 @@ async def latest_fixed_income_quote(
     refresh_if_stale: bool = True,
 ) -> FixedIncomeQuote:
     if product.db_id is None:
-        return fixed_income_quote(product)
+        return await source_fixed_income_quote(session, product)
     if not await _fixed_income_table_exists(session, "invest_fixed_income_quotes"):
-        return fixed_income_quote(product)
+        return await source_fixed_income_quote(session, product)
 
     try:
         record = await session.scalar(
@@ -392,14 +619,14 @@ async def latest_fixed_income_quote(
         if not _is_missing_fixed_income_table(exc):
             raise
         await _rollback_after_fixed_income_fallback(session)
-        return fixed_income_quote(product)
+        return await source_fixed_income_quote(session, product)
     now = datetime.now(timezone.utc)
     if record is not None:
         stale_after = _aware_datetime(record.stale_after)
     if record is not None and (not refresh_if_stale or stale_after > now):
         return _quote_from_record(product, record, now=now)
 
-    quote = fixed_income_quote(product, as_of=now)
+    quote = await source_fixed_income_quote(session, product, as_of=now)
     try:
         session.add(_quote_record_from_quote(product, quote))
         await session.flush()
@@ -408,6 +635,56 @@ async def latest_fixed_income_quote(
             raise
         await _rollback_after_fixed_income_fallback(session)
     return quote
+
+
+async def source_fixed_income_quote(
+    session: AsyncSession | None,
+    product: FixedIncomeProduct,
+    *,
+    as_of: datetime | date | None = None,
+) -> FixedIncomeQuote:
+    """Resolve a quote through the provider ladder before falling back to model.
+
+    Provider adapters can return ``None`` to decline a product or signal that no
+    fresh mark is available. The internal model remains the final implemented
+    adapter so page loads and paper trading keep working while feeds are added.
+    """
+    quote_as_of = _as_datetime(as_of)
+    for capability in fixed_income_provider_plan(product):
+        if not capability.enabled:
+            continue
+        quote = await _quote_from_provider_capability(
+            session,
+            product,
+            capability,
+            as_of=quote_as_of,
+        )
+        if quote is not None:
+            return quote
+    return fixed_income_quote(product, as_of=quote_as_of)
+
+
+async def _quote_from_provider_capability(
+    session: AsyncSession | None,
+    product: FixedIncomeProduct,
+    capability: FixedIncomeProviderCapability,
+    *,
+    as_of: datetime,
+) -> FixedIncomeQuote | None:
+    _ = session
+    if capability.provider == "treasury_fiscal_data":
+        return _official_treasury_quote(product, as_of=as_of)
+    if capability.provider == IMPLEMENTED_MODEL_PROVIDER.provider:
+        return fixed_income_quote(product, as_of=as_of)
+    logger.warning(
+        "fixed_income_provider_adapter_missing",
+        extra={
+            "provider": capability.provider,
+            "source": capability.source,
+            "ticker": product.ticker,
+        },
+    )
+    return None
 
 
 async def ensure_fixed_income_instrument(
@@ -498,6 +775,261 @@ def fixed_income_quote(
         pricing_assumptions=_pricing_assumptions(product),
         mid_price_per_100=dirty_price_per_100,
         mid_yield_pct=yield_to_maturity_pct,
+    )
+
+
+async def _treasury_products_are_fresh(
+    session: AsyncSession,
+    now: datetime,
+) -> bool:
+    ttl_seconds = max(settings.hf_invest_fixed_income_sync_ttl_seconds, 60)
+    stale_cutoff = now - timedelta(seconds=ttl_seconds)
+    latest_sync = await session.scalar(
+        select(InvestFixedIncomeProductRecord.updated_at)
+        .where(
+            InvestFixedIncomeProductRecord.is_active.is_(True),
+            InvestFixedIncomeProductRecord.quote_source == "treasury_official",
+        )
+        .order_by(InvestFixedIncomeProductRecord.updated_at.desc())
+        .limit(1)
+    )
+    return latest_sync is not None and _aware_datetime(latest_sync) >= stale_cutoff
+
+
+async def _fetch_us_treasury_auction_rows(limit: int) -> list[dict]:
+    async with httpx.AsyncClient(
+        base_url=settings.fiscal_data_base_url,
+        timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
+    ) as client:
+        response = await client.get(
+            _TREASURY_AUCTIONS_PATH,
+            params={
+                "fields": ",".join(_TREASURY_AUCTION_FIELDS),
+                "sort": "-auction_date",
+                "page[size]": str(limit),
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        raise ValueError("Treasury Fiscal Data response did not include data rows.")
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _product_from_treasury_auction_row(
+    row: dict,
+    *,
+    synced_at: datetime,
+) -> FixedIncomeProduct | None:
+    cusip = _row_text(row, "cusip").upper()
+    security_type = _row_text(row, "security_type")
+    maturity = _row_date(row.get("maturity_date"))
+    if not cusip or not security_type or maturity is None:
+        return None
+
+    instrument_type = _treasury_instrument_type(security_type)
+    if instrument_type is None:
+        return None
+    issue_date = _row_date(row.get("issue_date"))
+    maturity_days = (
+        max((maturity - issue_date).days, 0) if issue_date is not None else None
+    )
+    is_bill = instrument_type == "treasury_bill"
+    coupon_frequency = _treasury_coupon_frequency(instrument_type)
+    indicative_yield = _treasury_auction_yield(row, is_bill=is_bill)
+    auction_price = _row_decimal_any(row, "price_per100", "price_per_100")
+    if indicative_yield is None and auction_price is None:
+        return None
+    coupon_rate = Decimal("0") if is_bill else _row_decimal_any(row, "int_rate")
+
+    security_label = _treasury_security_label(security_type)
+    tenor = _row_text(row, "security_term") or "Marketable"
+    return FixedIncomeProduct(
+        ticker=f"US-TSY-{cusip}",
+        name=f"US Treasury {security_label} {tenor} {maturity.isoformat()}",
+        market="US",
+        currency="USD",
+        issuer="United States Treasury",
+        instrument_type=instrument_type,
+        tenor=tenor,
+        maturity_date=maturity.isoformat(),
+        maturity_days=maturity_days,
+        indicative_yield_pct=indicative_yield,
+        coupon_rate_pct=coupon_rate,
+        coupon_frequency_per_year=coupon_frequency,
+        settlement_days=1,
+        minimum_order_amount=Decimal("100.00"),
+        face_value_increment=Decimal("100.00"),
+        liquidity="Very high",
+        risk_level="Low",
+        expected_payout=_treasury_expected_payout(instrument_type),
+        trade_status="paper_tradable",
+        asset_class="cash_equivalent" if is_bill else "bond",
+        exchange="TREASURY",
+        proxy_ticker=_treasury_proxy_ticker(instrument_type),
+        proxy_label=None,
+        retail_notes=("Official auction data; secondary-market execution can differ.",),
+        day_count_convention="ACT/365",
+        compounding_basis="simple",
+        quote_source="treasury_official",
+        provider_security_id=cusip,
+        source_as_of=synced_at,
+        source_payload=_compact_treasury_payload(row),
+    )
+
+
+async def _upsert_fixed_income_products(
+    session: AsyncSession,
+    products: list[FixedIncomeProduct],
+) -> list[FixedIncomeProduct]:
+    if not products:
+        return []
+
+    tickers = [product.ticker for product in products]
+    existing_by_ticker = {
+        record.ticker: record
+        for record in await session.scalars(
+            select(InvestFixedIncomeProductRecord).where(
+                InvestFixedIncomeProductRecord.ticker.in_(tickers)
+            )
+        )
+    }
+    for product in products:
+        record = existing_by_ticker.get(product.ticker)
+        if record is None:
+            session.add(_record_from_product(product))
+            continue
+        _apply_fixed_income_product_update(record, product)
+
+    await session.flush()
+    records = list(
+        await session.scalars(
+            select(InvestFixedIncomeProductRecord)
+            .where(InvestFixedIncomeProductRecord.ticker.in_(tickers))
+            .order_by(
+                InvestFixedIncomeProductRecord.market.asc(),
+                InvestFixedIncomeProductRecord.instrument_type.asc(),
+                InvestFixedIncomeProductRecord.maturity_date.asc(),
+            )
+        )
+    )
+    return [_product_from_record(record) for record in records if record.is_active]
+
+
+async def _persist_official_product_quotes(
+    session: AsyncSession,
+    products: list[FixedIncomeProduct],
+    *,
+    as_of: datetime,
+) -> list[FixedIncomeQuote]:
+    quotes: list[FixedIncomeQuote] = []
+    for product in products:
+        quote = _official_treasury_quote(product, as_of=as_of)
+        if quote is None:
+            continue
+        session.add(_quote_record_from_quote(product, quote))
+        quotes.append(quote)
+    if quotes:
+        await session.flush()
+    return quotes
+
+
+def _official_treasury_quote(
+    product: FixedIncomeProduct,
+    *,
+    as_of: datetime,
+) -> FixedIncomeQuote | None:
+    if product.quote_source != "treasury_official" or not product.provider_security_id:
+        return None
+
+    quote_as_of = _aware_datetime(product.source_as_of or as_of)
+    base_quote = fixed_income_quote(product, as_of=as_of)
+    payload = product.source_payload or {}
+    auction_price = _row_decimal_any(payload, "price_per100", "price_per_100")
+    if auction_price is not None and auction_price > 0:
+        clean_price = _price(auction_price)
+        accrued_interest = (
+            Decimal("0.0000")
+            if product.instrument_type == "treasury_bill"
+            else base_quote.accrued_interest_per_100
+        )
+        dirty_price = _price(clean_price + accrued_interest)
+    else:
+        clean_price = base_quote.clean_price_per_100
+        accrued_interest = base_quote.accrued_interest_per_100
+        dirty_price = base_quote.dirty_price_per_100
+
+    yield_pct = _treasury_auction_yield(
+        payload,
+        is_bill=product.instrument_type == "treasury_bill",
+    )
+    if yield_pct is None:
+        yield_pct = base_quote.yield_to_maturity_pct
+
+    quote_quality = QUOTE_QUALITY_OFFICIAL_AUCTION
+    stale_after = stale_after_for_quality(quote_quality, quote_as_of)
+    quote_stale = stale_after <= datetime.now(timezone.utc)
+    assumptions = _assumption_payload(
+        product,
+        FixedIncomeQuote(
+            as_of=quote_as_of,
+            stale_after=stale_after,
+            settlement_date=base_quote.settlement_date,
+            maturity_date=base_quote.maturity_date,
+            days_to_maturity=base_quote.days_to_maturity,
+            clean_price_per_100=clean_price,
+            accrued_interest_per_100=accrued_interest,
+            dirty_price_per_100=dirty_price,
+            yield_to_maturity_pct=yield_pct,
+            next_coupon_date=base_quote.next_coupon_date,
+            face_value_increment=product.face_value_increment,
+            quote_status="official_reference",
+            quote_source=product.quote_source,
+            quote_provider="treasury_fiscal_data",
+            quote_provider_label=provider_label("treasury_fiscal_data"),
+            quote_quality=quote_quality,
+            quote_quality_label=quote_quality_label(quote_quality),
+            quote_type="official_reference",
+            quote_is_live=False,
+            quote_stale=quote_stale,
+            pricing_assumptions=(),
+            provider_security_id=product.provider_security_id,
+            mid_price_per_100=dirty_price,
+            last_price_per_100=clean_price,
+            mid_yield_pct=yield_pct,
+            last_yield_pct=yield_pct,
+            raw_payload=payload,
+        ),
+    )
+    return FixedIncomeQuote(
+        as_of=quote_as_of,
+        stale_after=stale_after,
+        settlement_date=base_quote.settlement_date,
+        maturity_date=base_quote.maturity_date,
+        days_to_maturity=base_quote.days_to_maturity,
+        clean_price_per_100=clean_price,
+        accrued_interest_per_100=accrued_interest,
+        dirty_price_per_100=dirty_price,
+        yield_to_maturity_pct=yield_pct,
+        next_coupon_date=base_quote.next_coupon_date,
+        face_value_increment=product.face_value_increment,
+        quote_status="stale_quote" if quote_stale else "official_reference",
+        quote_source=product.quote_source,
+        quote_provider="treasury_fiscal_data",
+        quote_provider_label=provider_label("treasury_fiscal_data"),
+        quote_quality=quote_quality,
+        quote_quality_label=quote_quality_label(quote_quality),
+        quote_type="official_reference",
+        quote_is_live=False,
+        quote_stale=quote_stale,
+        pricing_assumptions=_pricing_assumptions(product, assumptions),
+        provider_security_id=product.provider_security_id,
+        mid_price_per_100=dirty_price,
+        last_price_per_100=clean_price,
+        mid_yield_pct=yield_pct,
+        last_yield_pct=yield_pct,
+        raw_payload=payload,
     )
 
 
@@ -637,6 +1169,9 @@ def _record_from_product(
         day_count_convention=product.day_count_convention,
         compounding_basis=product.compounding_basis,
         quote_source=product.quote_source,
+        provider_security_id=product.provider_security_id,
+        source_as_of=product.source_as_of,
+        source_payload=product.source_payload,
         is_active=True,
     )
 
@@ -676,8 +1211,74 @@ def _product_from_record(
         day_count_convention=record.day_count_convention,
         compounding_basis=record.compounding_basis,
         quote_source=record.quote_source,
+        provider_security_id=getattr(record, "provider_security_id", None),
+        source_as_of=getattr(record, "source_as_of", None),
+        source_payload=getattr(record, "source_payload", None) or {},
         db_id=record.id,
     )
+
+
+def _apply_fixed_income_product_update(
+    record: InvestFixedIncomeProductRecord,
+    product: FixedIncomeProduct,
+) -> None:
+    updates = {
+        "name": product.name,
+        "market": product.market,
+        "currency": product.currency,
+        "issuer": product.issuer,
+        "instrument_type": product.instrument_type,
+        "tenor": product.tenor,
+        "maturity_date": (
+            date.fromisoformat(product.maturity_date)
+            if product.maturity_date is not None
+            else None
+        ),
+        "maturity_days": product.maturity_days,
+        "indicative_yield_pct": product.indicative_yield_pct,
+        "coupon_rate_pct": product.coupon_rate_pct,
+        "coupon_frequency_per_year": product.coupon_frequency_per_year,
+        "settlement_days": product.settlement_days,
+        "minimum_order_amount": product.minimum_order_amount,
+        "face_value_increment": product.face_value_increment,
+        "liquidity": product.liquidity,
+        "risk_level": product.risk_level,
+        "expected_payout": product.expected_payout,
+        "trade_status": product.trade_status,
+        "asset_class": product.asset_class,
+        "exchange": product.exchange,
+        "proxy_ticker": product.proxy_ticker,
+        "proxy_label": product.proxy_label,
+        "retail_notes": list(product.retail_notes),
+        "day_count_convention": product.day_count_convention,
+        "compounding_basis": product.compounding_basis,
+        "quote_source": product.quote_source,
+        "provider_security_id": product.provider_security_id,
+        "source_as_of": product.source_as_of,
+        "source_payload": product.source_payload,
+        "is_active": True,
+    }
+    for key, value in updates.items():
+        if getattr(record, key) != value:
+            setattr(record, key, value)
+
+
+def _preferred_fixed_income_records(
+    records: list[InvestFixedIncomeProductRecord],
+) -> list[InvestFixedIncomeProductRecord]:
+    provider_coverage = {
+        (record.market, record.instrument_type)
+        for record in records
+        if record.quote_source != "model_seed"
+    }
+    if not provider_coverage:
+        return records
+    return [
+        record
+        for record in records
+        if record.quote_source != "model_seed"
+        or (record.market, record.instrument_type) not in provider_coverage
+    ]
 
 
 def _quote_record_from_quote(
@@ -747,14 +1348,14 @@ def _quote_from_record(
         ),
         face_value_increment=record.face_value_increment
         or product.face_value_increment,
-        quote_status="stale_model" if stale else record.quote_status,
+        quote_status=_record_quote_status(record.quote_status, quote_quality, stale),
         quote_source=record.source,
         quote_provider=quote_provider,
         quote_provider_label=provider_label(quote_provider),
         quote_quality=quote_quality,
         quote_quality_label=quote_quality_label(quote_quality),
         quote_type=_record_text(record, "quote_type", "model"),
-        quote_is_live=quote_quality_is_live(quote_quality),
+        quote_is_live=(not stale and quote_quality_is_live(quote_quality)),
         quote_stale=stale,
         provider_security_id=getattr(record, "provider_security_id", None),
         bid_price_per_100=getattr(record, "bid_price", None),
@@ -829,6 +1430,18 @@ def _record_text(
     return text or fallback
 
 
+def _record_quote_status(
+    quote_status: str,
+    quote_quality: str,
+    stale: bool,
+) -> str:
+    if not stale:
+        return quote_status
+    if quote_quality == QUOTE_QUALITY_SEED_MODEL:
+        return "stale_model"
+    return "stale_quote"
+
+
 def _assumption_payload(
     product: FixedIncomeProduct,
     quote: FixedIncomeQuote | None = None,
@@ -869,12 +1482,7 @@ def _pricing_assumptions(
     quote_quality = str(
         assumptions.get("quote_quality") or QUOTE_QUALITY_SEED_MODEL
     ).strip()
-    quote_provider = str(assumptions.get("quote_provider") or "internal_model").strip()
     return (
-        (
-            f"Quote quality: {quote_quality_label(quote_quality)} "
-            f"from {provider_label(quote_provider)}."
-        ),
         (
             f"Day count: {assumptions.get('day_count_convention', product.day_count_convention)}; "
             f"business days use {assumptions.get('business_day_calendar', 'Mon-Fri')}."
@@ -884,29 +1492,16 @@ def _pricing_assumptions(
             f"Coupon frequency: {assumptions.get('coupon_frequency_per_year', product.coupon_frequency_per_year)} "
             f"per year; compounding basis: {assumptions.get('compounding_basis', product.compounding_basis)}."
         ),
-        _provider_plan_note(assumptions),
+        _pricing_mark_note(quote_quality),
     )
 
 
-def _provider_plan_note(assumptions: dict) -> str:
-    provider_plan = assumptions.get("provider_plan")
-    if not isinstance(provider_plan, list):
-        return "Provider ladder pending; model fallback is active."
-    enabled = [
-        str(item.get("label"))
-        for item in provider_plan
-        if isinstance(item, dict) and item.get("status") == "enabled"
-    ]
-    planned = [
-        str(item.get("label"))
-        for item in provider_plan
-        if isinstance(item, dict) and item.get("status") == "planned"
-    ]
-    if enabled:
-        return f"Enabled provider path: {', '.join(enabled[:3])}."
-    if planned:
-        return f"Provider path prepared for: {', '.join(planned[:3])}."
-    return "Provider ladder pending; model fallback is active."
+def _pricing_mark_note(quote_quality: str) -> str:
+    if quote_quality_is_live(quote_quality):
+        return "Market-backed marks can still differ from final execution price."
+    if quote_quality == QUOTE_QUALITY_OFFICIAL_AUCTION:
+        return "Official reference marks can differ from secondary-market execution."
+    return "Paper marks are indicative and can differ from executable venue prices."
 
 
 def _fixed_income_risk_checks(

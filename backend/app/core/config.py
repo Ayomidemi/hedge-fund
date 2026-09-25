@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     hf_dmo_base_url: str = "https://www.dmo.gov.ng"
     hf_sec_base_url: str = "https://data.sec.gov"
     hf_sec_user_agent: str = "Pease Capital research bot"
+    hf_invest_fixed_income_sync_limit: int = 40
+    hf_invest_fixed_income_sync_ttl_seconds: int = 43200
     hf_news_poll_interval_seconds: int = 300
     hf_news_poll_jurisdictions: str = "US"
     hf_news_ticker_refresh_ttl_seconds: int = 1800

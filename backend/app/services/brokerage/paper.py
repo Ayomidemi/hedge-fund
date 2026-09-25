@@ -66,6 +66,7 @@ class PaperBrokerProvider:
 
     async def get_positions(self, broker_account_id: str) -> list[BrokerPosition]:
         account = await self._load_account(broker_account_id)
+        base_currency = account.base_currency
         rows = list(
             await self.session.scalars(
                 select(RetailPosition)
@@ -74,40 +75,47 @@ class PaperBrokerProvider:
                 .where(RetailPosition.quantity > 0)
             )
         )
+        saved = [
+            (
+                row.instrument.ticker,
+                row.instrument.currency or base_currency,
+                row.quantity,
+                row.average_cost,
+                row.cost_basis,
+            )
+            for row in rows
+        ]
         products = await fixed_income_products_by_tickers_db(
-            self.session, [row.instrument.ticker for row in rows]
+            self.session, [ticker for ticker, *_ in saved]
         )
         fx_rates = await load_fx_rates(self.session)
         positions: list[BrokerPosition] = []
-        for row in rows:
-            native_currency = row.instrument.currency or account.base_currency
-            fixed_income_product = products.get(row.instrument.ticker.upper())
+        for ticker, native_currency, quantity, average_cost, cost_basis in saved:
+            fixed_income_product = products.get(ticker.upper())
             native_mark = (
                 await fixed_income_price_per_face_db(self.session, fixed_income_product)
                 if fixed_income_product is not None
-                else await get_cached_quote_price(self.session, row.instrument.ticker)
+                else await get_cached_quote_price(self.session, ticker)
             )
-            mark = native_mark if native_mark is not None else row.average_cost
+            mark = native_mark if native_mark is not None else average_cost
             cash_mark = amount_in_base(
-                mark, native_currency, account.base_currency, fx_rates
+                mark, native_currency, base_currency, fx_rates
             )
             price = cash_mark if cash_mark is not None else mark
-            market_value = (row.quantity * price).quantize(
-                MONEY, rounding=ROUND_HALF_UP
-            )
-            unrealized = (market_value - row.cost_basis).quantize(
+            market_value = (quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
+            unrealized = (market_value - cost_basis).quantize(
                 MONEY, rounding=ROUND_HALF_UP
             )
             pct = None
-            if row.cost_basis > 0:
-                pct = ((unrealized / row.cost_basis) * Decimal("100")).quantize(
+            if cost_basis > 0:
+                pct = ((unrealized / cost_basis) * Decimal("100")).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP
                 )
             positions.append(
                 BrokerPosition(
-                    symbol=row.instrument.ticker,
-                    quantity=row.quantity,
-                    average_cost=row.average_cost,
+                    symbol=ticker,
+                    quantity=quantity,
+                    average_cost=average_cost,
                     market_value=market_value,
                     unrealized_pnl=unrealized,
                     unrealized_pnl_pct=pct,

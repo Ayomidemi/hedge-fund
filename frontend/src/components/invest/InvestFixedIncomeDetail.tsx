@@ -121,20 +121,8 @@ export function InvestFixedIncomeDetail({
             label="Face increment"
             value={money(product.face_value_increment, product.currency)}
           />
-          <Detail
-            label="Quote quality"
-            value={product.quote_quality_label ?? "Pending"}
-          />
-          <Detail label="Provider" value={quoteProviderLabel(product)} />
           <Detail label="Quote time" value={quoteTimeLabel(product.quote_as_of)} />
-          <Detail
-            label="Fresh until"
-            value={quoteTimeLabel(product.quote_stale_after)}
-          />
-          <Detail
-            label="Quote status"
-            value={quoteStatusLabel(product)}
-          />
+          <Detail label="Quote status" value={quoteStatusLabel(product)} />
         </div>
       </section>
 
@@ -171,9 +159,6 @@ export function InvestFixedIncomeDetail({
           <h3 className="text-lg font-semibold">Paper fixed-income order</h3>
           <p className="mt-2 text-sm text-zinc-500">
             Orders use the displayed dirty price and settle into face value units.
-            {product.quote_quality === "seed_model"
-              ? " This mark is a model fallback."
-              : ""}
             {product.currency !== "USD"
               ? " Paper cash is USD; this amount converts at the stored FX rate."
               : ""}
@@ -324,10 +309,6 @@ function quoteTimeLabel(value: string | null) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
-}
-
-function quoteProviderLabel(product: InvestFixedIncomeProduct) {
-  return product.quote_provider_label ?? product.quote_source ?? "Pending";
 }
 
 function quoteStatusLabel(product: InvestFixedIncomeProduct) {

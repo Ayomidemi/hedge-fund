@@ -13,25 +13,29 @@ import {
   addInvestWatchlistItem,
   createInvestOrder,
   getInvestInstrumentResearch,
+  getInvestNews,
   type InvestInstrument,
   type InvestInstrumentResearch,
+  type InvestNewsItem,
   type InvestPeaseView,
   type InvestResearchSection,
 } from "@/lib/api";
 import { money } from "@/components/invest/format";
 import { InvestPriceChart } from "@/components/invest/InvestPriceChart";
 
-type DetailTab = "overview" | "chart" | "analysis" | "order";
+type DetailTab = "overview" | "chart" | "news" | "financials" | "analysis" | "order";
 
 export function InvestInstrumentDetail({
   instrument,
   research: initialResearch = null,
+  initialTab = "overview",
 }: {
   instrument: InvestInstrument;
   research?: InvestInstrumentResearch | null;
+  initialTab?: DetailTab;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<DetailTab>("overview");
+  const [tab, setTab] = useState<DetailTab>(initialTab);
   const [amount, setAmount] = useState("500");
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [reviewing, setReviewing] = useState(false);
@@ -40,6 +44,7 @@ export function InvestInstrumentDetail({
     initialResearch,
   );
   const [researchLoading, setResearchLoading] = useState(!initialResearch);
+  const [headlines, setHeadlines] = useState<InvestNewsItem[] | null>(null);
 
   useEffect(() => {
     if (initialResearch) {
@@ -67,6 +72,21 @@ export function InvestInstrumentDetail({
       cancelled = true;
     };
   }, [instrument.ticker, initialResearch]);
+
+  useEffect(() => {
+    if (tab !== "news" || headlines !== null) return;
+    let cancelled = false;
+    void getInvestNews({ ticker: instrument.ticker, ticker_page_size: 8 })
+      .then((data) => {
+        if (!cancelled) setHeadlines(data.ticker_items ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setHeadlines([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [headlines, instrument.ticker, tab]);
   const price = instrument.price ? Number(instrument.price) : null;
   const estimatedUnits = useMemo(() => {
     const budget = Number(amount);
@@ -114,10 +134,8 @@ export function InvestInstrumentDetail({
   const overviewSections = sections.filter((section) =>
     ["instrument_profile", "price_context"].includes(section.id),
   );
-  const analysisSections = sections.filter(
-    (section) =>
-      !["instrument_profile", "price_context", "pease_view"].includes(section.id),
-  );
+  const financialSections = sections.filter((section) => section.id === "financials");
+  const tapeSections = sections.filter((section) => section.id === "radar_context");
   const peaseView = research?.pease_view ?? null;
 
   return (
@@ -164,11 +182,6 @@ export function InvestInstrumentDetail({
           >
             {pending === "watch" ? "Saving..." : "Add to watchlist"}
           </button>
-          {research?.news_href ? (
-            <Link href={research.news_href} className={buttonSecondaryClassName}>
-              News
-            </Link>
-          ) : null}
           <Link href="/invest/markets" className={buttonSecondaryClassName}>
             Search
           </Link>
@@ -179,6 +192,8 @@ export function InvestInstrumentDetail({
         {([
           ["overview", "Overview"],
           ["chart", "Chart"],
+          ["news", "News"],
+          ["financials", "Financials"],
           ["analysis", "Analysis"],
           ["order", "Paper order"],
         ] as const).map(([value, label]) => (
@@ -211,12 +226,62 @@ export function InvestInstrumentDetail({
 
       {tab === "chart" ? <InvestPriceChart ticker={instrument.ticker} /> : null}
 
+      {tab === "news" ? (
+        <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+          <h3 className="text-lg font-semibold">News</h3>
+          {headlines === null ? (
+            <p className="mt-3 text-sm text-zinc-500">Loading headlines…</p>
+          ) : headlines.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-500">
+              No stored headlines for {instrument.ticker}.{" "}
+              <Link href={research?.news_href ?? "/invest/news"} className="underline">
+                Open News
+              </Link>
+            </p>
+          ) : (
+            <ul className="mt-4 space-y-3">
+              {headlines.map((item) => (
+                <li key={item.id}>
+                  <a
+                    href={item.url ?? research?.news_href ?? "/invest/news"}
+                    className="font-medium hover:underline"
+                    target={item.url ? "_blank" : undefined}
+                    rel={item.url ? "noreferrer" : undefined}
+                  >
+                    {item.title}
+                  </a>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {item.source_name ?? item.provider}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
+
+      {tab === "financials" ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {financialSections.length > 0 ? (
+            financialSections.map((section) => (
+              <ResearchSectionCard key={section.id} section={section} />
+            ))
+          ) : (
+            <section className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+              {researchLoading
+                ? "Loading financials…"
+                : "Financials are not available for this name yet."}
+            </section>
+          )}
+        </div>
+      ) : null}
+
       {tab === "analysis" ? (
         <div className="space-y-4">
           {peaseView ? <PeaseViewCard view={peaseView} /> : null}
           <div className="grid gap-4 lg:grid-cols-2">
-            {analysisSections.length > 0 ? (
-              analysisSections.map((section) => (
+            {tapeSections.length > 0 ? (
+              tapeSections.map((section) => (
                 <ResearchSectionCard key={section.id} section={section} />
               ))
             ) : peaseView ? null : (

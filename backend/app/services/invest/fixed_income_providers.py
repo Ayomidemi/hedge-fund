@@ -62,6 +62,7 @@ class FixedIncomeProviderCapability:
     freshness: timedelta
     markets: frozenset[str] = frozenset()
     instrument_types: frozenset[str] = frozenset()
+    quote_sources: frozenset[str] = frozenset()
     credential_settings: tuple[str, ...] = ()
     requires_proxy_ticker: bool = False
     implemented: bool = False
@@ -70,10 +71,13 @@ class FixedIncomeProviderCapability:
     def supports(self, product: Any) -> bool:
         market = str(getattr(product, "market", "") or "").upper()
         instrument_type = str(getattr(product, "instrument_type", "") or "").lower()
+        quote_source = str(getattr(product, "quote_source", "") or "").lower()
         proxy_ticker = str(getattr(product, "proxy_ticker", "") or "").strip()
         if self.markets and market not in self.markets:
             return False
         if self.instrument_types and instrument_type not in self.instrument_types:
+            return False
+        if self.quote_sources and quote_source not in self.quote_sources:
             return False
         if self.requires_proxy_ticker and not proxy_ticker:
             return False
@@ -147,8 +151,16 @@ FIXED_INCOME_PROVIDER_CAPABILITIES: tuple[FixedIncomeProviderCapability, ...] = 
         freshness=QUOTE_QUALITY_FRESHNESS[QUOTE_QUALITY_OFFICIAL_AUCTION],
         markets=frozenset({"US"}),
         instrument_types=frozenset(
-            {"treasury_bill", "treasury_note", "government_bond"}
+            {
+                "treasury_bill",
+                "treasury_note",
+                "government_bond",
+                "inflation_linked_bond",
+                "floating_rate_note",
+            }
         ),
+        quote_sources=frozenset({"treasury_official"}),
+        implemented=True,
         notes=("Official US auction and reference data.",),
     ),
     FixedIncomeProviderCapability(

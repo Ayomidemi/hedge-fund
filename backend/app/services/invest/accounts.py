@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -38,6 +39,7 @@ from app.core.config import settings
 from app.models import (
     Instrument,
     InstrumentQuote,
+    RadarRun,
     RadarSnapshot,
     RetailAccount,
     RetailOrder,
@@ -79,6 +81,18 @@ from app.services.portfolio.operating_core import upsert_instrument
 from app.services.ticker_intelligence.market_data import search_ticker_suggestions
 
 MONEY = Decimal("0.01")
+
+
+@dataclass(frozen=True)
+class _SavedWatchRow:
+    id: UUID
+    notes: str | None
+    date_added: datetime
+    instrument_id: UUID
+    ticker: str
+    name: str
+    asset_class: str | None
+    currency: str
 
 
 class InvestError(Exception):
@@ -228,10 +242,17 @@ async def get_home(
     session: AsyncSession, user: AuthenticatedUser
 ) -> InvestHomeResponse:
     account = await get_or_create_account(session, user)
-    broker = get_broker_provider(session, account.broker_provider)
-    balances = await broker.get_balances(account.broker_account_id)
-    broker_positions = await broker.get_positions(account.broker_account_id)
-    holdings = await _holdings(session, broker_positions, account.base_currency)
+    account_id = account.id
+    account_number = account.account_number
+    broker_provider = account.broker_provider
+    account_status = account.status
+    base_currency = account.base_currency
+    created_at = account.created_at
+    broker_account_id = account.broker_account_id
+    broker = get_broker_provider(session, broker_provider)
+    balances = await broker.get_balances(broker_account_id)
+    broker_positions = await broker.get_positions(broker_account_id)
+    holdings = await _holdings(session, broker_positions, base_currency)
     invested = sum((item.market_value for item in holdings), Decimal("0")).quantize(
         MONEY
     )
@@ -248,13 +269,22 @@ async def get_home(
         (item.market_value - item.unrealized_pnl for item in holdings), Decimal("0")
     )
     today_change, today_change_pct = await _today_change(session, holdings, invested)
-    headlines = await _home_headlines(session, today_change, account.base_currency)
+    headlines = await _home_headlines(session, today_change, base_currency)
     quick_actions = [
         InvestQuickActionResponse.model_validate(action)
         for action in await get_home_quick_actions(session)
     ]
     return InvestHomeResponse(
-        account=_account_response(account, balances.cash, balances.buying_power),
+        account=InvestAccountResponse(
+            id=account_id,
+            account_number=account_number,
+            broker_provider=broker_provider,
+            status=account_status,
+            base_currency=base_currency,
+            cash=balances.cash,
+            buying_power=balances.buying_power,
+            created_at=created_at,
+        ),
         portfolio_value=portfolio_value,
         cash=balances.cash,
         invested=invested,
@@ -523,31 +553,35 @@ async def list_watchlist(
             .order_by(RetailWatchlistItem.date_added.desc())
         )
     )
-    items: list[InvestWatchlistItemResponse] = []
-    tickers = [row.instrument.ticker for row in rows]
+    saved = [_saved_watch_row(row) for row in rows]
+    tickers = [item.ticker for item in saved]
     headlines = await _watchlist_headlines(session, tickers)
     unusual = await _watchlist_unusual(session, tickers)
-    quotes = {
-        quote.instrument_id: quote
-        for quote in await session.scalars(
+    quote_rows = list(
+        await session.scalars(
             select(InstrumentQuote).where(
-                InstrumentQuote.instrument_id.in_(
-                    [row.instrument.id for row in rows]
-                )
+                InstrumentQuote.instrument_id.in_([item.instrument_id for item in saved])
             )
         )
-    } if rows else {}
+    ) if saved else []
+    quotes = {
+        quote.instrument_id: (quote.price, quote.change_pct) for quote in quote_rows
+    }
     products = await fixed_income_products_by_tickers_db(session, tickers)
-    for row in rows:
-        product = products.get(row.instrument.ticker.upper())
-        quote = None if product is not None else quotes.get(row.instrument.id)
-        ticker_key = row.instrument.ticker.upper()
+    items: list[InvestWatchlistItemResponse] = []
+    for item in saved:
+        product = products.get(item.ticker.upper())
+        price, change_pct = (None, None) if product is not None else quotes.get(
+            item.instrument_id, (None, None)
+        )
+        ticker_key = item.ticker.upper()
         items.append(
             await _watchlist_response(
                 session,
-                row,
+                item,
                 product=product,
-                quote=quote,
+                price=price,
+                change_pct=change_pct,
                 headline=headlines.get(ticker_key),
                 unusual=ticker_key in unusual,
                 unusual_label=unusual.get(ticker_key),
@@ -567,19 +601,19 @@ async def add_watchlist_item(
         .where(RetailWatchlistItem.instrument_id == instrument.id)
     )
     if existing is not None:
-        existing_product = await get_fixed_income_product_db(
-            session, existing.instrument.ticker
-        )
+        saved = _saved_watch_row(existing)
+        existing_product = await get_fixed_income_product_db(session, saved.ticker)
         existing_quote = (
             None
             if existing_product is not None
-            else await _quote_for_instrument(session, existing.instrument)
+            else await _quote_for_instrument_id(session, saved.instrument_id)
         )
         return await _watchlist_response(
             session,
-            existing,
+            saved,
             product=existing_product,
-            quote=existing_quote,
+            price=None if existing_quote is None else existing_quote.price,
+            change_pct=None if existing_quote is None else existing_quote.change_pct,
         )
     item = RetailWatchlistItem(
         user_id=user.id,
@@ -587,22 +621,31 @@ async def add_watchlist_item(
         notes=notes,
         date_added=datetime.now(timezone.utc),
     )
-    item.instrument = instrument
     session.add(item)
+    await session.flush()
+    saved = _SavedWatchRow(
+        id=item.id,
+        notes=notes,
+        date_added=item.date_added,
+        instrument_id=instrument.id,
+        ticker=instrument.ticker,
+        name=instrument.name,
+        asset_class=instrument.asset_class,
+        currency=instrument.currency,
+    )
     await session.commit()
-    await session.refresh(item)
-    item.instrument = instrument
-    product = await get_fixed_income_product_db(session, instrument.ticker)
+    product = await get_fixed_income_product_db(session, saved.ticker)
     quote = (
         None
         if product is not None
-        else await _quote_for_instrument(session, instrument)
+        else await _quote_for_instrument_id(session, saved.instrument_id)
     )
     return await _watchlist_response(
         session,
-        item,
+        saved,
         product=product,
-        quote=quote,
+        price=None if quote is None else quote.price,
+        change_pct=None if quote is None else quote.change_pct,
     )
 
 
@@ -911,20 +954,20 @@ async def _holdings(
 ) -> list[InvestHolding]:
     symbols = [item.symbol for item in positions]
     instruments = {
-        row.ticker: row
+        row.ticker: (row.id, row.name, row.asset_class, row.currency)
         for row in await session.scalars(
             select(Instrument).where(Instrument.ticker.in_(symbols))
         )
     } if symbols else {}
     products = await fixed_income_products_by_tickers_db(session, symbols)
     quotes = {
-        quote.instrument_id: quote
+        quote.instrument_id: quote.price
         for quote in await session.scalars(
             select(InstrumentQuote).where(
                 InstrumentQuote.instrument_id.in_(
                     [
-                        row.id
-                        for ticker, row in instruments.items()
+                        instrument_id
+                        for ticker, (instrument_id, *_rest) in instruments.items()
                         if ticker not in products
                     ]
                 )
@@ -936,22 +979,18 @@ async def _holdings(
     for item in positions:
         instrument = instruments.get(item.symbol)
         product = products.get(item.symbol.upper())
-        quote = (
-            None
-            if instrument is None
-            else quotes.get(instrument.id)
+        instrument_id, name, asset_class, native_currency = (
+            instrument
+            if instrument is not None
+            else (None, item.symbol, None, base_currency)
         )
+        quote_price = None if instrument_id is None else quotes.get(instrument_id)
         native_price = (
             None
-            if instrument is None
+            if instrument_id is None
             else await fixed_income_price_per_face_db(session, product)
             if product is not None
-            else quote.price
-            if quote is not None
-            else None
-        )
-        native_currency = (
-            instrument.currency if instrument is not None else base_currency
+            else quote_price
         )
         price = native_price
         if native_price is not None:
@@ -963,8 +1002,8 @@ async def _holdings(
         holdings.append(
             InvestHolding(
                 ticker=item.symbol,
-                name=instrument.name if instrument is not None else item.symbol,
-                asset_class=instrument.asset_class if instrument is not None else None,
+                name=name,
+                asset_class=asset_class,
                 currency=base_currency,
                 quantity=item.quantity,
                 average_cost=item.average_cost,
@@ -973,10 +1012,7 @@ async def _holdings(
                 allocation_pct=None,
                 unrealized_pnl=item.unrealized_pnl,
                 unrealized_pnl_pct=item.unrealized_pnl_pct,
-                href=_instrument_href(
-                    item.symbol,
-                    instrument.asset_class if instrument is not None else None,
-                ),
+                href=_instrument_href(item.symbol, asset_class),
             )
         )
     return holdings
@@ -1102,47 +1138,63 @@ def _account_number() -> str:
 async def _quote_for_instrument(
     session: AsyncSession, instrument: Instrument
 ) -> InstrumentQuote | None:
+    return await _quote_for_instrument_id(session, instrument.id)
+
+
+async def _quote_for_instrument_id(
+    session: AsyncSession, instrument_id: UUID
+) -> InstrumentQuote | None:
     return await session.scalar(
-        select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument.id)
+        select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument_id)
     )
 
 
 async def _watchlist_response(
     session: AsyncSession,
-    row: RetailWatchlistItem,
+    row: _SavedWatchRow,
     *,
     product,
-    quote: InstrumentQuote | None,
+    price: Decimal | None,
+    change_pct: Decimal | None,
     headline: str | None = None,
     unusual: bool = False,
     unusual_label: str | None = None,
 ) -> InvestWatchlistItemResponse:
-    instrument = row.instrument
-    price = (
-        await fixed_income_price_per_face_db(session, product)
-        if product is not None
-        else quote.price
-        if quote is not None
-        else None
-    )
+    if product is not None:
+        price = await fixed_income_price_per_face_db(session, product)
+        change_pct = None
     return InvestWatchlistItemResponse(
         id=row.id,
-        ticker=instrument.ticker,
-        name=instrument.name,
-        asset_class=instrument.asset_class,
-        currency=instrument.currency,
+        ticker=row.ticker,
+        name=row.name,
+        asset_class=row.asset_class,
+        currency=row.currency,
         href=(
-            f"/invest/fixed-income/{instrument.ticker}"
+            f"/invest/fixed-income/{row.ticker}"
             if product is not None
-            else _instrument_href(instrument.ticker, instrument.asset_class)
+            else _instrument_href(row.ticker, row.asset_class)
         ),
         notes=row.notes,
         date_added=row.date_added,
         price=price,
-        change_pct=None if product is not None or quote is None else quote.change_pct,
+        change_pct=change_pct,
         headline=headline,
         unusual=unusual,
         unusual_label=unusual_label,
+    )
+
+
+def _saved_watch_row(row: RetailWatchlistItem) -> "_SavedWatchRow":
+    instrument = row.instrument
+    return _SavedWatchRow(
+        id=row.id,
+        notes=row.notes,
+        date_added=row.date_added,
+        instrument_id=instrument.id,
+        ticker=instrument.ticker,
+        name=instrument.name,
+        asset_class=instrument.asset_class,
+        currency=instrument.currency,
     )
 
 
@@ -1300,27 +1352,27 @@ async def _watchlist_headlines(
 async def _watchlist_unusual(
     session: AsyncSession, tickers: list[str]
 ) -> dict[str, str]:
+    from app.services.invest.discover import _move_copy
+
     wanted = {ticker.upper() for ticker in tickers if ticker}
     if not wanted:
         return {}
-    latest = (
-        select(
-            RadarSnapshot.ticker,
-            func.max(RadarSnapshot.as_of).label("as_of"),
-        )
-        .where(func.upper(RadarSnapshot.ticker).in_(wanted))
-        .group_by(RadarSnapshot.ticker)
-        .subquery()
+    run_id = await session.scalar(
+        select(RadarRun.id)
+        .where(RadarRun.status == "completed")
+        .where(RadarRun.working_set_count > 0)
+        .order_by(RadarRun.started_at.desc())
+        .limit(1)
     )
+    if run_id is None:
+        return {}
     rows = await session.scalars(
-        select(RadarSnapshot).join(
-            latest,
-            (RadarSnapshot.ticker == latest.c.ticker)
-            & (RadarSnapshot.as_of == latest.c.as_of),
-        )
+        select(RadarSnapshot)
+        .where(RadarSnapshot.run_id == run_id)
+        .where(func.upper(RadarSnapshot.ticker).in_(wanted))
     )
     found: dict[str, str] = {}
     for row in rows:
         if row.flags:
-            found[row.ticker.upper()] = "Unusual"
+            found[row.ticker.upper()] = _move_copy(row)
     return found

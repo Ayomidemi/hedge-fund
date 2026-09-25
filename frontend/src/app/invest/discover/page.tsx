@@ -25,9 +25,7 @@ export default async function InvestDiscoverPage() {
     );
   }
 
-  const visibleSections = discover.sections.filter(
-    (section) => !["latest_news", "watchlist_updates"].includes(section.id),
-  );
+  const visibleSections = discover.sections;
   const unusualSection =
     visibleSections.find((section) => section.id === "unusual_activity") ??
     visibleSections[0] ??

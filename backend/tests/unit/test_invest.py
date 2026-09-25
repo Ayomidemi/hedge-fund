@@ -1,8 +1,10 @@
+import asyncio
 import io
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest import IsolatedAsyncioTestCase, TestCase
+from uuid import uuid4
 
 from app.core.auth import (
     AuthenticatedUser,
@@ -12,7 +14,12 @@ from app.core.auth import (
 from app.core.config import settings
 from app.main import app
 from app.api.schemas.invest import InvestHolding, InvestOrderCreate
-from app.models import Instrument, InvestMarketBoardItem, RetailAccount
+from app.models import (
+    Instrument,
+    InvestFixedIncomeQuote as InvestFixedIncomeQuoteRecord,
+    InvestMarketBoardItem,
+    RetailAccount,
+)
 from app.services.brokerage.paper import _buy_size, _fixed_income_buy_size
 from app.services.brokerage.protocol import BrokerValidationError, SubmitOrderRequest
 from app.services.invest.accounts import (
@@ -22,11 +29,17 @@ from app.services.invest.accounts import (
     _withheld_capital_signals,
 )
 from app.services.invest.fixed_income import (
+    _official_treasury_quote,
+    _preferred_fixed_income_records,
+    _product_from_treasury_auction_row,
+    _record_from_product,
+    _quote_from_record,
     fixed_income_cashflows,
     fixed_income_quote,
     fixed_income_response,
     get_fixed_income_product,
     search_fixed_income_products,
+    source_fixed_income_quote,
 )
 from app.services.invest.fixed_income_providers import fixed_income_provider_plan
 from app.services.invest.markets import (
@@ -198,6 +211,24 @@ class InvestPermissionTests(TestCase):
             {"momentum", "growth", "risk"},
         )
 
+    def test_thin_equity_falls_back_to_price_path(self) -> None:
+        from app.api.schemas.ticker_intelligence import TickerMetricsInput
+        from app.services.invest.research import pease_view_from_scorecard
+        from app.services.ticker_intelligence.scoring import score_ticker
+
+        metrics = TickerMetricsInput(
+            current_price=Decimal("190"),
+            price_vs_200d_pct=Decimal("6"),
+            relative_strength_6m_pct=Decimal("4"),
+            volatility_30d_pct=Decimal("18"),
+        )
+        scorecard = score_ticker(metrics, "equity")
+        view = pease_view_from_scorecard(
+            scorecard, asset_class="equity", ticker="AAPL", metrics=metrics
+        )
+        self.assertNotEqual(view.stance, "incomplete")
+        self.assertIn("price-path", view.summary.lower())
+
     def test_payload_prefers_pease_role_over_jwt_authenticated(self) -> None:
         from app.core.auth import _user_from_payload
 
@@ -334,22 +365,174 @@ class FixedIncomeScopeTests(TestCase):
         self.assertEqual(response.mid_price, response.dirty_price)
         self.assertEqual(response.mid_yield_pct, response.yield_to_maturity_pct)
         self.assertTrue(response.pricing_assumptions)
+        self.assertFalse(
+            any("Quote quality" in item for item in response.pricing_assumptions)
+        )
+        self.assertFalse(
+            any("Provider path" in item for item in response.pricing_assumptions)
+        )
         self.assertTrue(response.risk_checks)
         self.assertTrue(response.cashflows)
+
+    def test_treasury_auction_row_maps_to_provider_product(self) -> None:
+        synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        product = _product_from_treasury_auction_row(
+            {
+                "cusip": "912797AB1",
+                "security_type": "Bill",
+                "security_term": "13-Week",
+                "auction_date": "2026-09-24",
+                "issue_date": "2026-09-29",
+                "maturity_date": "2026-12-29",
+                "high_investment_rate": "4.512",
+                "price_per100": "98.885267",
+            },
+            synced_at=synced_at,
+        )
+
+        self.assertIsNotNone(product)
+        assert product is not None
+        self.assertEqual(product.ticker, "US-TSY-912797AB1")
+        self.assertEqual(product.quote_source, "treasury_official")
+        self.assertEqual(product.provider_security_id, "912797AB1")
+        self.assertEqual(product.instrument_type, "treasury_bill")
+        self.assertEqual(product.indicative_yield_pct, Decimal("4.51"))
+        self.assertEqual(product.source_as_of, synced_at)
+
+    def test_official_treasury_quote_uses_provider_metadata(self) -> None:
+        synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        product = _product_from_treasury_auction_row(
+            {
+                "cusip": "912797AB1",
+                "security_type": "Bill",
+                "security_term": "13-Week",
+                "auction_date": "2026-09-24",
+                "issue_date": "2026-09-29",
+                "maturity_date": "2026-12-29",
+                "high_investment_rate": "4.512",
+                "price_per100": "98.885267",
+            },
+            synced_at=synced_at,
+        )
+        assert product is not None
+
+        quote = _official_treasury_quote(product, as_of=synced_at)
+
+        self.assertIsNotNone(quote)
+        assert quote is not None
+        self.assertEqual(quote.quote_provider, "treasury_fiscal_data")
+        self.assertEqual(quote.quote_quality, "official_auction")
+        self.assertEqual(quote.quote_type, "official_reference")
+        self.assertEqual(quote.provider_security_id, "912797AB1")
+        self.assertEqual(quote.last_price_per_100, Decimal("98.8853"))
+        self.assertEqual(quote.yield_to_maturity_pct, Decimal("4.51"))
+        self.assertFalse(quote.quote_is_live)
+
+    def test_provider_products_hide_matching_seed_rows(self) -> None:
+        seed_product = get_fixed_income_product("US-TBILL-13W")
+        ng_product = get_fixed_income_product("NG-TBILL-182D")
+        provider_product = _product_from_treasury_auction_row(
+            {
+                "cusip": "912797AB1",
+                "security_type": "Bill",
+                "security_term": "13-Week",
+                "issue_date": "2026-09-29",
+                "maturity_date": "2026-12-29",
+                "high_investment_rate": "4.512",
+            },
+            synced_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+        )
+        assert seed_product is not None
+        assert ng_product is not None
+        assert provider_product is not None
+
+        preferred = _preferred_fixed_income_records(
+            [
+                _record_from_product(seed_product),
+                _record_from_product(ng_product),
+                _record_from_product(provider_product),
+            ]
+        )
+
+        self.assertEqual(
+            {record.ticker for record in preferred},
+            {"NG-TBILL-182D", "US-TSY-912797AB1"},
+        )
+
+    def test_fixed_income_source_uses_internal_model_fallback(self) -> None:
+        product = get_fixed_income_product("US-TBILL-13W")
+        assert product is not None
+        quote = asyncio.run(source_fixed_income_quote(None, product))
+        self.assertEqual(quote.quote_provider, "internal_model")
+        self.assertEqual(quote.quote_quality, "seed_model")
+        self.assertEqual(quote.quote_status, "indicative_model")
+
+    def test_stale_provider_quote_is_not_live_or_stale_model(self) -> None:
+        product = get_fixed_income_product("US-TBILL-13W")
+        assert product is not None
+        now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+        record = InvestFixedIncomeQuoteRecord(
+            product_id=uuid4(),
+            yield_to_maturity_pct=Decimal("4.10"),
+            clean_price=Decimal("99.950000"),
+            accrued_interest=Decimal("0.000000"),
+            dirty_price=Decimal("99.950000"),
+            settlement_date=now.date(),
+            maturity_date=(now + timedelta(days=91)).date(),
+            days_to_maturity=91,
+            face_value_increment=Decimal("100.0000"),
+            quote_status="executable_quote",
+            quote_provider="alpaca_fixed_income",
+            quote_quality="executable_quote",
+            quote_type="provider",
+            source="alpaca_broker_api",
+            source_as_of=now - timedelta(minutes=10),
+            stale_after=now - timedelta(minutes=1),
+            assumptions={
+                "day_count_convention": "ACT/365",
+                "business_day_calendar": "Mon-Fri",
+                "settlement_days": 1,
+                "coupon_frequency_per_year": 0,
+                "quote_quality": "executable_quote",
+            },
+            raw_payload={"id": "q1"},
+        )
+
+        quote = _quote_from_record(product, record, now=now)
+
+        self.assertTrue(quote.quote_stale)
+        self.assertFalse(quote.quote_is_live)
+        self.assertEqual(quote.quote_status, "stale_quote")
 
     def test_fixed_income_provider_plan_points_to_real_data_ladder(self) -> None:
         us_bill = get_fixed_income_product("US-TBILL-13W")
         ng_bill = get_fixed_income_product("NG-TBILL-182D")
+        official_bill = _product_from_treasury_auction_row(
+            {
+                "cusip": "912797AB1",
+                "security_type": "Bill",
+                "security_term": "13-Week",
+                "issue_date": "2026-09-29",
+                "maturity_date": "2026-12-29",
+                "high_investment_rate": "4.512",
+            },
+            synced_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+        )
         assert us_bill is not None
         assert ng_bill is not None
+        assert official_bill is not None
 
         us_providers = [item.provider for item in fixed_income_provider_plan(us_bill)]
         ng_providers = [item.provider for item in fixed_income_provider_plan(ng_bill)]
+        official_providers = [
+            item.provider for item in fixed_income_provider_plan(official_bill)
+        ]
 
         self.assertEqual(us_providers[0], "internal_model")
-        self.assertIn("treasury_fiscal_data", us_providers)
+        self.assertNotIn("treasury_fiscal_data", us_providers)
         self.assertIn("fred_curve", us_providers)
         self.assertIn("tiingo_proxy", us_providers)
+        self.assertEqual(official_providers[0], "treasury_fiscal_data")
         self.assertEqual(ng_providers[0], "internal_model")
         self.assertIn("fmdq", ng_providers)
         self.assertIn("cbn", ng_providers)

@@ -5,10 +5,11 @@ import { getServerAccessToken } from "@/lib/supabase/server";
 export default async function InvestWatchlistPage() {
   const accessToken = await getServerAccessToken();
   let items: InvestWatchlistItem[] = [];
+  let error: string | null = null;
   try {
     items = await getInvestWatchlist({ accessToken });
-  } catch {
-    items = [];
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : "Watchlist could not be loaded.";
   }
-  return <InvestWatchlist items={items} />;
+  return <InvestWatchlist items={items} error={error} />;
 }

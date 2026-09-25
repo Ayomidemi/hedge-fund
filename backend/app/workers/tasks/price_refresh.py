@@ -22,7 +22,10 @@ from app.core.market_constants import PRICE_MARKET_HOURS_ONLY, PRICE_STALE_AFTER
 from app.db.session import engine_options
 from app.models import Instrument, InstrumentQuote, PriceRefreshRun
 from app.services.administration.system_log import record_system_log
-from app.services.invest.fixed_income import refresh_fixed_income_quotes
+from app.services.invest.fixed_income import (
+    refresh_fixed_income_quotes,
+    sync_fixed_income_products_from_providers,
+)
 from app.services.invest.markets import sync_market_board_from_tiingo_supported
 from app.services.market_data.fx_refresh import FxRefreshResult, refresh_fx_rates
 from app.services.market_data.ingestion import IngestionResult, ingest_quotes
@@ -72,6 +75,22 @@ async def _refresh_cycle(session: AsyncSession) -> None:
                 "matched_count": board_sync.matched_count,
                 "updated_count": board_sync.updated_count,
                 "missing_tickers": list(board_sync.missing_tickers),
+            },
+        )
+
+    fixed_income_sync = await sync_fixed_income_products_from_providers(session)
+    if fixed_income_sync.upserted_count or fixed_income_sync.skipped_reason not in {
+        None,
+        "fresh",
+    }:
+        logger.info(
+            "invest_fixed_income_products_synced",
+            extra={
+                "requested_count": fixed_income_sync.requested_count,
+                "matched_count": fixed_income_sync.matched_count,
+                "upserted_count": fixed_income_sync.upserted_count,
+                "quote_count": fixed_income_sync.quote_count,
+                "skipped_reason": fixed_income_sync.skipped_reason,
             },
         )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -26,12 +27,42 @@ from app.services.invest.news import (
     is_income_story,
     latest_news_items,
 )
-from app.services.market_radar.overview import build_radar_overview
+from app.services.market_radar.priority import build_industry_contexts
 
 UNUSUAL_LIMIT = 10
 SECTOR_LIMIT = 6
 WATCHLIST_LIMIT = 8
 BOARD_LIMIT = 6
+
+
+@dataclass(frozen=True)
+class _TapeName:
+    ticker: str
+    name: str
+    industry: str | None
+    sector: str | None
+    jurisdiction: str
+    change_pct: Decimal | None
+    volume_ratio: Decimal | None
+    flags: list[str]
+
+
+@dataclass(frozen=True)
+class _TapeMember:
+    ticker: str
+    flags: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _TapeIndustry:
+    name: str
+    status: str
+    jurisdiction: str
+    flagged_count: int
+    name_count: int
+    median_change_pct: Decimal | None
+    names: tuple[_TapeMember, ...]
+
 
 _DESK_WORDS = (
     "radar",
@@ -53,10 +84,9 @@ async def build_invest_discover(
 ) -> InvestDiscoverResponse:
     generated_at = datetime.now(timezone.utc)
     policy = await get_discover_policy(session)
-    radar = await build_radar_overview(session, jurisdiction="all")
+    flagged, industries, screened = await _retail_tape(session)
     watchlist_tickers = await _retail_watchlist_tickers(session, user.id)
     board = {ticker.upper() for ticker in await active_board_tickers(session)}
-    flagged = list(radar.flagged)
     unusual = [
         item
         for item in flagged
@@ -69,16 +99,16 @@ async def build_invest_discover(
     watchlist_moves.sort(key=_retail_sort_key)
     board_moves = [item for item in flagged if item.ticker.upper() in board]
     board_moves.sort(key=_retail_sort_key)
-    narrative = _narrative(radar.industries, unusual)
+    narrative = _narrative(industries, unusual)
 
     sections = [
         _unusual_section(
             unusual,
-            screened=radar.working_set_count,
+            screened=screened,
             limit=int(policy.get("unusual_limit", UNUSUAL_LIMIT)),
         ),
         _sector_section(
-            radar.industries,
+            industries,
             limit=int(policy.get("sector_limit", SECTOR_LIMIT)),
         ),
         _board_section(
@@ -95,7 +125,7 @@ async def build_invest_discover(
         generated_at=generated_at,
         summary=_summary(
             unusual_count=len(unusual),
-            sector_count=_active_industry_count(radar.industries),
+            sector_count=_active_industry_count(industries),
             watchlist_hits=len(watchlist_moves),
             watchlist_count=len(watchlist_tickers),
         ),
@@ -519,6 +549,70 @@ def _tone_for_change(value: Decimal | None) -> str:
     if value < 0:
         return "negative"
     return "neutral"
+
+
+async def _retail_tape(session: AsyncSession):
+    """Flagged names and group moves from the latest scan, without the Capital overview."""
+    run_id = await session.scalar(
+        select(RadarRun.id)
+        .where(RadarRun.status == "completed")
+        .where(RadarRun.working_set_count > 0)
+        .order_by(RadarRun.started_at.desc())
+        .limit(1)
+    )
+    if run_id is None:
+        return [], [], 0
+    rows = list(
+        (
+            await session.execute(
+                select(
+                    RadarSnapshot.ticker,
+                    RadarSnapshot.name,
+                    RadarSnapshot.industry,
+                    RadarSnapshot.sector,
+                    RadarSnapshot.jurisdiction,
+                    RadarSnapshot.change_pct,
+                    RadarSnapshot.volume_ratio,
+                    RadarSnapshot.flags,
+                )
+                .where(RadarSnapshot.run_id == run_id)
+                .where(RadarSnapshot.in_working_set.is_(True))
+            )
+        ).all()
+    )
+    names = [
+        _TapeName(
+            ticker=row.ticker,
+            name=row.name,
+            industry=row.industry,
+            sector=row.sector,
+            jurisdiction=row.jurisdiction,
+            change_pct=row.change_pct,
+            volume_ratio=row.volume_ratio,
+            flags=list(row.flags or []),
+        )
+        for row in rows
+    ]
+    industries = []
+    for context in build_industry_contexts(names).values():
+        if context.status not in {"industry_event", "market_event"}:
+            continue
+        industries.append(
+            _TapeIndustry(
+                name=context.label,
+                status=context.status,
+                jurisdiction=context.jurisdiction,
+                flagged_count=context.flagged_count,
+                name_count=context.member_count,
+                median_change_pct=context.median_change_pct,
+                names=tuple(
+                    _TapeMember(ticker=ticker, flags=("move",))
+                    for ticker in context.related_tickers
+                ),
+            )
+        )
+    flagged = [item for item in names if item.flags]
+    return flagged, industries, len(names)
 
 
 def uses_desk_language(text: str) -> bool:
