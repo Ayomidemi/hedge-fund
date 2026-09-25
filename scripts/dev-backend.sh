@@ -8,6 +8,7 @@ BACKEND="$ROOT/backend"
 VENV="$BACKEND/.venv"
 API_HOST="${HF_API_HOST:-127.0.0.1}"
 API_PORT="${HF_API_PORT:-8001}"
+CELERY_CONCURRENCY="${HF_CELERY_CONCURRENCY:-1}"
 
 if [[ ! -x "$VENV/bin/uvicorn" ]]; then
   echo "Missing backend venv. Run:"
@@ -41,7 +42,7 @@ trap cleanup EXIT INT TERM
 cd "$BACKEND"
 
 echo "→ Starting Celery worker + beat..."
-"$VENV/bin/celery" -A app.workers.celery_app worker --beat -l info &
+"$VENV/bin/celery" -A app.workers.celery_app worker --beat -l info --concurrency "$CELERY_CONCURRENCY" &
 PIDS+=($!)
 
 echo "→ Starting API at http://${API_HOST}:${API_PORT}"

@@ -34,6 +34,7 @@ from app.services.invest.fixed_income import (
     _product_from_treasury_auction_row,
     _record_from_product,
     _quote_from_record,
+    _yield_curve_products,
     fixed_income_cashflows,
     fixed_income_quote,
     fixed_income_response,
@@ -44,9 +45,13 @@ from app.services.invest.fixed_income import (
 from app.services.invest.fixed_income_providers import fixed_income_provider_plan
 from app.services.invest.markets import (
     DEFAULT_MARKET_BOARD_RULES,
+    _TIINGO_SUPPORTED_TICKERS_URL,
     _apply_tiingo_metadata_to_board_item,
     _board_item_from_rule,
+    _clear_market_board_sync_backoff,
+    _market_board_sync_is_backing_off,
     _parse_tiingo_supported_tickers,
+    _set_market_board_sync_backoff,
     board_tickers,
     rates_board_tickers,
 )
@@ -459,6 +464,55 @@ class FixedIncomeScopeTests(TestCase):
             {"NG-TBILL-182D", "US-TSY-912797AB1"},
         )
 
+    def test_yield_curve_products_keep_one_row_per_tenor(self) -> None:
+        synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        older = _product_from_treasury_auction_row(
+            {
+                "cusip": "912797AA3",
+                "security_type": "Bill",
+                "security_term": "4-Week",
+                "auction_date": "2026-09-17",
+                "issue_date": "2026-09-22",
+                "maturity_date": "2026-10-20",
+                "high_investment_rate": "3.80",
+            },
+            synced_at=synced_at,
+        )
+        newer = _product_from_treasury_auction_row(
+            {
+                "cusip": "912797AB1",
+                "security_type": "Bill",
+                "security_term": "4-Week",
+                "auction_date": "2026-09-24",
+                "issue_date": "2026-09-29",
+                "maturity_date": "2026-10-27",
+                "high_investment_rate": "3.92",
+            },
+            synced_at=synced_at,
+        )
+        other = _product_from_treasury_auction_row(
+            {
+                "cusip": "912797AC9",
+                "security_type": "Bill",
+                "security_term": "13-Week",
+                "auction_date": "2026-09-24",
+                "issue_date": "2026-09-29",
+                "maturity_date": "2026-12-29",
+                "high_investment_rate": "4.51",
+            },
+            synced_at=synced_at,
+        )
+        assert older is not None
+        assert newer is not None
+        assert other is not None
+
+        curve_products = _yield_curve_products([older, newer, other])
+
+        self.assertEqual(
+            {product.tenor: product.ticker for product in curve_products},
+            {"4-Week": "US-TSY-912797AB1", "13-Week": "US-TSY-912797AC9"},
+        )
+
     def test_fixed_income_source_uses_internal_model_fallback(self) -> None:
         product = get_fixed_income_product("US-TBILL-13W")
         assert product is not None
@@ -713,6 +767,22 @@ class InvestMarketsBoardTests(TestCase):
         self.assertEqual(set(parsed), {"SPY"})
         self.assertEqual(parsed["SPY"]["assetType"], "ETF")
         self.assertEqual(parsed["SPY"]["priceCurrency"], "USD")
+
+    def test_tiingo_supported_tickers_uses_docs_host(self) -> None:
+        self.assertEqual(
+            _TIINGO_SUPPORTED_TICKERS_URL,
+            "https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip",
+        )
+
+    def test_market_board_sync_provider_backoff(self) -> None:
+        now = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
+        _clear_market_board_sync_backoff()
+
+        retry_after = _set_market_board_sync_backoff(now)
+
+        self.assertTrue(_market_board_sync_is_backing_off(now + timedelta(hours=1)))
+        self.assertFalse(_market_board_sync_is_backing_off(retry_after))
+        _clear_market_board_sync_backoff()
 
     def test_seed_item_uses_tiingo_metadata_when_available(self) -> None:
         spy_rule = next(

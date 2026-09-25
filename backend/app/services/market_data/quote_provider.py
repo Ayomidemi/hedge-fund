@@ -14,7 +14,7 @@ endpoint individually.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -23,6 +23,9 @@ from app.core.config import settings
 from app.core.market_constants import PRICE_BATCH_SIZE, QUOTE_HTTP_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
+
+_NGN_MARKET_RATE_LIMIT_BACKOFF = timedelta(minutes=10)
+_ngn_quote_backoff_until: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +233,9 @@ async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
     (unlike /companies/{symbol}, which requires a paid plan)."""
     quotes: dict[str, LiveQuote] = {}
     now = datetime.now(timezone.utc)
+    if _ngn_quote_is_backing_off(now):
+        return quotes
+
     async with httpx.AsyncClient(
         base_url=settings.ngnmarket_base_url,
         timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
@@ -245,9 +251,15 @@ async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
+                extra = {"ticker_symbol": ticker, "error": str(exc)}
+                if _is_rate_limit_error(exc):
+                    retry_after = _set_ngn_quote_backoff(now)
+                    extra["retry_after"] = retry_after.isoformat()
+                    logger.warning("ngn_quote_rate_limited", extra=extra)
+                    break
                 logger.warning(
                     "ngn_quote_failed",
-                    extra={"ticker_symbol": ticker, "error": str(exc)},
+                    extra=extra,
                 )
                 continue
 
@@ -279,6 +291,24 @@ async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
     return quotes
 
 
+def _ngn_quote_is_backing_off(now: datetime) -> bool:
+    return _ngn_quote_backoff_until is not None and _ngn_quote_backoff_until > now
+
+
+def _set_ngn_quote_backoff(now: datetime) -> datetime:
+    global _ngn_quote_backoff_until
+    _ngn_quote_backoff_until = now + _NGN_MARKET_RATE_LIMIT_BACKOFF
+    return _ngn_quote_backoff_until
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response is not None
+        and exc.response.status_code == 429
+    )
+
+
 def _ngn_company_match(payload: object, symbol: str) -> dict | None:
     """Extract the exact-symbol row from the NGN Market search response:
     {"success": true, "data": {"data": [{"symbol": ..., "price": ...}]}}"""
@@ -290,10 +320,7 @@ def _ngn_company_match(payload: object, symbol: str) -> dict | None:
     if not isinstance(data, list):
         return None
     for item in data:
-        if (
-            isinstance(item, dict)
-            and str(item.get("symbol") or "").upper() == symbol
-        ):
+        if isinstance(item, dict) and str(item.get("symbol") or "").upper() == symbol:
             return item
     return None
 

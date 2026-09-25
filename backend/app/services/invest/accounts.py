@@ -84,6 +84,19 @@ MONEY = Decimal("0.01")
 
 
 @dataclass(frozen=True)
+class _RiskCash:
+    cash_balance: Decimal
+    base_currency: str
+
+
+@dataclass(frozen=True)
+class _RiskName:
+    ticker: str
+    asset_class: str
+    currency: str
+
+
+@dataclass(frozen=True)
 class _SavedWatchRow:
     id: UUID
     notes: str | None
@@ -316,19 +329,34 @@ async def submit_order(
     session: AsyncSession, user: AuthenticatedUser, payload: InvestOrderCreate
 ) -> InvestOrderResponse:
     account = await get_or_create_account(session, user)
+    account_id = account.id
+    base_currency = account.base_currency
+    cash_balance = account.cash_balance
+    broker_provider = account.broker_provider
+    broker_account_id = account.broker_account_id
     if payload.amount is None and payload.quantity is None:
         raise InvestValidationError("Enter an amount or a quantity.")
     instrument = await _require_instrument(session, payload.ticker)
-    fixed_income_product = await get_fixed_income_product_db(session, instrument.ticker)
+    ticker = instrument.ticker
+    asset_class = instrument.asset_class
+    currency = instrument.currency
+    fixed_income_product = await get_fixed_income_product_db(session, ticker)
     if fixed_income_product is not None:
         instrument = await ensure_fixed_income_instrument(session, fixed_income_product)
+        ticker = instrument.ticker
+        asset_class = instrument.asset_class
+        currency = instrument.currency
     risk_policy = await get_typed_risk_policy(session)
     cash_notional = await _cash_notional_for_order(
-        session, account, instrument, fixed_income_product, payload.amount
+        session,
+        base_currency,
+        currency,
+        fixed_income_product,
+        payload.amount,
     )
     risk_assessment = evaluate_order_risk(
-        account=account,
-        instrument=instrument,
+        account=_RiskCash(cash_balance=cash_balance, base_currency=base_currency),
+        instrument=_RiskName(ticker=ticker, asset_class=asset_class, currency=currency),
         payload=payload,
         fixed_income_product=fixed_income_product,
         policy=risk_policy,
@@ -338,10 +366,10 @@ async def submit_order(
         raise InvestValidationError(
             " ".join(check.message for check in risk_assessment.blockers)
         )
-    broker = get_broker_provider(session, account.broker_provider)
+    broker = get_broker_provider(session, broker_provider)
     try:
         result = await broker.submit_order(
-            account.broker_account_id,
+            broker_account_id,
             SubmitOrderRequest(
                 symbol=payload.ticker,
                 side=payload.side,
@@ -365,19 +393,20 @@ async def submit_order(
         dict.fromkeys([*list(order.warnings or []), *risk_assessment.warnings])
     )
     order.warnings = merged_warnings
+    response = _order_response(order, instrument)
     await record_system_log(
         session,
         owner_user_id=user.id,
         category="invest",
         event="retail_order_submitted",
-        message=f"Paper {order.side.lower()} order for {instrument.ticker} filled.",
+        message=f"Paper {response.side.lower()} order for {response.ticker} filled.",
         context={
-            "account_id": str(account.id),
-            "order_id": str(order.id),
-            "ticker": instrument.ticker,
-            "status": order.status,
-            "notional": str(order.notional),
-            "quantity": str(order.quantity),
+            "account_id": str(account_id),
+            "order_id": str(response.id),
+            "ticker": response.ticker,
+            "status": response.status,
+            "notional": str(response.notional),
+            "quantity": str(response.quantity),
             "risk_checks": [
                 {
                     "code": check.code,
@@ -390,7 +419,7 @@ async def submit_order(
         },
     )
     await session.commit()
-    return _order_response(order, instrument)
+    return response
 
 
 async def list_orders(
@@ -929,22 +958,22 @@ async def _require_instrument(session: AsyncSession, ticker: str) -> Instrument:
 
 async def _cash_notional_for_order(
     session: AsyncSession,
-    account: RetailAccount,
-    instrument: Instrument,
+    base_currency: str,
+    instrument_currency: str | None,
     product,
     amount: Decimal | None,
 ) -> Decimal | None:
     if amount is None:
         return None
-    currency = (product.currency if product is not None else instrument.currency) or (
-        account.base_currency
+    currency = (product.currency if product is not None else instrument_currency) or (
+        base_currency
     )
     converted = await convert_amount_to_base(
-        session, amount, currency, account.base_currency
+        session, amount, currency, base_currency
     )
     if converted is None:
         raise InvestValidationError(
-            f"No {account.base_currency}/{currency} rate available to paper this order."
+            f"No {base_currency}/{currency} rate available to paper this order."
         )
     return converted
 

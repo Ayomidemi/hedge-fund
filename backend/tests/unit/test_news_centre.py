@@ -7,7 +7,11 @@ from uuid import uuid4
 from app.main import app
 from app.core.config import Settings, settings
 from app.services.news import centre, providers
-from app.services.news.providers import NewsFetchResult, ProviderNewsItem, normalize_ticker
+from app.services.news.providers import (
+    NewsFetchResult,
+    ProviderNewsItem,
+    normalize_ticker,
+)
 from app.services.realtime.events import news_poll_completed_event
 
 
@@ -253,10 +257,10 @@ class NewsUpsertBatchTests(TestCase):
 
 
 class NewsPollIntervalTests(TestCase):
-    def test_news_poll_interval_defaults_to_sixty_seconds(self) -> None:
+    def test_news_poll_interval_defaults_to_five_minutes(self) -> None:
         self.assertEqual(
             Settings.model_fields["hf_news_poll_interval_seconds"].default,
-            60,
+            300,
         )
         self.assertGreaterEqual(settings.news_poll_interval_seconds, 30)
 

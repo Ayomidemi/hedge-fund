@@ -109,8 +109,8 @@ DEFAULT_INVEST_SETTINGS: dict[str, Any] = {
         "unusual_limit": 10,
         "sector_limit": 6,
         "board_limit": 6,
-        "include_news_section": True,
-        "include_watchlist_section": True,
+        "include_news_section": False,
+        "include_watchlist_section": False,
         "next_actions_when_empty_watchlist": [
             {
                 "title": "Compare the fixed-income shelf",
@@ -341,8 +341,8 @@ async def get_discover_policy(session: AsyncSession) -> dict[str, Any]:
         if isinstance(payload, dict)
         else default_invest_setting("discover_policy")
     )
-    policy["include_news_section"] = True
-    policy["include_watchlist_section"] = True
+    policy["include_news_section"] = False
+    policy["include_watchlist_section"] = False
     return policy
 
 

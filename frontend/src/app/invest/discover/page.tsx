@@ -25,7 +25,10 @@ export default async function InvestDiscoverPage() {
     );
   }
 
-  const visibleSections = discover.sections;
+  const hiddenSectionIds = new Set(["latest_news", "watchlist_updates"]);
+  const visibleSections = discover.sections.filter(
+    (section) => !hiddenSectionIds.has(section.id),
+  );
   const unusualSection =
     visibleSections.find((section) => section.id === "unusual_activity") ??
     visibleSections[0] ??

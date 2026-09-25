@@ -24,7 +24,6 @@ from app.api.schemas.invest import (
     InvestMarketsResponse,
 )
 from app.api.schemas.operating_core import InstrumentCreate
-from app.core.config import settings
 from app.core.market_constants import QUOTE_HTTP_TIMEOUT_SECONDS
 from app.models import Instrument, InstrumentQuote, InvestMarketBoardItem
 from app.services.invest.fixed_income import (
@@ -66,8 +65,12 @@ class MarketBoardSyncResult:
 
 
 _SEED_DIR = Path(__file__).with_name("seed_data")
-_TIINGO_SUPPORTED_TICKERS_PATH = "/tiingo/daily/supported_tickers.zip"
+_TIINGO_SUPPORTED_TICKERS_URL = (
+    "https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip"
+)
 _MARKET_BOARD_METADATA_TTL = timedelta(days=1)
+_MARKET_BOARD_PROVIDER_ERROR_BACKOFF = timedelta(hours=6)
+_market_board_sync_failure_until: datetime | None = None
 
 
 @lru_cache(maxsize=1)
@@ -267,22 +270,27 @@ async def sync_market_board_from_tiingo_supported(
             skipped_reason="fresh",
         )
 
-    if not settings.hf_tiingo_api_key:
+    if not force and _market_board_sync_is_backing_off(now):
         return MarketBoardSyncResult(
             requested_count=len(requested_tickers),
             matched_count=0,
             updated_count=0,
             missing_tickers=tuple(sorted(requested_tickers)),
-            skipped_reason="tiingo_api_key_missing",
+            skipped_reason="provider_backoff",
         )
 
     try:
         payload = await _fetch_tiingo_supported_tickers_zip()
         metadata_by_ticker = _parse_tiingo_supported_tickers(payload, requested_tickers)
     except (httpx.HTTPError, ValueError, zipfile.BadZipFile) as exc:
+        retry_after = _set_market_board_sync_backoff(now)
         logger.warning(
             "invest_market_board_tiingo_sync_failed",
-            extra={"error": str(exc)},
+            extra={
+                "error": str(exc),
+                "retry_after": retry_after.isoformat(),
+                "url": _TIINGO_SUPPORTED_TICKERS_URL,
+            },
         )
         return MarketBoardSyncResult(
             requested_count=len(requested_tickers),
@@ -298,6 +306,7 @@ async def sync_market_board_from_tiingo_supported(
             select(Instrument).where(Instrument.ticker.in_(requested_tickers))
         )
     }
+    _clear_market_board_sync_backoff()
     updated_count = 0
     for record in sync_records:
         metadata = metadata_by_ticker.get(record.ticker.upper())
@@ -403,13 +412,29 @@ def _board_item_from_rule(
 
 async def _fetch_tiingo_supported_tickers_zip() -> bytes:
     async with httpx.AsyncClient(
-        base_url=settings.tiingo_base_url,
         timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
-        headers={"Authorization": f"Token {settings.hf_tiingo_api_key}"},
     ) as client:
-        response = await client.get(_TIINGO_SUPPORTED_TICKERS_PATH)
+        response = await client.get(_TIINGO_SUPPORTED_TICKERS_URL)
         response.raise_for_status()
         return response.content
+
+
+def _market_board_sync_is_backing_off(now: datetime) -> bool:
+    return (
+        _market_board_sync_failure_until is not None
+        and _market_board_sync_failure_until > now
+    )
+
+
+def _set_market_board_sync_backoff(now: datetime) -> datetime:
+    global _market_board_sync_failure_until
+    _market_board_sync_failure_until = now + _MARKET_BOARD_PROVIDER_ERROR_BACKOFF
+    return _market_board_sync_failure_until
+
+
+def _clear_market_board_sync_backoff() -> None:
+    global _market_board_sync_failure_until
+    _market_board_sync_failure_until = None
 
 
 def _uses_tiingo_supported(record: InvestMarketBoardItem) -> bool:

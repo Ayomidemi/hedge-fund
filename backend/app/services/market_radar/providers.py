@@ -4,7 +4,7 @@ this module never mixes US and NGX endpoints in one function."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -18,6 +18,9 @@ from app.core.market_constants import (
 from app.services.market_radar.scoring import RadarCandidate
 
 logger = logging.getLogger(__name__)
+
+_NGN_MARKET_DISCOVERY_BACKOFF = timedelta(minutes=10)
+_ngn_discovery_backoff_until: datetime | None = None
 
 FMP_MOVER_ENDPOINTS = (
     ("/stable/most-actives", "unusual_volume"),
@@ -51,7 +54,9 @@ async def fetch_us_movers() -> tuple[list[RadarCandidate], int, list[str]]:
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 errors.append(f"FMP {path} failed: {exc}")
-                logger.warning("radar_fmp_movers_failed", extra={"path": path, "error": str(exc)})
+                logger.warning(
+                    "radar_fmp_movers_failed", extra={"path": path, "error": str(exc)}
+                )
                 continue
 
             rows = _list_payload(payload)
@@ -78,7 +83,9 @@ async def fetch_us_movers() -> tuple[list[RadarCandidate], int, list[str]]:
                     source_as_of=now,
                 )
                 candidate.price = _decimal(item.get("price")) or candidate.price
-                candidate.change_pct = change_pct if change_pct is not None else candidate.change_pct
+                candidate.change_pct = (
+                    change_pct if change_pct is not None else candidate.change_pct
+                )
                 candidate.volume = _int(item.get("volume")) or candidate.volume
                 candidate.avg_volume = (
                     _int(item.get("avgVolume") or item.get("averageVolume"))
@@ -100,6 +107,8 @@ async def fetch_ngn_discovery() -> tuple[list[RadarCandidate], int, list[str]]:
     calls = 0
     candidates: dict[str, RadarCandidate] = {}
     now = datetime.now(timezone.utc)
+    if _ngn_discovery_is_backing_off(now):
+        return [], 0, ["NGN Market is cooling down after a rate-limit response."]
 
     async with httpx.AsyncClient(
         base_url=settings.ngnmarket_base_url,
@@ -114,7 +123,13 @@ async def fetch_ngn_discovery() -> tuple[list[RadarCandidate], int, list[str]]:
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 errors.append(f"NGN {path} failed: {exc}")
-                logger.warning("radar_ngn_list_failed", extra={"path": path, "error": str(exc)})
+                extra = {"path": path, "error": str(exc)}
+                if _is_rate_limit_error(exc):
+                    retry_after = _set_ngn_discovery_backoff(now)
+                    extra["retry_after"] = retry_after.isoformat()
+                    logger.warning("radar_ngn_list_rate_limited", extra=extra)
+                    break
+                logger.warning("radar_ngn_list_failed", extra=extra)
                 continue
 
             for item in _ngn_rows(payload)[:RADAR_NG_DISCOVERY_LIMIT]:
@@ -123,17 +138,27 @@ async def fetch_ngn_discovery() -> tuple[list[RadarCandidate], int, list[str]]:
                     continue
                 ticker = symbol if symbol.endswith(".NG") else f"{symbol}.NG"
                 price = _decimal(item.get("price"))
-                previous_close = _decimal(item.get("prev_close") or item.get("previous_close"))
-                change_pct = _decimal(item.get("change_pct") or item.get("changePercent"))
-                if change_pct is None and price and previous_close and previous_close > 0:
-                    change_pct = ((price - previous_close) / previous_close * 100).quantize(
-                        Decimal("0.01")
-                    )
+                previous_close = _decimal(
+                    item.get("prev_close") or item.get("previous_close")
+                )
+                change_pct = _decimal(
+                    item.get("change_pct") or item.get("changePercent")
+                )
+                if (
+                    change_pct is None
+                    and price
+                    and previous_close
+                    and previous_close > 0
+                ):
+                    change_pct = (
+                        (price - previous_close) / previous_close * 100
+                    ).quantize(Decimal("0.01"))
                 candidates[ticker] = RadarCandidate(
                     ticker=ticker,
                     name=str(item.get("name") or item.get("company_name") or symbol),
                     jurisdiction="NG",
-                    sector=str(item.get("sector") or item.get("industry") or "") or None,
+                    sector=str(item.get("sector") or item.get("industry") or "")
+                    or None,
                     industry=str(item.get("industry") or "") or None,
                     asset_class="etf" if path == "/etfs" else "equity",
                     exchange="NGX",
@@ -152,6 +177,26 @@ async def fetch_ngn_discovery() -> tuple[list[RadarCandidate], int, list[str]]:
         reverse=True,
     )
     return ranked[:RADAR_NG_DISCOVERY_LIMIT], calls, errors
+
+
+def _ngn_discovery_is_backing_off(now: datetime) -> bool:
+    return (
+        _ngn_discovery_backoff_until is not None and _ngn_discovery_backoff_until > now
+    )
+
+
+def _set_ngn_discovery_backoff(now: datetime) -> datetime:
+    global _ngn_discovery_backoff_until
+    _ngn_discovery_backoff_until = now + _NGN_MARKET_DISCOVERY_BACKOFF
+    return _ngn_discovery_backoff_until
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response is not None
+        and exc.response.status_code == 429
+    )
 
 
 def _list_payload(payload: object) -> list:

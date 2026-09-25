@@ -19,19 +19,12 @@ from app.models import RadarRun, RadarSnapshot, RetailWatchlistItem
 from app.services.invest.configuration import (
     default_invest_setting,
     get_discover_policy,
-    get_news_policy,
 )
 from app.services.invest.markets import active_board_tickers
-from app.services.invest.news import (
-    income_news_items,
-    is_income_story,
-    latest_news_items,
-)
 from app.services.market_radar.priority import build_industry_contexts
 
 UNUSUAL_LIMIT = 10
 SECTOR_LIMIT = 6
-WATCHLIST_LIMIT = 8
 BOARD_LIMIT = 6
 
 
@@ -116,10 +109,6 @@ async def build_invest_discover(
             limit=int(policy.get("board_limit", BOARD_LIMIT)),
         ),
     ]
-    if bool(policy.get("include_watchlist_section", False)):
-        sections.append(_watchlist_section(watchlist_moves, watchlist_tickers))
-    if bool(policy.get("include_news_section", False)):
-        sections.append(await _news_section(session))
 
     return InvestDiscoverResponse(
         generated_at=generated_at,
@@ -184,38 +173,6 @@ def _sector_section(
     )
 
 
-def _watchlist_section(
-    items, watchlist_tickers: set[str]
-) -> InvestDiscoverSectionResponse:
-    if not watchlist_tickers:
-        cards = [
-            InvestDiscoverItemResponse(
-                title="Watchlist is empty",
-                subtitle="Add names you care about. Unusual moves in those names will show up here.",
-                badge="Watchlist",
-                href="/invest/watchlist",
-            )
-        ]
-    elif not items:
-        cards = [
-            InvestDiscoverItemResponse(
-                title="Your names look steady",
-                subtitle="None of your watchlist tickers were unusual in the latest scan.",
-                badge="Quiet",
-                href="/invest/watchlist",
-                metadata=[f"{len(watchlist_tickers)} watched"],
-            )
-        ]
-    else:
-        cards = [_name_card(item, kind="Watch") for item in items[:WATCHLIST_LIMIT]]
-    return InvestDiscoverSectionResponse(
-        id="watchlist_updates",
-        title="Watchlist updates",
-        description="Unusual tape in names you already track on Pease Invest.",
-        items=cards,
-    )
-
-
 def _board_section(
     items, *, limit: int = BOARD_LIMIT
 ) -> InvestDiscoverSectionResponse:
@@ -233,57 +190,6 @@ def _board_section(
         id="board_movers",
         title="On the boards",
         description="Unusual prints among the listed names on the Invest markets board.",
-        items=cards,
-    )
-
-
-async def _news_section(session: AsyncSession) -> InvestDiscoverSectionResponse:
-    news_policy = await get_news_policy(session)
-    income = await income_news_items(session, limit=3)
-    latest = await latest_news_items(session, limit=8)
-    cards: list[InvestDiscoverItemResponse] = []
-    seen: set = set()
-    for item in [*income, *latest]:
-        if item.id in seen:
-            continue
-        seen.add(item.id)
-        tickers = [link.ticker for link in (item.ticker_links or [])]
-        rates = is_income_story(
-            title=item.title,
-            summary=item.summary,
-            tickers=tickers,
-            policy=news_policy,
-        )
-        lead = next((ticker for ticker in tickers if ticker), None)
-        cards.append(
-            InvestDiscoverItemResponse(
-                title=item.title,
-                subtitle=item.source_name or item.provider,
-                badge="Rates" if rates else "Headline",
-                href=(
-                    f"/invest/news?ticker={lead}"
-                    if lead
-                    else "/invest/news"
-                ),
-                tone="income" if rates else "neutral",
-                metadata=tickers[:3],
-            )
-        )
-        if len(cards) >= 5:
-            break
-    if not cards:
-        cards.append(
-            InvestDiscoverItemResponse(
-                title="No stored headlines yet",
-                subtitle="Rates and listed tape land on News when Tiingo has copy.",
-                badge="News",
-                href="/invest/news",
-            )
-        )
-    return InvestDiscoverSectionResponse(
-        id="latest_news",
-        title="Latest headlines",
-        description="Rates first when the tape has Treasury, bill, or FGN copy. Full article list stays on News.",
         items=cards,
     )
 

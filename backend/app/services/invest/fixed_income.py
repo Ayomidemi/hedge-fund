@@ -1401,7 +1401,7 @@ async def _ensure_model_yield_curves(
         )
         session.add(curve)
         await session.flush()
-        for product in grouped_products:
+        for product in _yield_curve_products(grouped_products):
             quote = fixed_income_quote(product)
             session.add(
                 InvestYieldCurvePoint(
@@ -1412,6 +1412,40 @@ async def _ensure_model_yield_curves(
                 )
             )
     await session.flush()
+
+
+def _yield_curve_products(
+    products: list[FixedIncomeProduct],
+) -> list[FixedIncomeProduct]:
+    products_by_tenor: dict[str, FixedIncomeProduct] = {}
+    for product in products:
+        existing = products_by_tenor.get(product.tenor)
+        if existing is None or _curve_product_rank(product) > _curve_product_rank(
+            existing
+        ):
+            products_by_tenor[product.tenor] = product
+    return sorted(
+        products_by_tenor.values(),
+        key=lambda product: fixed_income_quote(product).days_to_maturity,
+    )
+
+
+def _curve_product_rank(product: FixedIncomeProduct) -> tuple[date, datetime, str]:
+    auction_date = _row_date((product.source_payload or {}).get("auction_date"))
+    maturity_date = (
+        date.fromisoformat(product.maturity_date)
+        if product.maturity_date is not None
+        else date.min
+    )
+    return (
+        auction_date or maturity_date,
+        (
+            _aware_datetime(product.source_as_of)
+            if product.source_as_of
+            else datetime.min.replace(tzinfo=timezone.utc)
+        ),
+        product.ticker,
+    )
 
 
 def _date_text(value: date | None) -> str:

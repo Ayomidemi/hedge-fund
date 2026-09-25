@@ -127,6 +127,10 @@ class PaperBrokerProvider:
         self, broker_account_id: str, request: SubmitOrderRequest
     ) -> BrokerOrder:
         account = await self._load_account(broker_account_id)
+        base_currency = account.base_currency
+        cash_balance = account.cash_balance
+        account_id = account.id
+        user_id = account.user_id
         policy = await get_typed_paper_broker_policy(self.session)
         side = request.side.strip().upper()
         order_type = request.order_type.strip().lower()
@@ -136,26 +140,32 @@ class PaperBrokerProvider:
             raise BrokerValidationError("Paper V1 only accepts market orders.")
 
         instrument = await self._load_instrument(request.symbol)
-        fixed_income_product = await get_fixed_income_product_db(
-            self.session, instrument.ticker
-        )
+        ticker = instrument.ticker
+        instrument_id = instrument.id
+        instrument_currency = instrument.currency or base_currency
+        asset_class = instrument.asset_class
+        sector = instrument.sector
+        fixed_income_product = await get_fixed_income_product_db(self.session, ticker)
         if fixed_income_product is not None:
             instrument = await ensure_fixed_income_instrument(
                 self.session, fixed_income_product
             )
+            ticker = instrument.ticker
+            instrument_id = instrument.id
+            instrument_currency = instrument.currency or base_currency
+            asset_class = instrument.asset_class
+            sector = instrument.sector
             mark = await fixed_income_price_per_face_db(
                 self.session, fixed_income_product
             )
             face_increment = fixed_income_product.face_value_increment
         else:
             mark = await get_or_fetch_quote_price(
-                self.session, instrument.ticker, instrument_id=instrument.id
+                self.session, ticker, instrument_id=instrument_id
             )
             face_increment = None
         if mark is None or mark <= 0:
-            raise BrokerValidationError(
-                f"No live mark is available for {instrument.ticker}."
-            )
+            raise BrokerValidationError(f"No live mark is available for {ticker}.")
 
         now = datetime.now(timezone.utc)
         broker_order_id = str(uuid4())
@@ -173,10 +183,12 @@ class PaperBrokerProvider:
                 )
             else:
                 quantity, notional = _buy_size(request, mark)
-            cash_notional = await self._cash_amount(account, instrument, notional)
-            if cash_notional > account.cash_balance:
+            cash_notional = await self._cash_amount(
+                notional, instrument_currency, base_currency
+            )
+            if cash_notional > cash_balance:
                 raise BrokerValidationError("Not enough buying power for this order.")
-            equity = await self._equity(account)
+            equity = await self._equity(broker_account_id, cash_balance)
             if (
                 equity > 0
                 and (cash_notional / (equity + cash_notional))
@@ -184,21 +196,32 @@ class PaperBrokerProvider:
             ):
                 warnings.append(
                     f"This purchase would be a large share of your portfolio "
-                    f"({instrument.ticker})."
+                    f"({ticker})."
                 )
-            native_ccy = (instrument.currency or account.base_currency).upper()
-            if native_ccy != account.base_currency.upper():
+            if instrument_currency.upper() != base_currency.upper():
                 warnings.append(
-                    f"Paper cash is {account.base_currency}; "
-                    f"{native_ccy} converted at the stored FX rate."
+                    f"Paper cash is {base_currency}; "
+                    f"{instrument_currency.upper()} converted at the stored FX rate."
                 )
             await self._apply_buy(
-                account, instrument, quantity, cash_notional, now, broker_order_id
+                account,
+                account_id,
+                instrument_id,
+                ticker,
+                asset_class,
+                sector,
+                quantity,
+                cash_notional,
+                cash_balance,
+                base_currency,
+                now,
+                broker_order_id,
             )
         else:
             quantity, notional = await self._sell_size(
-                account,
-                instrument,
+                account_id,
+                instrument_id,
+                ticker,
                 request,
                 mark,
                 quantity_increment=face_increment,
@@ -207,21 +230,33 @@ class PaperBrokerProvider:
                 warnings.append(
                     "Fixed-income paper fill uses stored dirty price; quantity is face value."
                 )
-            cash_notional = await self._cash_amount(account, instrument, notional)
-            native_ccy = (instrument.currency or account.base_currency).upper()
-            if native_ccy != account.base_currency.upper():
+            cash_notional = await self._cash_amount(
+                notional, instrument_currency, base_currency
+            )
+            if instrument_currency.upper() != base_currency.upper():
                 warnings.append(
-                    f"Paper cash is {account.base_currency}; "
-                    f"{native_ccy} converted at the stored FX rate."
+                    f"Paper cash is {base_currency}; "
+                    f"{instrument_currency.upper()} converted at the stored FX rate."
                 )
             await self._apply_sell(
-                account, instrument, quantity, cash_notional, now, broker_order_id
+                account,
+                account_id,
+                instrument_id,
+                ticker,
+                asset_class,
+                sector,
+                quantity,
+                cash_notional,
+                cash_balance,
+                base_currency,
+                now,
+                broker_order_id,
             )
 
         order = RetailOrder(
-            user_id=account.user_id,
-            account_id=account.id,
-            instrument_id=instrument.id,
+            user_id=user_id,
+            account_id=account_id,
+            instrument_id=instrument_id,
             side=side,
             order_type="market",
             quantity=quantity,
@@ -239,7 +274,7 @@ class PaperBrokerProvider:
         )
         self.session.add(order)
         await self.session.flush()
-        return _order_snapshot(order, instrument.ticker)
+        return _order_snapshot(order, ticker)
 
     async def cancel_order(
         self, broker_account_id: str, broker_order_id: str
@@ -383,45 +418,50 @@ class PaperBrokerProvider:
             raise BrokerValidationError(f"{ticker} is not available to trade yet.")
         return instrument
 
-    async def _equity(self, account: RetailAccount) -> Decimal:
-        positions = await self.get_positions(account.broker_account_id)
+    async def _equity(self, broker_account_id: str, cash_balance: Decimal) -> Decimal:
+        positions = await self.get_positions(broker_account_id)
         invested = sum((item.market_value for item in positions), Decimal("0"))
-        return (account.cash_balance + invested).quantize(MONEY)
+        return (cash_balance + invested).quantize(MONEY)
 
     async def _cash_amount(
-        self, account: RetailAccount, instrument: Instrument, native_amount: Decimal
+        self, native_amount: Decimal, currency: str, base_currency: str
     ) -> Decimal:
-        currency = instrument.currency or account.base_currency
         converted = await convert_amount_to_base(
-            self.session, native_amount, currency, account.base_currency
+            self.session, native_amount, currency, base_currency
         )
         if converted is None:
             raise BrokerValidationError(
-                f"No {account.base_currency}/{currency} rate available to paper this order."
+                f"No {base_currency}/{currency} rate available to paper this order."
             )
         return converted.quantize(MONEY, rounding=ROUND_HALF_UP)
 
     async def _apply_buy(
         self,
         account: RetailAccount,
-        instrument: Instrument,
+        account_id,
+        instrument_id,
+        ticker: str,
+        asset_class: str | None,
+        sector: str | None,
         quantity: Decimal,
         cash_notional: Decimal,
+        cash_balance: Decimal,
+        base_currency: str,
         now: datetime,
         broker_order_id: str,
     ) -> None:
         notional = cash_notional.quantize(MONEY, rounding=ROUND_HALF_UP)
-        account.cash_balance = (account.cash_balance - notional).quantize(MONEY)
+        account.cash_balance = (cash_balance - notional).quantize(MONEY)
         position = await self.session.scalar(
             select(RetailPosition)
-            .where(RetailPosition.account_id == account.id)
-            .where(RetailPosition.instrument_id == instrument.id)
+            .where(RetailPosition.account_id == account_id)
+            .where(RetailPosition.instrument_id == instrument_id)
         )
         unit_cost = (notional / quantity).quantize(PRICE, rounding=ROUND_HALF_UP)
         if position is None:
             position = RetailPosition(
-                account_id=account.id,
-                instrument_id=instrument.id,
+                account_id=account_id,
+                instrument_id=instrument_id,
                 quantity=quantity,
                 average_cost=unit_cost,
                 cost_basis=notional,
@@ -438,34 +478,42 @@ class PaperBrokerProvider:
             )
         self.session.add(
             RetailTransaction(
-                account_id=account.id,
+                account_id=account_id,
                 entry_type="BUY",
                 amount=-notional,
-                currency=account.base_currency,
-                instrument_id=instrument.id,
+                currency=base_currency,
+                instrument_id=instrument_id,
                 occurred_at=now,
                 source="paper",
                 broker_reference=broker_order_id,
-                description=_transaction_description("Bought", quantity, instrument),
+                description=_transaction_description(
+                    "Bought", quantity, ticker, asset_class, sector
+                ),
             )
         )
 
     async def _apply_sell(
         self,
         account: RetailAccount,
-        instrument: Instrument,
+        account_id,
+        instrument_id,
+        ticker: str,
+        asset_class: str | None,
+        sector: str | None,
         quantity: Decimal,
         cash_proceeds: Decimal,
+        cash_balance: Decimal,
+        base_currency: str,
         now: datetime,
         broker_order_id: str,
     ) -> None:
         position = await self.session.scalar(
             select(RetailPosition)
-            .where(RetailPosition.account_id == account.id)
-            .where(RetailPosition.instrument_id == instrument.id)
+            .where(RetailPosition.account_id == account_id)
+            .where(RetailPosition.instrument_id == instrument_id)
         )
         if position is None or position.quantity < quantity:
-            raise BrokerValidationError(f"Not enough {instrument.ticker} to sell.")
+            raise BrokerValidationError(f"Not enough {ticker} to sell.")
         proceeds = cash_proceeds.quantize(MONEY, rounding=ROUND_HALF_UP)
         sold_cost = (position.average_cost * quantity).quantize(
             MONEY, rounding=ROUND_HALF_UP
@@ -476,27 +524,30 @@ class PaperBrokerProvider:
             MONEY
         )
         position.realized_pnl = (position.realized_pnl + realized).quantize(MONEY)
-        account.cash_balance = (account.cash_balance + proceeds).quantize(MONEY)
+        account.cash_balance = (cash_balance + proceeds).quantize(MONEY)
         if position.quantity <= 0:
             await self.session.delete(position)
         self.session.add(
             RetailTransaction(
-                account_id=account.id,
+                account_id=account_id,
                 entry_type="SELL",
                 amount=proceeds,
-                currency=account.base_currency,
-                instrument_id=instrument.id,
+                currency=base_currency,
+                instrument_id=instrument_id,
                 occurred_at=now,
                 source="paper",
                 broker_reference=broker_order_id,
-                description=_transaction_description("Sold", quantity, instrument),
+                description=_transaction_description(
+                    "Sold", quantity, ticker, asset_class, sector
+                ),
             )
         )
 
     async def _sell_size(
         self,
-        account: RetailAccount,
-        instrument: Instrument,
+        account_id,
+        instrument_id,
+        ticker: str,
         request: SubmitOrderRequest,
         price: Decimal,
         *,
@@ -504,8 +555,8 @@ class PaperBrokerProvider:
     ) -> tuple[Decimal, Decimal]:
         position = await self.session.scalar(
             select(RetailPosition)
-            .where(RetailPosition.account_id == account.id)
-            .where(RetailPosition.instrument_id == instrument.id)
+            .where(RetailPosition.account_id == account_id)
+            .where(RetailPosition.instrument_id == instrument_id)
         )
         held = position.quantity if position is not None else Decimal("0")
         if request.quantity is not None:
@@ -517,7 +568,7 @@ class PaperBrokerProvider:
         if quantity <= 0:
             raise BrokerValidationError("Sell quantity must be greater than zero.")
         if quantity > held:
-            raise BrokerValidationError(f"Not enough {instrument.ticker} to sell.")
+            raise BrokerValidationError(f"Not enough {ticker} to sell.")
         notional = (quantity * price).quantize(MONEY, rounding=ROUND_HALF_UP)
         return quantity, notional
 
@@ -616,14 +667,18 @@ def _order_snapshot(order: RetailOrder, symbol: str) -> BrokerOrder:
 
 
 def _transaction_description(
-    action: str, quantity: Decimal, instrument: Instrument
+    action: str,
+    quantity: Decimal,
+    ticker: str,
+    asset_class: str | None,
+    sector: str | None,
 ) -> str:
-    if _looks_like_fixed_income(instrument):
-        return f"{action} {quantity} face value of {instrument.ticker}."
-    return f"{action} {quantity} {instrument.ticker}."
+    if _looks_like_fixed_income(asset_class, sector):
+        return f"{action} {quantity} face value of {ticker}."
+    return f"{action} {quantity} {ticker}."
 
 
-def _looks_like_fixed_income(instrument: Instrument) -> bool:
-    return (instrument.sector or "").strip().lower() == "fixed income" or (
-        instrument.asset_class or ""
+def _looks_like_fixed_income(asset_class: str | None, sector: str | None) -> bool:
+    return (sector or "").strip().lower() == "fixed income" or (
+        asset_class or ""
     ).strip().lower() in {"bond", "cash_equivalent"}
