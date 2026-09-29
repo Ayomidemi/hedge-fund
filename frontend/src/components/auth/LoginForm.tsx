@@ -224,7 +224,7 @@ export function LoginForm() {
           autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
           required
           minLength={8}
-          helper={mode === "sign-up" ? "Use at least 8 characters." : undefined}
+          helper={mode === "sign-up" ? "Use at least 8 characters..." : undefined}
           labelAction={
             mode === "sign-in" ? (
               <a

@@ -53,7 +53,7 @@ export function ForgotPasswordForm() {
   return (
     <AuthShell
       title="Forgot password"
-      subtitle="We will email you a reset link"
+      subtitle="We will email you a reset link to the provided email address"
       footer={authBackLink("/login", "← Back to sign in")}
     >
       <form className="space-y-4" onSubmit={handleSubmit}>
