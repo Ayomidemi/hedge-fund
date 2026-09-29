@@ -20,7 +20,7 @@ export default async function InvestActivityPage() {
   if (unavailable) {
     return (
       <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-        Invest activity could not load.
+        Invest activity could not load. Please try again later.
       </div>
     );
   }
