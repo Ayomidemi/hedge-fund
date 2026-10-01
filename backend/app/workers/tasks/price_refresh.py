@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.core.market_constants import PRICE_MARKET_HOURS_ONLY, PRICE_STALE_AFTER_SECONDS
+from app.db.locks import PRICE_REFRESH_LOCK_KEY, hold_job_lock
 from app.db.session import engine_options
 from app.models import Instrument, InstrumentQuote, PriceRefreshRun
 from app.services.administration.system_log import record_system_log
@@ -57,8 +58,12 @@ async def _run() -> None:
         bind=engine, autoflush=False, expire_on_commit=False
     )
     try:
-        async with session_factory() as session:
-            await _refresh_cycle(session)
+        async with hold_job_lock(engine, PRICE_REFRESH_LOCK_KEY) as locked:
+            if not locked:
+                logger.info("price_refresh_skipped_overlap")
+                return
+            async with session_factory() as session:
+                await _refresh_cycle(session)
     finally:
         await engine.dispose()
 

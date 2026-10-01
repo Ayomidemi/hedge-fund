@@ -3,8 +3,10 @@
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import uuid4
 
 from app.models import FxRate
 from app.services.market_data.fx_provider import LiveFxRate, fetch_usd_ngn_rate
@@ -46,14 +48,29 @@ async def persist_fx_rate(session: AsyncSession, live_rate: LiveFxRate) -> None:
         )
     )
     if row is None:
-        row = FxRate(
+        statement = pg_insert(FxRate).values(
+            id=uuid4(),
             base_currency=live_rate.base_currency,
             quote_currency=live_rate.quote_currency,
             rate=live_rate.rate,
             source=live_rate.source,
             as_of=live_rate.as_of,
+            is_stale=False,
+            raw_payload=live_rate.raw_payload or {},
         )
-        session.add(row)
+        statement = statement.on_conflict_do_update(
+            constraint="uq_fx_rates_base_quote",
+            set_={
+                "rate": statement.excluded.rate,
+                "source": statement.excluded.source,
+                "as_of": statement.excluded.as_of,
+                "is_stale": False,
+                "raw_payload": statement.excluded.raw_payload,
+                "updated_at": func.now(),
+            },
+        )
+        await session.execute(statement)
+        return
     else:
         row.rate = live_rate.rate
         row.source = live_rate.source

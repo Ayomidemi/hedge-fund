@@ -3,6 +3,7 @@ export const API_BASE_URL =
 
 export type ApiRequestOptions = {
   accessToken?: string;
+  idempotencyKey?: string;
 };
 
 type ErrorResponse = {
@@ -81,6 +82,9 @@ async function postApi<TResponse, TPayload>(
     headers: {
       "Content-Type": "application/json",
       ...buildAuthHeaders(accessToken),
+      ...(options?.idempotencyKey
+        ? { "Idempotency-Key": options.idempotencyKey }
+        : {}),
     },
     body: JSON.stringify(payload),
   });

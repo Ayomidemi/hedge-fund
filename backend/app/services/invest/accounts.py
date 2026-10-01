@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,7 +36,9 @@ from app.core.auth import (
     user_can_access_capital,
     user_can_switch_products,
 )
+from app.api.idempotency import normalize_idempotency_key
 from app.core.config import settings
+from app.db.locks import lock_retail_account
 from app.models import (
     Instrument,
     InstrumentQuote,
@@ -43,6 +46,8 @@ from app.models import (
     RadarSnapshot,
     RetailAccount,
     RetailOrder,
+    RetailPosition,
+    RetailTransaction,
     RetailWatchlistItem,
     SystemLogEntry,
 )
@@ -123,52 +128,65 @@ class InvestNotFoundError(InvestError):
 async def get_or_create_account(
     session: AsyncSession, user: AuthenticatedUser
 ) -> RetailAccount:
-    account = await session.scalar(
-        select(RetailAccount).where(RetailAccount.user_id == user.id)
-    )
+    account = await _load_account_for_user(session, user.id)
     if account is not None:
         return account
 
     starting = settings.invest_paper_starting_cash
-    account_id = uuid4()
-    account = RetailAccount(
-        id=account_id,
-        user_id=user.id,
-        account_number=_account_number(),
-        broker_provider="PAPER",
-        broker_account_id=str(account_id),
-        status="active",
-        base_currency="USD",
-        cash_balance=starting,
-    )
-    session.add(account)
-    from app.models import RetailTransaction
-
-    session.add(
-        RetailTransaction(
-            account_id=account.id,
-            entry_type="DEPOSIT",
-            amount=starting,
-            currency="USD",
-            occurred_at=datetime.now(timezone.utc),
-            source="paper",
-            description="Initial paper buying power.",
+    for _attempt in range(3):
+        account_id = uuid4()
+        account = RetailAccount(
+            id=account_id,
+            user_id=user.id,
+            account_number=_account_number(),
+            broker_provider="PAPER",
+            broker_account_id=str(account_id),
+            status="active",
+            base_currency="USD",
+            cash_balance=starting,
         )
+        try:
+            async with session.begin_nested():
+                session.add(account)
+                session.add(
+                    RetailTransaction(
+                        account_id=account.id,
+                        entry_type="DEPOSIT",
+                        amount=starting,
+                        currency="USD",
+                        occurred_at=datetime.now(timezone.utc),
+                        source="paper",
+                        description="Initial paper buying power.",
+                    )
+                )
+                await session.flush()
+        except IntegrityError:
+            existing = await _load_account_for_user(session, user.id)
+            if existing is not None:
+                return existing
+            continue
+        await record_system_log(
+            session,
+            owner_user_id=user.id,
+            category="invest",
+            event="retail_account_created",
+            message=f"Pease Invest paper account {account.account_number} created.",
+            context={
+                "account_id": str(account.id),
+                "broker_provider": account.broker_provider,
+                "starting_cash": str(starting),
+            },
+        )
+        return account
+    raise InvestError("Invest account could not be created.")
+
+
+async def _load_account_for_user(
+    session: AsyncSession, user_id: str
+) -> RetailAccount | None:
+    return await session.scalar(
+        select(RetailAccount).where(RetailAccount.user_id == user_id)
     )
-    await session.flush()
-    await record_system_log(
-        session,
-        owner_user_id=user.id,
-        category="invest",
-        event="retail_account_created",
-        message=f"Pease Invest paper account {account.account_number} created.",
-        context={
-            "account_id": str(account.id),
-            "broker_provider": account.broker_provider,
-            "starting_cash": str(starting),
-        },
-    )
-    return account
 
 
 async def get_account_response(
@@ -325,10 +343,33 @@ async def list_positions(
     return home.holdings
 
 
+async def _replay_order(
+    session: AsyncSession, account_id: UUID, idempotency_key: str | None
+) -> InvestOrderResponse | None:
+    if not idempotency_key:
+        return None
+    order = await session.scalar(
+        select(RetailOrder)
+        .options(selectinload(RetailOrder.instrument))
+        .where(RetailOrder.account_id == account_id)
+        .where(RetailOrder.idempotency_key == idempotency_key)
+    )
+    if order is None:
+        return None
+    return _order_response(order, order.instrument)
+
+
 async def submit_order(
     session: AsyncSession, user: AuthenticatedUser, payload: InvestOrderCreate
 ) -> InvestOrderResponse:
-    account = await get_or_create_account(session, user)
+    account = await lock_retail_account(
+        session, await get_or_create_account(session, user)
+    )
+    idempotency_key = normalize_idempotency_key(payload.idempotency_key)
+    replay = await _replay_order(session, account.id, idempotency_key)
+    if replay is not None:
+        await session.commit()
+        return replay
     account_id = account.id
     base_currency = account.base_currency
     cash_balance = account.cash_balance
@@ -376,6 +417,7 @@ async def submit_order(
                 order_type=payload.order_type,
                 quantity=payload.quantity,
                 notional=payload.amount,
+                idempotency_key=idempotency_key,
             ),
         )
     except BrokerValidationError as exc:
@@ -418,7 +460,14 @@ async def submit_order(
             ],
         },
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        replay = await _replay_order(session, account_id, idempotency_key)
+        if replay is None:
+            raise
+        return replay
     return response
 
 
@@ -455,7 +504,9 @@ async def get_order(
 async def cancel_order(
     session: AsyncSession, user: AuthenticatedUser, order_id: UUID
 ) -> InvestOrderResponse:
-    account = await get_or_create_account(session, user)
+    account = await lock_retail_account(
+        session, await get_or_create_account(session, user)
+    )
     order = await session.scalar(
         select(RetailOrder)
         .options(selectinload(RetailOrder.instrument))
@@ -465,6 +516,9 @@ async def cancel_order(
     if order is None:
         raise InvestNotFoundError("Order was not found.")
     instrument = order.instrument
+    if order.status == "CANCELLED":
+        await session.commit()
+        return _order_response(order, instrument)
     broker = get_broker_provider(session, account.broker_provider)
     try:
         await broker.cancel_order(account.broker_account_id, order.broker_order_id)
@@ -490,8 +544,6 @@ async def cancel_order(
 async def list_transactions(
     session: AsyncSession, user: AuthenticatedUser
 ) -> list[InvestTransactionResponse]:
-    from app.models import RetailTransaction
-
     account = await get_or_create_account(session, user)
     rows = list(
         await session.scalars(
@@ -519,12 +571,30 @@ async def list_transactions(
 async def add_paper_cash(
     session: AsyncSession, user: AuthenticatedUser, payload: InvestCashRequest
 ) -> InvestAccountResponse:
-    account = await get_or_create_account(session, user)
+    account = await lock_retail_account(
+        session, await get_or_create_account(session, user)
+    )
+    idempotency_key = normalize_idempotency_key(payload.idempotency_key)
     broker = get_broker_provider(session, account.broker_provider)
+    if idempotency_key:
+        existing = await session.scalar(
+            select(RetailTransaction).where(
+                RetailTransaction.account_id == account.id,
+                RetailTransaction.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            balances = await broker.get_balances(account.broker_account_id)
+            await session.commit()
+            return _account_response(account, balances.cash, balances.buying_power)
     try:
         balances = await broker.deposit(
             account.broker_account_id,
-            CashRequest(amount=payload.amount, currency=account.base_currency),
+            CashRequest(
+                amount=payload.amount,
+                currency=account.base_currency,
+                idempotency_key=idempotency_key,
+            ),
         )
     except BrokerValidationError as exc:
         raise InvestValidationError(str(exc)) from exc
@@ -540,20 +610,57 @@ async def add_paper_cash(
             "currency": account.base_currency,
         },
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if idempotency_key is None:
+            raise
+        account = await _load_account_for_user(session, user.id)
+        if account is None:
+            raise
+        existing = await session.scalar(
+            select(RetailTransaction).where(
+                RetailTransaction.account_id == account.id,
+                RetailTransaction.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is None:
+            raise
+        balances = await get_broker_provider(
+            session, account.broker_provider
+        ).get_balances(account.broker_account_id)
+        return _account_response(account, balances.cash, balances.buying_power)
     return _account_response(account, balances.cash, balances.buying_power)
 
 
 async def reset_paper_account(
     session: AsyncSession, user: AuthenticatedUser
 ) -> InvestAccountResponse:
-    account = await get_or_create_account(session, user)
+    account = await lock_retail_account(
+        session, await get_or_create_account(session, user)
+    )
     broker = get_broker_provider(session, account.broker_provider)
     if not isinstance(broker, PaperBrokerProvider):
         raise InvestValidationError("Only paper accounts can be reset.")
+    starting_cash = settings.invest_paper_starting_cash.quantize(Decimal("0.01"))
+    open_positions = await session.scalar(
+        select(func.count())
+        .select_from(RetailPosition)
+        .where(RetailPosition.account_id == account.id)
+    )
+    already_reset = (
+        not open_positions
+        and account.cash_balance.quantize(Decimal("0.01")) == starting_cash
+    )
     snapshot = await broker.reset_account(
         account.broker_account_id, settings.invest_paper_starting_cash
     )
+    if already_reset:
+        await session.commit()
+        return _account_response(
+            account, snapshot.balances.cash, snapshot.balances.buying_power
+        )
     await record_system_log(
         session,
         owner_user_id=user.id,
@@ -644,14 +751,40 @@ async def add_watchlist_item(
             price=None if existing_quote is None else existing_quote.price,
             change_pct=None if existing_quote is None else existing_quote.change_pct,
         )
+    instrument_id = instrument.id
     item = RetailWatchlistItem(
         user_id=user.id,
-        instrument_id=instrument.id,
+        instrument_id=instrument_id,
         notes=notes,
         date_added=datetime.now(timezone.utc),
     )
-    session.add(item)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(item)
+            await session.flush()
+    except IntegrityError:
+        existing = await session.scalar(
+            select(RetailWatchlistItem)
+            .options(selectinload(RetailWatchlistItem.instrument))
+            .where(RetailWatchlistItem.user_id == user.id)
+            .where(RetailWatchlistItem.instrument_id == instrument_id)
+        )
+        if existing is None:
+            raise
+        saved = _saved_watch_row(existing)
+        existing_product = await get_fixed_income_product_db(session, saved.ticker)
+        existing_quote = (
+            None
+            if existing_product is not None
+            else await _quote_for_instrument_id(session, saved.instrument_id)
+        )
+        return await _watchlist_response(
+            session,
+            saved,
+            product=existing_product,
+            price=None if existing_quote is None else existing_quote.price,
+            change_pct=None if existing_quote is None else existing_quote.change_pct,
+        )
     saved = _SavedWatchRow(
         id=item.id,
         notes=notes,

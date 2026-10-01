@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   buttonPrimaryClassName,
@@ -15,6 +15,7 @@ import {
   type InvestTransaction,
 } from "@/lib/api";
 import { money, signedMoney } from "@/components/invest/format";
+import { newIdempotencyKey } from "@/lib/idempotency";
 
 export function InvestCash({
   account,
@@ -26,12 +27,17 @@ export function InvestCash({
   const router = useRouter();
   const [amount, setAmount] = useState("1000");
   const [pending, setPending] = useState<"add" | "reset" | null>(null);
+  const depositKey = useRef<string | null>(null);
 
   async function handleDeposit(event: FormEvent) {
     event.preventDefault();
+    if (!depositKey.current) {
+      depositKey.current = newIdempotencyKey();
+    }
     setPending("add");
     try {
-      await addInvestPaperCash(amount);
+      await addInvestPaperCash(amount, { idempotencyKey: depositKey.current });
+      depositKey.current = null;
       toast.success("Paper cash added.");
       router.refresh();
     } catch (error) {

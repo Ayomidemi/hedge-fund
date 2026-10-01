@@ -64,6 +64,7 @@ class InvestOrderCreate(BaseModel):
     order_type: str = "market"
     amount: Decimal | None = Field(default=None, gt=0)
     quantity: Decimal | None = Field(default=None, gt=0)
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
     @field_validator("ticker")
     @classmethod
@@ -98,6 +99,7 @@ class InvestOrderResponse(BaseModel):
 
 class InvestCashRequest(BaseModel):
     amount: Decimal = Field(gt=0)
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class InvestWatchlistCreate(BaseModel):

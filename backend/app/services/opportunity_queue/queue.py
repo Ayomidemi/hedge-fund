@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,7 +25,9 @@ from app.api.schemas.opportunity_queue import (
     OpportunityTradeLink,
     OpportunityUpdate,
 )
+from app.api.idempotency import normalize_idempotency_key
 from app.core.auth import AuthenticatedUser
+from app.db.locks import lock_idempotency_scope
 from app.models import (
     Instrument,
     Opportunity,
@@ -195,11 +198,41 @@ async def list_opportunity_queue(
     )
 
 
+async def _replay_opportunity(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    idempotency_key: str | None,
+) -> OpportunityResponse | None:
+    if not idempotency_key:
+        return None
+    existing = await session.scalar(
+        select(Opportunity)
+        .options(selectinload(Opportunity.instrument))
+        .where(Opportunity.owner_user_id == user.id)
+        .where(Opportunity.idempotency_key == idempotency_key)
+    )
+    if existing is None:
+        return None
+    links = await _load_links(session, user, [existing])
+    return _opportunity_response(existing, links.get(existing.id))
+
+
 async def create_opportunity(
     session: AsyncSession,
     user: AuthenticatedUser,
     payload: OpportunityCreate,
 ) -> OpportunityResponse:
+    idempotency_key = normalize_idempotency_key(payload.idempotency_key)
+    if idempotency_key:
+        await lock_idempotency_scope(session, f"opportunity:{user.id}", idempotency_key)
+        replay = await _replay_opportunity(session, user, idempotency_key)
+        if replay is not None:
+            return replay
+    elif payload.source_memo_id is not None:
+        await lock_idempotency_scope(
+            session, f"opportunity-memo:{user.id}", str(payload.source_memo_id)
+        )
+
     source_memo = None
     if payload.source_memo_id is not None:
         existing = await _load_opportunity_by_source_memo(
@@ -263,6 +296,7 @@ async def create_opportunity(
         notes=payload.notes,
         discovery_evidence=dict(payload.discovery_evidence or {}),
         status_history=[_status_event(status, "Opportunity created.")],
+        idempotency_key=idempotency_key,
     )
     session.add(opportunity)
     await session.flush()
@@ -295,7 +329,20 @@ async def create_opportunity(
             "status": status,
         },
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if payload.source_memo_id is not None:
+            existing = await _load_opportunity_by_source_memo(
+                session, user, payload.source_memo_id
+            )
+            if existing is not None:
+                return _opportunity_response(existing)
+        replay = await _replay_opportunity(session, user, idempotency_key)
+        if replay is not None:
+            return replay
+        raise
     opportunity = await _load_opportunity(session, user, opportunity.id)
     if opportunity is None:
         raise RuntimeError("Opportunity could not be loaded after creation.")

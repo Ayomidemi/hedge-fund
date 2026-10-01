@@ -53,6 +53,7 @@ class SubmitOrderRequest:
     quantity: Decimal | None = None
     notional: Decimal | None = None
     limit_price: Decimal | None = None
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ class BrokerTransaction:
 class CashRequest:
     amount: Decimal
     currency: str = "USD"
+    idempotency_key: str | None = None
 
 
 class BrokerProvider(Protocol):

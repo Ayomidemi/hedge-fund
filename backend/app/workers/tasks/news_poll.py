@@ -6,6 +6,7 @@ import logging
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.db.locks import NEWS_POLL_LOCK_KEY, hold_job_lock
 from app.db.session import engine_options
 from app.services.news.centre import poll_news
 from app.services.realtime.events import news_poll_completed_event
@@ -26,21 +27,25 @@ async def _run() -> None:
         bind=engine, autoflush=False, expire_on_commit=False
     )
     try:
-        async with session_factory() as session:
-            run = await poll_news(session, trigger="scheduled")
-            await publish_event(
-                news_poll_completed_event(
-                    run_id=str(run.id),
-                    status=run.status,
-                    trigger=run.trigger,
-                    target_scope=run.target_scope,
-                    target_key=run.target_key,
-                    provider_calls=run.provider_calls,
-                    items_seen=run.items_seen,
-                    items_created=run.items_created,
-                    items_updated=run.items_updated,
-                    cache_hit=run.cache_hit,
+        async with hold_job_lock(engine, NEWS_POLL_LOCK_KEY) as locked:
+            if not locked:
+                logger.info("news_poll_skipped_overlap")
+                return
+            async with session_factory() as session:
+                run = await poll_news(session, trigger="scheduled")
+                await publish_event(
+                    news_poll_completed_event(
+                        run_id=str(run.id),
+                        status=run.status,
+                        trigger=run.trigger,
+                        target_scope=run.target_scope,
+                        target_key=run.target_key,
+                        provider_calls=run.provider_calls,
+                        items_seen=run.items_seen,
+                        items_created=run.items_created,
+                        items_updated=run.items_updated,
+                        cache_hit=run.cache_hit,
+                    )
                 )
-            )
     finally:
         await engine.dispose()

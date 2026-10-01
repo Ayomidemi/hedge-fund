@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -21,6 +21,7 @@ import {
   type InvestResearchSection,
 } from "@/lib/api";
 import { money } from "@/components/invest/format";
+import { newIdempotencyKey } from "@/lib/idempotency";
 import { InvestPriceChart } from "@/components/invest/InvestPriceChart";
 
 type DetailTab = "overview" | "chart" | "news" | "financials" | "analysis" | "order";
@@ -40,6 +41,7 @@ export function InvestInstrumentDetail({
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState<"buy" | "watch" | null>(null);
+  const orderKey = useRef<string | null>(null);
   const [research, setResearch] = useState<InvestInstrumentResearch | null>(
     initialResearch,
   );
@@ -102,13 +104,20 @@ export function InvestInstrumentDetail({
       setReviewing(true);
       return;
     }
+    if (!orderKey.current) {
+      orderKey.current = newIdempotencyKey();
+    }
     setPending("buy");
     try {
-      const order = await createInvestOrder({
-        ticker: instrument.ticker,
-        side,
-        amount,
-      });
+      const order = await createInvestOrder(
+        {
+          ticker: instrument.ticker,
+          side,
+          amount,
+        },
+        { idempotencyKey: orderKey.current },
+      );
+      orderKey.current = null;
       toast.success(`${side} order filled for ${instrument.ticker} - ${order.status}`);
       router.push(`/invest/portfolio?placed=${order.id}`);
     } catch (error) {

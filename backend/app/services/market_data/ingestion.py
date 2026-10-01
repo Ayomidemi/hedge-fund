@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.market_constants import PRICE_STALE_AFTER_SECONDS
@@ -108,6 +109,8 @@ async def persist_quotes(
     stale_cutoff = datetime.now(timezone.utc) - timedelta(
         seconds=PRICE_STALE_AFTER_SECONDS
     )
+    new_quotes: list[InstrumentQuote] = []
+    new_bars: list[MarketPriceBar] = []
 
     for ticker, id_group in universe.items():
         quote = quotes.get(ticker)
@@ -121,12 +124,16 @@ async def persist_quotes(
 
             if row is None:
                 row = InstrumentQuote(
+                    id=uuid.uuid4(),
                     instrument_id=instrument_id,
                     price=quote.price,
                     source=quote.source,
                     as_of=quote.as_of,
+                    currency=quote.currency,
+                    is_stale=False,
+                    raw_payload=quote.raw_payload or {},
                 )
-                session.add(row)
+                new_quotes.append(row)
                 existing_quotes[instrument_id] = row
             row.price = quote.price
             row.previous_close = (
@@ -149,13 +156,119 @@ async def persist_quotes(
             row.is_stale = False
             row.raw_payload = quote.raw_payload or {}
 
-            _upsert_live_bar(session, existing_bars, instrument_id, today, quote)
+            _upsert_live_bar(
+                new_bars, existing_bars, instrument_id, today, quote
+            )
+
+    if new_quotes:
+        quote_insert = pg_insert(InstrumentQuote).values(
+            [
+                {
+                    "id": row.id,
+                    "instrument_id": row.instrument_id,
+                    "price": row.price,
+                    "previous_close": row.previous_close,
+                    "change_pct": row.change_pct,
+                    "day_open": row.day_open,
+                    "day_high": row.day_high,
+                    "day_low": row.day_low,
+                    "volume": row.volume,
+                    "currency": row.currency,
+                    "source": row.source,
+                    "as_of": row.as_of,
+                    "is_stale": row.is_stale,
+                    "raw_payload": row.raw_payload or {},
+                }
+                for row in new_quotes
+            ]
+        )
+        quote_insert = quote_insert.on_conflict_do_update(
+            index_elements=["instrument_id"],
+            set_={
+                "price": quote_insert.excluded.price,
+                "previous_close": func.coalesce(
+                    quote_insert.excluded.previous_close,
+                    InstrumentQuote.previous_close,
+                ),
+                "change_pct": quote_insert.excluded.change_pct,
+                "day_open": func.coalesce(
+                    quote_insert.excluded.day_open, InstrumentQuote.day_open
+                ),
+                "day_high": func.coalesce(
+                    quote_insert.excluded.day_high, InstrumentQuote.day_high
+                ),
+                "day_low": func.coalesce(
+                    quote_insert.excluded.day_low, InstrumentQuote.day_low
+                ),
+                "volume": func.coalesce(
+                    quote_insert.excluded.volume, InstrumentQuote.volume
+                ),
+                "currency": quote_insert.excluded.currency,
+                "source": quote_insert.excluded.source,
+                "as_of": quote_insert.excluded.as_of,
+                "is_stale": quote_insert.excluded.is_stale,
+                "raw_payload": quote_insert.excluded.raw_payload,
+                "updated_at": func.now(),
+            },
+        )
+        await session.execute(quote_insert)
+
+    if new_bars:
+        bar_insert = pg_insert(MarketPriceBar).values(
+            [
+                {
+                    "id": bar.id,
+                    "instrument_id": bar.instrument_id,
+                    "bar_date": bar.bar_date,
+                    "source": bar.source,
+                    "open_price": bar.open_price,
+                    "high_price": bar.high_price,
+                    "low_price": bar.low_price,
+                    "close_price": bar.close_price,
+                    "volume": bar.volume,
+                    "currency": bar.currency,
+                    "raw_payload": bar.raw_payload or {},
+                }
+                for bar in new_bars
+            ]
+        )
+        bar_insert = bar_insert.on_conflict_do_update(
+            constraint="uq_market_price_bars_instrument_date_source",
+            set_={
+                "close_price": bar_insert.excluded.close_price,
+                "open_price": func.coalesce(
+                    MarketPriceBar.open_price, bar_insert.excluded.open_price
+                ),
+                "high_price": func.greatest(
+                    func.coalesce(
+                        MarketPriceBar.high_price, bar_insert.excluded.high_price
+                    ),
+                    func.coalesce(
+                        bar_insert.excluded.high_price, MarketPriceBar.high_price
+                    ),
+                ),
+                "low_price": func.least(
+                    func.coalesce(
+                        MarketPriceBar.low_price, bar_insert.excluded.low_price
+                    ),
+                    func.coalesce(
+                        bar_insert.excluded.low_price, MarketPriceBar.low_price
+                    ),
+                ),
+                "volume": func.coalesce(
+                    bar_insert.excluded.volume, MarketPriceBar.volume
+                ),
+                "currency": bar_insert.excluded.currency,
+                "updated_at": func.now(),
+            },
+        )
+        await session.execute(bar_insert)
 
     await session.flush()
 
 
 def _upsert_live_bar(
-    session: AsyncSession,
+    new_bars: list[MarketPriceBar],
     existing_bars: dict[uuid.UUID, MarketPriceBar],
     instrument_id: uuid.UUID,
     bar_date: date,
@@ -164,6 +277,7 @@ def _upsert_live_bar(
     bar = existing_bars.get(instrument_id)
     if bar is None:
         bar = MarketPriceBar(
+            id=uuid.uuid4(),
             instrument_id=instrument_id,
             bar_date=bar_date,
             source=LIVE_BAR_SOURCE,
@@ -171,7 +285,7 @@ def _upsert_live_bar(
             currency=quote.currency,
             raw_payload={},
         )
-        session.add(bar)
+        new_bars.append(bar)
         existing_bars[instrument_id] = bar
 
     bar.close_price = quote.price

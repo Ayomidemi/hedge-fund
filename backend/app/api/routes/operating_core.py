@@ -15,6 +15,7 @@ from app.api.schemas.operating_core import (
     TradeJournalResponse,
     TradeResponse,
 )
+from app.api.idempotency import merge_idempotency_key, optional_idempotency_key
 from app.core.auth import AuthenticatedUser, require_capital_user
 from app.db.session import get_session
 from app.services.portfolio.operating_core import (
@@ -31,6 +32,14 @@ from app.services.portfolio.operating_core import (
 )
 
 router = APIRouter(prefix="/operating-core")
+
+
+def _with_idempotency_key(payload, header: str | None):
+    return payload.model_copy(
+        update={
+            "idempotency_key": merge_idempotency_key(header, payload.idempotency_key)
+        }
+    )
 
 
 @router.get("/dashboard", response_model=PortfolioDashboardResponse)
@@ -50,8 +59,11 @@ async def add_cash_entry(
     payload: CashLedgerEntryCreate,
     user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_deposit(session, payload, user)
+    return await create_cash_deposit(
+        session, _with_idempotency_key(payload, idempotency_key), user
+    )
 
 
 @router.post(
@@ -63,8 +75,11 @@ async def add_cash_deposit(
     payload: CashDepositCreate,
     user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_deposit(session, payload, user)
+    return await create_cash_deposit(
+        session, _with_idempotency_key(payload, idempotency_key), user
+    )
 
 
 @router.post(
@@ -76,8 +91,11 @@ async def add_cash_withdrawal(
     payload: CashWithdrawalCreate,
     user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_withdrawal(session, payload, user)
+    return await create_cash_withdrawal(
+        session, _with_idempotency_key(payload, idempotency_key), user
+    )
 
 
 @router.post(
@@ -89,8 +107,11 @@ async def add_cash_adjustment(
     payload: CashAdjustmentCreate,
     user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> CashLedgerEntryResponse:
-    return await create_cash_adjustment(session, payload, user)
+    return await create_cash_adjustment(
+        session, _with_idempotency_key(payload, idempotency_key), user
+    )
 
 
 @router.get("/cash-ledger/history", response_model=list[CashLedgerEntryResponse])
@@ -118,9 +139,12 @@ async def add_manual_trade(
     payload: ManualTradeCreate,
     user: AuthenticatedUser = Depends(require_capital_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> TradeResponse:
     try:
-        return await create_manual_trade(session, payload, user)
+        return await create_manual_trade(
+            session, _with_idempotency_key(payload, idempotency_key), user
+        )
     except TradeRiskApprovalError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

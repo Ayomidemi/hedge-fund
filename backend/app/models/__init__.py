@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -217,8 +218,19 @@ class CashLedgerEntry(Base, TimestampMixin):
     platform: Mapped[str] = mapped_column(String(64), nullable=False, default="manual")
     description: Mapped[str | None] = mapped_column(Text)
     source_reference: Mapped[str | None] = mapped_column(String(255))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
 
     portfolio: Mapped["Portfolio"] = relationship(back_populates="cash_entries")
+
+    __table_args__ = (
+        Index(
+            "uq_cash_ledger_entries_portfolio_idempotency_key",
+            "portfolio_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
 
 class Position(Base, TimestampMixin):
@@ -347,9 +359,20 @@ class Trade(Base, TimestampMixin):
     risk_decision: Mapped[str | None] = mapped_column(String(32))
     risk_override_reason: Mapped[str | None] = mapped_column(Text)
     broker_reference: Mapped[str | None] = mapped_column(String(255))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
 
     portfolio: Mapped["Portfolio"] = relationship(back_populates="trades")
     instrument: Mapped["Instrument"] = relationship(back_populates="trades")
+
+    __table_args__ = (
+        Index(
+            "uq_trades_portfolio_idempotency_key",
+            "portfolio_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
 
 class RiskLimit(Base, TimestampMixin):
@@ -975,6 +998,7 @@ class Opportunity(Base, TimestampMixin):
     status_history: Mapped[list[dict]] = mapped_column(
         JSONB, nullable=False, default=list
     )
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
 
     instrument: Mapped["Instrument"] = relationship()
     source_memo: Mapped["TickerMemo | None"] = relationship(
@@ -995,6 +1019,13 @@ class Opportunity(Base, TimestampMixin):
             "owner_user_id",
             "source_memo_id",
             name="uq_opportunities_owner_source_memo",
+        ),
+        Index(
+            "uq_opportunities_owner_idempotency_key",
+            "owner_user_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
         Index("ix_opportunities_owner_status", "owner_user_id", "status"),
         Index("ix_opportunities_owner_priority", "owner_user_id", "priority"),
@@ -1808,6 +1839,7 @@ class RetailOrder(Base, TimestampMixin):
     filled_quantity: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
     broker_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     broker_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
     reject_reason: Mapped[str | None] = mapped_column(Text)
     warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
@@ -1818,6 +1850,13 @@ class RetailOrder(Base, TimestampMixin):
         Index("ix_invest_orders_account_submitted", "account_id", "submitted_at"),
         UniqueConstraint(
             "broker_provider", "broker_order_id", name="uq_invest_broker_order"
+        ),
+        Index(
+            "uq_invest_orders_account_idempotency_key",
+            "account_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
     )
 
@@ -1871,6 +1910,7 @@ class RetailTransaction(Base, TimestampMixin):
     )
     source: Mapped[str] = mapped_column(String(64), nullable=False, default="paper")
     broker_reference: Mapped[str | None] = mapped_column(String(128))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
     description: Mapped[str | None] = mapped_column(Text)
 
     account: Mapped["RetailAccount"] = relationship(back_populates="transactions")
@@ -1878,6 +1918,13 @@ class RetailTransaction(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_invest_transactions_account_occurred", "account_id", "occurred_at"),
+        Index(
+            "uq_invest_transactions_account_idempotency_key",
+            "account_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
 

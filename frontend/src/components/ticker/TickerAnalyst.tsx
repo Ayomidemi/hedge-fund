@@ -38,6 +38,7 @@ import {
   normalizeTickerInput,
   type TickerMarket,
 } from "@/lib/ticker-prefill-form";
+import { newIdempotencyKey } from "@/lib/idempotency";
 import { tickerHubPath } from "@/lib/ticker-hub-path";
 
 type TickerAnalystProps = {
@@ -1404,6 +1405,7 @@ function TriageActions({
   onOpenTicker?: (ticker: string) => void;
 }) {
   const [pending, setPending] = useState<"watchlist" | "opportunity" | null>(null);
+  const opportunityKey = useRef<string | null>(null);
   const queued = Boolean(desk?.opportunity);
   const watched = Boolean(desk?.on_watchlist);
   const capitalBlocked = verdict.capital_blocked;
@@ -1449,9 +1451,15 @@ function TriageActions({
       );
       return;
     }
+    if (!opportunityKey.current) {
+      opportunityKey.current = newIdempotencyKey();
+    }
     setPending("opportunity");
     try {
-      await createOpportunity(buildOpportunityFromVerdict(verdict));
+      await createOpportunity(buildOpportunityFromVerdict(verdict), {
+        idempotencyKey: opportunityKey.current,
+      });
+      opportunityKey.current = null;
       await refreshDesk();
       toast.success(`${verdict.ticker} moved into the opportunity queue.`);
     } catch (error) {

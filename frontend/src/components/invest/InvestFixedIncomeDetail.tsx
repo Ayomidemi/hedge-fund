@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -15,6 +15,7 @@ import {
   type InvestFixedIncomeProduct,
 } from "@/lib/api";
 import { money } from "@/components/invest/format";
+import { newIdempotencyKey } from "@/lib/idempotency";
 
 export function InvestFixedIncomeDetail({
   product,
@@ -25,6 +26,7 @@ export function InvestFixedIncomeDetail({
   const [amount, setAmount] = useState(product.minimum_order_amount);
   const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState<"buy" | "watch" | null>(null);
+  const orderKey = useRef<string | null>(null);
   const dirtyPrice = Number(product.dirty_price ?? 0);
   const faceIncrement = Number(product.face_value_increment ?? 1);
   const estimatedFaceValue = useMemo(() => {
@@ -52,13 +54,20 @@ export function InvestFixedIncomeDetail({
       setReviewing(true);
       return;
     }
+    if (!orderKey.current) {
+      orderKey.current = newIdempotencyKey();
+    }
     setPending("buy");
     try {
-      const order = await createInvestOrder({
-        ticker: product.ticker,
-        side: "BUY",
-        amount,
-      });
+      const order = await createInvestOrder(
+        {
+          ticker: product.ticker,
+          side: "BUY",
+          amount,
+        },
+        { idempotencyKey: orderKey.current },
+      );
+      orderKey.current = null;
       toast.success(`Paper order filled for ${product.ticker} · ${order.status}`);
       router.push(`/invest/portfolio?placed=${order.id}`);
     } catch (error) {

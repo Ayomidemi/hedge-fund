@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   cashEntryDescriptions,
@@ -17,6 +17,7 @@ import {
   createCashDeposit,
   createCashWithdrawal,
 } from "@/lib/api";
+import { newIdempotencyKey } from "@/lib/idempotency";
 
 const entryTypes = [
   { value: "deposit" as const, label: "Deposit", hint: "Capital in" },
@@ -35,11 +36,15 @@ export function CashEntryModal({ open, onClose }: CashEntryModalProps) {
   const router = useRouter();
   const [entryType, setEntryType] = useState<EntryType>("deposit");
   const [pending, setPending] = useState(false);
+  const entryKey = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
+    if (!entryKey.current) {
+      entryKey.current = newIdempotencyKey();
+    }
     setPending(true);
     setError(null);
 
@@ -51,16 +56,21 @@ export function CashEntryModal({ open, onClose }: CashEntryModalProps) {
     };
 
     try {
+      const options = { idempotencyKey: entryKey.current ?? undefined };
       if (entryType === "deposit") {
-        await createCashDeposit(payload);
+        await createCashDeposit(payload, options);
       } else if (entryType === "withdrawal") {
-        await createCashWithdrawal(payload);
+        await createCashWithdrawal(payload, options);
       } else {
-        await createCashAdjustment({
-          ...payload,
-          description: payload.description.trim(),
-        });
+        await createCashAdjustment(
+          {
+            ...payload,
+            description: payload.description.trim(),
+          },
+          options,
+        );
       }
+      entryKey.current = null;
 
       form.reset();
       setEntryType("deposit");

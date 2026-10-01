@@ -9,6 +9,7 @@ from app.api.schemas.opportunity_queue import (
     OpportunityResponse,
     OpportunityUpdate,
 )
+from app.api.idempotency import merge_idempotency_key, optional_idempotency_key
 from app.core.auth import AuthenticatedUser, require_authenticated_user
 from app.db.session import get_session
 from app.services.opportunity_queue.queue import (
@@ -56,7 +57,15 @@ async def post_opportunity(
     payload: OpportunityCreate,
     user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> OpportunityResponse:
+    payload = payload.model_copy(
+        update={
+            "idempotency_key": merge_idempotency_key(
+                idempotency_key, payload.idempotency_key
+            )
+        }
+    )
     try:
         return await create_opportunity(session, user, payload)
     except OpportunityValidationError as exc:

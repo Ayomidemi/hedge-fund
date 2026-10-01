@@ -28,6 +28,7 @@ import {
   normalizeTickerInput,
   type TickerMarket,
 } from "@/lib/ticker-prefill-form";
+import { newIdempotencyKey } from "@/lib/idempotency";
 
 type ManualTradeModalProps = {
   initialTrade?: TradeJournalEntry | null;
@@ -54,6 +55,7 @@ export function ManualTradeModal({
 }: ManualTradeModalProps) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  const tradeKey = useRef<string | null>(null);
   const [prefillLoading, setPrefillLoading] = useState(false);
   const [prefillWarnings, setPrefillWarnings] = useState<string[]>([]);
   const [prefillProvider, setPrefillProvider] = useState<string | null>(null);
@@ -241,12 +243,19 @@ export function ManualTradeModal({
           return;
         }
 
-        await createManualTrade({
-          ...payload,
-          pre_trade_check_id: riskCheck.id,
-          risk_override_reason:
-            riskCheck.decision === "approve" ? undefined : overrideReason || undefined,
-        });
+        if (!tradeKey.current) {
+          tradeKey.current = newIdempotencyKey();
+        }
+        await createManualTrade(
+          {
+            ...payload,
+            pre_trade_check_id: riskCheck.id,
+            risk_override_reason:
+              riskCheck.decision === "approve" ? undefined : overrideReason || undefined,
+          },
+          { idempotencyKey: tradeKey.current },
+        );
+        tradeKey.current = null;
         toast.success(`${payload.instrument.ticker} trade recorded.`);
       }
       onClose();

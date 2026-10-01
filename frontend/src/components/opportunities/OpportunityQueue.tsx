@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import { LoaderCover } from "@/components/ui/Loader";
 import {
   buttonPrimaryClassName,
@@ -21,6 +21,7 @@ import {
   type OpportunityUpdateInput,
 } from "@/lib/api";
 import { tickerHubPath } from "@/lib/ticker-hub-path";
+import { newIdempotencyKey } from "@/lib/idempotency";
 
 type OpportunityQueueProps = {
   queue: OpportunityQueueData | null;
@@ -81,6 +82,7 @@ export function OpportunityQueue({
   const [page, setPage] = useState(initialQueue?.page ?? 1);
   const [listLoading, setListLoading] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
+  const createKeys = useRef<Record<string, string>>({});
   const [showCandidates, setShowCandidates] = useState(false);
   const [showManualCreate, setShowManualCreate] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -134,14 +136,21 @@ export function OpportunityQueue({
 
   async function handleCreateFromCandidate(candidate: OpportunityCandidate) {
     setPending(candidate.memo_id);
+    if (!createKeys.current[candidate.memo_id]) {
+      createKeys.current[candidate.memo_id] = newIdempotencyKey();
+    }
     try {
       const composite = Number(candidate.composite_score ?? 0);
-      const created = await createOpportunity({
-        source_memo_id: candidate.memo_id,
-        strategy_pod_code: candidate.suggested_strategy_pod_code ?? "fundamental_equity",
-        status: "screening",
-        priority: composite >= 75 ? "high" : "medium",
-      });
+      const created = await createOpportunity(
+        {
+          source_memo_id: candidate.memo_id,
+          strategy_pod_code: candidate.suggested_strategy_pod_code ?? "fundamental_equity",
+          status: "screening",
+          priority: composite >= 75 ? "high" : "medium",
+        },
+        { idempotencyKey: createKeys.current[candidate.memo_id] },
+      );
+      delete createKeys.current[candidate.memo_id];
       setStatusFilter(created.status);
       await reloadQueue(1, created.status);
       setSelectedId(created.id);
@@ -165,6 +174,9 @@ export function OpportunityQueue({
     }
 
     setPending("manual-create");
+    if (!createKeys.current["manual-create"]) {
+      createKeys.current["manual-create"] = newIdempotencyKey();
+    }
     try {
       const created = await createOpportunity({
         instrument: {
@@ -189,7 +201,8 @@ export function OpportunityQueue({
         target_weight: textValue(formData, "target_weight") || undefined,
         review_by: textValue(formData, "review_by") || undefined,
         notes: textValue(formData, "notes") || undefined,
-      });
+      }, { idempotencyKey: createKeys.current["manual-create"] });
+      delete createKeys.current["manual-create"];
       setStatusFilter(created.status);
       await reloadQueue(1, created.status);
       setSelectedId(created.id);

@@ -24,6 +24,7 @@ from app.api.schemas.invest import (
     InvestWatchlistItemResponse,
 )
 from app.api.schemas.market_radar import RadarWatchlistChartResponse
+from app.api.idempotency import merge_idempotency_key, optional_idempotency_key
 from app.core.auth import AuthenticatedUser, require_invest_user
 from app.db.session import get_session
 from app.services.invest import accounts as invest
@@ -141,7 +142,15 @@ async def create_order(
     payload: InvestOrderCreate,
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> InvestOrderResponse:
+    payload = payload.model_copy(
+        update={
+            "idempotency_key": merge_idempotency_key(
+                idempotency_key, payload.idempotency_key
+            )
+        }
+    )
     try:
         return await invest.submit_order(session, user, payload)
     except invest.InvestError as exc:
@@ -209,7 +218,15 @@ async def add_paper_cash(
     payload: InvestCashRequest,
     user: AuthenticatedUser = Depends(require_invest_user),
     session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Depends(optional_idempotency_key),
 ) -> InvestAccountResponse:
+    payload = payload.model_copy(
+        update={
+            "idempotency_key": merge_idempotency_key(
+                idempotency_key, payload.idempotency_key
+            )
+        }
+    )
     try:
         return await invest.add_paper_cash(session, user, payload)
     except invest.InvestError as extra:

@@ -39,6 +39,7 @@ class OpportunityCreate(BaseModel):
     review_by: date | None = None
     notes: str | None = None
     discovery_evidence: dict = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
     @field_validator("thesis", "research_question", "next_action", "notes", "strategy_pod_code")
     @classmethod

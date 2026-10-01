@@ -126,7 +126,7 @@ class PaperBrokerProvider:
     async def submit_order(
         self, broker_account_id: str, request: SubmitOrderRequest
     ) -> BrokerOrder:
-        account = await self._load_account(broker_account_id)
+        account = await self._load_account(broker_account_id, for_update=True)
         base_currency = account.base_currency
         cash_balance = account.cash_balance
         account_id = account.id
@@ -270,6 +270,7 @@ class PaperBrokerProvider:
             filled_quantity=quantity,
             broker_provider=self.provider_code,
             broker_order_id=broker_order_id,
+            idempotency_key=request.idempotency_key,
             warnings=warnings,
         )
         self.session.add(order)
@@ -279,7 +280,7 @@ class PaperBrokerProvider:
     async def cancel_order(
         self, broker_account_id: str, broker_order_id: str
     ) -> BrokerOrder:
-        account = await self._load_account(broker_account_id)
+        account = await self._load_account(broker_account_id, for_update=True)
         order = await self.session.scalar(
             select(RetailOrder)
             .options(selectinload(RetailOrder.instrument))
@@ -290,6 +291,8 @@ class PaperBrokerProvider:
             raise BrokerValidationError("Order was not found.")
         if order.status == "FILLED":
             raise BrokerValidationError("Filled paper orders cannot be cancelled.")
+        if order.status == "CANCELLED":
+            return _order_snapshot(order, order.instrument.ticker)
         order.status = "CANCELLED"
         await self.session.flush()
         return _order_snapshot(order, order.instrument.ticker)
@@ -332,7 +335,16 @@ class PaperBrokerProvider:
     async def deposit(
         self, broker_account_id: str, request: CashRequest
     ) -> BrokerBalances:
-        account = await self._load_account(broker_account_id)
+        account = await self._load_account(broker_account_id, for_update=True)
+        if request.idempotency_key:
+            existing = await self.session.scalar(
+                select(RetailTransaction).where(
+                    RetailTransaction.account_id == account.id,
+                    RetailTransaction.idempotency_key == request.idempotency_key,
+                )
+            )
+            if existing is not None:
+                return _balances(account)
         amount = _positive_money(request.amount)
         account.cash_balance = (account.cash_balance + amount).quantize(MONEY)
         self.session.add(
@@ -343,6 +355,7 @@ class PaperBrokerProvider:
                 currency=account.base_currency,
                 occurred_at=datetime.now(timezone.utc),
                 source="paper",
+                idempotency_key=request.idempotency_key,
                 description="Paper cash added.",
             )
         )
@@ -352,7 +365,7 @@ class PaperBrokerProvider:
     async def withdraw(
         self, broker_account_id: str, request: CashRequest
     ) -> BrokerBalances:
-        account = await self._load_account(broker_account_id)
+        account = await self._load_account(broker_account_id, for_update=True)
         amount = _positive_money(request.amount)
         if amount > account.cash_balance:
             raise BrokerValidationError("Not enough cash to withdraw.")
@@ -374,14 +387,21 @@ class PaperBrokerProvider:
     async def reset_account(
         self, broker_account_id: str, starting_cash: Decimal
     ) -> BrokerAccount:
-        account = await self._load_account(broker_account_id)
+        account = await self._load_account(broker_account_id, for_update=True)
         starting_cash = starting_cash.quantize(MONEY)
-        adjustment = (starting_cash - account.cash_balance).quantize(MONEY)
         positions = list(
             await self.session.scalars(
-                select(RetailPosition).where(RetailPosition.account_id == account.id)
+                select(RetailPosition)
+                .where(RetailPosition.account_id == account.id)
+                .with_for_update()
             )
         )
+        if (
+            not positions
+            and account.cash_balance.quantize(MONEY) == starting_cash
+        ):
+            return _account_snapshot(account)
+        adjustment = (starting_cash - account.cash_balance).quantize(MONEY)
         for position in positions:
             await self.session.delete(position)
         account.cash_balance = starting_cash
@@ -399,12 +419,15 @@ class PaperBrokerProvider:
         await self.session.flush()
         return _account_snapshot(account)
 
-    async def _load_account(self, broker_account_id: str) -> RetailAccount:
-        account = await self.session.scalar(
-            select(RetailAccount).where(
-                RetailAccount.broker_account_id == broker_account_id
-            )
+    async def _load_account(
+        self, broker_account_id: str, *, for_update: bool = False
+    ) -> RetailAccount:
+        statement = select(RetailAccount).where(
+            RetailAccount.broker_account_id == broker_account_id
         )
+        if for_update:
+            statement = statement.with_for_update()
+        account = await self.session.scalar(statement)
         if account is None:
             raise BrokerValidationError("Paper account was not found.")
         return account
@@ -456,6 +479,7 @@ class PaperBrokerProvider:
             select(RetailPosition)
             .where(RetailPosition.account_id == account_id)
             .where(RetailPosition.instrument_id == instrument_id)
+            .with_for_update()
         )
         unit_cost = (notional / quantity).quantize(PRICE, rounding=ROUND_HALF_UP)
         if position is None:
@@ -511,6 +535,7 @@ class PaperBrokerProvider:
             select(RetailPosition)
             .where(RetailPosition.account_id == account_id)
             .where(RetailPosition.instrument_id == instrument_id)
+            .with_for_update()
         )
         if position is None or position.quantity < quantity:
             raise BrokerValidationError(f"Not enough {ticker} to sell.")
@@ -557,6 +582,7 @@ class PaperBrokerProvider:
             select(RetailPosition)
             .where(RetailPosition.account_id == account_id)
             .where(RetailPosition.instrument_id == instrument_id)
+            .with_for_update()
         )
         held = position.quantity if position is not None else Decimal("0")
         if request.quantity is not None:

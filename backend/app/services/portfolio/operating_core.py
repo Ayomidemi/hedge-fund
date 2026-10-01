@@ -8,7 +8,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.idempotency import normalize_idempotency_key
 from app.core.auth import AuthenticatedUser
+from app.db.locks import lock_portfolio
 from app.api.schemas.operating_core import (
     CashAdjustmentCreate,
     CashDepositCreate,
@@ -362,6 +364,51 @@ async def create_cash_entry(
     return await create_cash_deposit(session, payload, user)
 
 
+def _reusable_source_reference(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned or cleaned == "manual_trade" or cleaned.startswith("trade:"):
+        return None
+    return cleaned
+
+
+async def _find_replay_cash_entry(
+    session: AsyncSession,
+    portfolio_id: UUID,
+    *,
+    idempotency_key: str | None,
+    source_reference: str | None,
+    entry_type: str,
+    amount: Decimal,
+    currency: str,
+) -> CashLedgerEntry | None:
+    if idempotency_key:
+        existing = await session.scalar(
+            select(CashLedgerEntry).where(
+                CashLedgerEntry.portfolio_id == portfolio_id,
+                CashLedgerEntry.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            return existing
+    if source_reference:
+        existing = await session.scalar(
+            select(CashLedgerEntry)
+            .where(
+                CashLedgerEntry.portfolio_id == portfolio_id,
+                CashLedgerEntry.entry_type == entry_type,
+                CashLedgerEntry.source_reference == source_reference,
+                CashLedgerEntry.amount == amount,
+                CashLedgerEntry.currency == currency,
+            )
+            .order_by(CashLedgerEntry.created_at.asc())
+            .limit(1)
+        )
+        return existing
+    return None
+
+
 async def _create_cash_entry(
     session: AsyncSession,
     payload: CashMovementCreate,
@@ -370,7 +417,23 @@ async def _create_cash_entry(
     entry_type: str,
     amount: Decimal,
 ) -> CashLedgerEntryResponse:
-    portfolio = await get_or_create_default_portfolio(session, user)
+    portfolio = await lock_portfolio(
+        session, await get_or_create_default_portfolio(session, user)
+    )
+    portfolio_id = portfolio.id
+    idempotency_key = normalize_idempotency_key(payload.idempotency_key)
+    source_reference = _reusable_source_reference(payload.source_reference)
+    existing = await _find_replay_cash_entry(
+        session,
+        portfolio_id,
+        idempotency_key=idempotency_key,
+        source_reference=source_reference,
+        entry_type=entry_type,
+        amount=amount,
+        currency=payload.currency,
+    )
+    if existing is not None:
+        return CashLedgerEntryResponse.model_validate(existing)
     entry = CashLedgerEntry(
         portfolio_id=portfolio.id,
         entry_date=payload.entry_date,
@@ -380,6 +443,7 @@ async def _create_cash_entry(
         platform=payload.platform,
         description=payload.description,
         source_reference=payload.source_reference,
+        idempotency_key=idempotency_key,
     )
     session.add(entry)
     await record_system_log(
@@ -394,7 +458,22 @@ async def _create_cash_entry(
             "currency": payload.currency,
         },
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await _find_replay_cash_entry(
+            session,
+            portfolio_id,
+            idempotency_key=idempotency_key,
+            source_reference=source_reference,
+            entry_type=entry_type,
+            amount=amount,
+            currency=payload.currency,
+        )
+        if existing is None:
+            raise
+        return CashLedgerEntryResponse.model_validate(existing)
     await session.refresh(entry)
 
     logger.info(
@@ -515,12 +594,35 @@ async def upsert_instrument(
     return instrument
 
 
+async def _replay_trade(
+    session: AsyncSession, portfolio_id: UUID, idempotency_key: str | None
+) -> TradeResponse | None:
+    if not idempotency_key:
+        return None
+    trade = await session.scalar(
+        select(Trade)
+        .options(selectinload(Trade.instrument))
+        .where(Trade.portfolio_id == portfolio_id)
+        .where(Trade.idempotency_key == idempotency_key)
+    )
+    if trade is None:
+        return None
+    return _trade_response(trade)
+
+
 async def create_manual_trade(
     session: AsyncSession,
     payload: ManualTradeCreate,
     user: AuthenticatedUser,
 ) -> TradeResponse:
-    portfolio = await get_or_create_default_portfolio(session, user)
+    portfolio = await lock_portfolio(
+        session, await get_or_create_default_portfolio(session, user)
+    )
+    portfolio_id = portfolio.id
+    idempotency_key = normalize_idempotency_key(payload.idempotency_key)
+    replay = await _replay_trade(session, portfolio_id, idempotency_key)
+    if replay is not None:
+        return replay
     risk_check = await _ensure_trade_risk_approval(session, payload, user)
     instrument = await upsert_instrument(session, payload.instrument)
 
@@ -547,6 +649,7 @@ async def create_manual_trade(
             payload.risk_override_reason if risk_check.decision != "approve" else None
         ),
         broker_reference=payload.broker_reference,
+        idempotency_key=idempotency_key,
     )
     session.add(trade)
     await session.flush()
@@ -574,7 +677,14 @@ async def create_manual_trade(
             "side": trade.side,
         },
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        replay = await _replay_trade(session, portfolio_id, idempotency_key)
+        if replay is None:
+            raise
+        return replay
 
     trade = await session.scalar(
         select(Trade)
@@ -607,7 +717,9 @@ async def update_manual_trade(
     payload: ManualTradeUpdate,
     user: AuthenticatedUser,
 ) -> TradeResponse:
-    portfolio = await get_or_create_default_portfolio(session, user)
+    portfolio = await lock_portfolio(
+        session, await get_or_create_default_portfolio(session, user)
+    )
     trade = await session.scalar(
         select(Trade)
         .options(selectinload(Trade.instrument))

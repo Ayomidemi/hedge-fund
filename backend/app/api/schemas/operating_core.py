@@ -29,6 +29,7 @@ class CashMovementCreate(BaseModel):
     platform: str = Field(min_length=1, max_length=64)
     description: str | None = None
     source_reference: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
     @field_validator("currency")
     @classmethod
@@ -96,6 +97,7 @@ class ManualTradeCreate(BaseModel):
     pre_trade_check_id: UUID | None = None
     risk_override_reason: str | None = None
     broker_reference: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class ManualTradeUpdate(ManualTradeCreate):
