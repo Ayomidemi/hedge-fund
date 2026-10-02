@@ -31,7 +31,8 @@ SIMULATION_NOTICE = (
     "Isolated $10,000 USD paper trial; no live orders. Whole-share, long-only momentum experiment, "
     "not a validated profit forecast. Fills use later observed prices with 10 bps adverse slippage "
     "and 5 bps fees per side. Order-book depth, queue priority, partial fills, dividends and corporate "
-    "actions are not simulated. Stops can fill below their trigger. Missing or stale data blocks execution."
+    "actions are not simulated. Moves between observations can be missed. Stops can fill below their "
+    "trigger. Missing or stale data blocks execution."
 )
 
 
@@ -198,8 +199,14 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         cost = price * order.quantity + fee(price * order.quantity, policy)
         other_reserved = state["reserved_cash"] - reservation(order, policy)
         reserve_floor = state["equity"] * Decimal(str(policy["cash_reserve_pct"])) / 100
+        sector_used = sum(((o.mark_price or o.limit_price) * o.quantity for o in orders
+                           if o is not order and o.status in {"pending", "open"} and o.sector == order.sector), ZERO)
+        stop_fill = (order.stop_price * (1 - Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
+        planned_loss = (price - stop_fill) * order.quantity + fee(price * order.quantity, policy) + fee(stop_fill * order.quantity, policy)
         if (cost > run.cash_balance - other_reserved - reserve_floor
-                or cost > state["equity"] * Decimal(str(policy["max_position_pct"])) / 100):
+                or cost > state["equity"] * Decimal(str(policy["max_position_pct"])) / 100
+                or cost + sector_used > state["equity"] * Decimal(str(policy["max_sector_pct"])) / 100
+                or planned_loss > state["equity"] * Decimal(str(policy["risk_per_trade_pct"])) / 100):
             order.status = "cancelled"
             order.exit_reason = "Capital or concentration limit changed before fill."
             continue

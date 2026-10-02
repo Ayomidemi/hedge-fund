@@ -24,8 +24,8 @@ from app.core.market_constants import PRICE_BATCH_SIZE, QUOTE_HTTP_TIMEOUT_SECON
 
 logger = logging.getLogger(__name__)
 
-_NGN_MARKET_RATE_LIMIT_BACKOFF = timedelta(minutes=10)
-_ngn_quote_backoff_until: datetime | None = None
+_PROVIDER_RATE_LIMIT_BACKOFF = timedelta(minutes=10)
+_provider_backoff_until: dict[str, datetime] = {}
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,9 @@ async def _fetch_fmp_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
     a fallback for symbols the Tiingo batch missed - not for full batches."""
     base_url = settings.fmp_base_url.removesuffix("/api")
     quotes: dict[str, LiveQuote] = {}
+    now = datetime.now(timezone.utc)
+    if _provider_is_backing_off("fmp", now):
+        return quotes
     async with httpx.AsyncClient(
         base_url=base_url,
         timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
@@ -107,6 +110,8 @@ async def _fetch_fmp_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
+                if _halt_provider_on_rate_limit("fmp", ticker, exc, now):
+                    break
                 logger.warning(
                     "fmp_quote_failed",
                     extra={"ticker_symbol": ticker, "error": str(exc)},
@@ -140,6 +145,9 @@ async def _fetch_polygon_prev_close(tickers: list[str]) -> dict[str, LiveQuote]:
     """Polygon free tier only exposes previous-day aggregates; used as the
     last resort so a symbol at least gets yesterday's close as a mark."""
     quotes: dict[str, LiveQuote] = {}
+    now = datetime.now(timezone.utc)
+    if _provider_is_backing_off("polygon", now):
+        return quotes
     async with httpx.AsyncClient(
         base_url=settings.polygon_base_url,
         timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
@@ -151,6 +159,8 @@ async def _fetch_polygon_prev_close(tickers: list[str]) -> dict[str, LiveQuote]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
+                if _halt_provider_on_rate_limit("polygon", ticker, exc, now):
+                    break
                 logger.warning(
                     "polygon_prev_close_failed",
                     extra={"ticker_symbol": ticker, "error": str(exc)},
@@ -180,6 +190,9 @@ async def _fetch_polygon_prev_close(tickers: list[str]) -> dict[str, LiveQuote]:
 
 
 async def _fetch_tiingo_iex(tickers: list[str]) -> dict[str, LiveQuote]:
+    now = datetime.now(timezone.utc)
+    if _provider_is_backing_off("tiingo", now):
+        return {}
     try:
         async with httpx.AsyncClient(
             base_url=settings.tiingo_base_url,
@@ -193,7 +206,8 @@ async def _fetch_tiingo_iex(tickers: list[str]) -> dict[str, LiveQuote]:
             response.raise_for_status()
             payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("tiingo_iex_failed", extra={"error": str(exc)})
+        if not _halt_provider_on_rate_limit("tiingo", ",".join(tickers[:3]), exc, now):
+            logger.warning("tiingo_iex_failed", extra={"error": str(exc)})
         return {}
 
     if not isinstance(payload, list):
@@ -233,7 +247,7 @@ async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
     (unlike /companies/{symbol}, which requires a paid plan)."""
     quotes: dict[str, LiveQuote] = {}
     now = datetime.now(timezone.utc)
-    if _ngn_quote_is_backing_off(now):
+    if _provider_is_backing_off("ngn", now):
         return quotes
 
     async with httpx.AsyncClient(
@@ -251,15 +265,11 @@ async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
-                extra = {"ticker_symbol": ticker, "error": str(exc)}
-                if _is_rate_limit_error(exc):
-                    retry_after = _set_ngn_quote_backoff(now)
-                    extra["retry_after"] = retry_after.isoformat()
-                    logger.warning("ngn_quote_rate_limited", extra=extra)
+                if _halt_provider_on_rate_limit("ngn", ticker, exc, now):
                     break
                 logger.warning(
                     "ngn_quote_failed",
-                    extra=extra,
+                    extra={"ticker_symbol": ticker, "error": str(exc)},
                 )
                 continue
 
@@ -291,14 +301,43 @@ async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
     return quotes
 
 
-def _ngn_quote_is_backing_off(now: datetime) -> bool:
-    return _ngn_quote_backoff_until is not None and _ngn_quote_backoff_until > now
+def _provider_is_backing_off(provider: str, now: datetime) -> bool:
+    until = _provider_backoff_until.get(provider)
+    return until is not None and until > now
 
 
-def _set_ngn_quote_backoff(now: datetime) -> datetime:
-    global _ngn_quote_backoff_until
-    _ngn_quote_backoff_until = now + _NGN_MARKET_RATE_LIMIT_BACKOFF
-    return _ngn_quote_backoff_until
+def _set_provider_backoff(provider: str, now: datetime) -> datetime:
+    until = now + _PROVIDER_RATE_LIMIT_BACKOFF
+    _provider_backoff_until[provider] = until
+    return until
+
+
+def _clear_provider_backoff(provider: str | None = None) -> None:
+    if provider is None:
+        _provider_backoff_until.clear()
+        return
+    _provider_backoff_until.pop(provider, None)
+
+
+def _halt_provider_on_rate_limit(
+    provider: str,
+    ticker: str,
+    exc: Exception,
+    now: datetime,
+) -> bool:
+    """Stop the provider after one 429. Later calls stay quiet until backoff ends."""
+    if not _is_rate_limit_error(exc):
+        return False
+    retry_after = _set_provider_backoff(provider, now)
+    logger.warning(
+        f"{provider}_quote_rate_limited",
+        extra={
+            "ticker_symbol": ticker,
+            "error": str(exc),
+            "retry_after": retry_after.isoformat(),
+        },
+    )
+    return True
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:

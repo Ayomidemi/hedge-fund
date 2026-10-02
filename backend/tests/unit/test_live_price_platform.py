@@ -1,12 +1,18 @@
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest import TestCase
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from app.core.config import settings
 from app.services.market_data.ingestion import is_us_market_open
 from app.services.market_data.quote_provider import (
+    _clear_provider_backoff,
     _decimal,
     _epoch_datetime,
+    _fetch_fmp_quotes,
+    _fetch_polygon_prev_close,
     _int,
     _iso_datetime,
 )
@@ -201,6 +207,51 @@ class EventEnvelopeTests(TestCase):
             message="Refreshed 10/10 quotes.",
         )
         self.assertEqual(event["payload"]["category"], "market_data")
+
+
+class QuoteProviderRateLimitTests(IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _clear_provider_backoff()
+
+    def tearDown(self) -> None:
+        _clear_provider_backoff()
+
+    async def test_fmp_stops_after_one_rate_limit_and_stays_quiet(self) -> None:
+        client = _rate_limited_client()
+        with patch(
+            "app.services.market_data.quote_provider.httpx.AsyncClient",
+            return_value=client,
+        ):
+            first = await _fetch_fmp_quotes(["AAA", "BBB", "CCC"])
+            second = await _fetch_fmp_quotes(["DDD"])
+
+        self.assertEqual(first, {})
+        self.assertEqual(second, {})
+        self.assertEqual(client.get.await_count, 1)
+
+    async def test_polygon_stops_after_one_rate_limit_and_stays_quiet(self) -> None:
+        client = _rate_limited_client()
+        with patch(
+            "app.services.market_data.quote_provider.httpx.AsyncClient",
+            return_value=client,
+        ):
+            first = await _fetch_polygon_prev_close(["AAA", "BBB"])
+            second = await _fetch_polygon_prev_close(["CCC"])
+
+        self.assertEqual(first, {})
+        self.assertEqual(second, {})
+        self.assertEqual(client.get.await_count, 1)
+
+
+def _rate_limited_client() -> AsyncMock:
+    request = httpx.Request("GET", "https://example.test/quote")
+    response = httpx.Response(429, request=request)
+    error = httpx.HTTPStatusError("429", request=request, response=response)
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get.side_effect = error
+    return client
 
 
 class CelerySchedulingTests(TestCase):
