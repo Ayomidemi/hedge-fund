@@ -1287,6 +1287,7 @@ class InvestPriceUniverseTests(IsolatedAsyncioTestCase):
         session = _FakeScalarsSession(
             [
                 [],
+                [],  # Active paper-fund orders.
                 [retail_position_id],
                 [watchlist_id],
                 ["BIL"],

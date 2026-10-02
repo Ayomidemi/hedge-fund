@@ -1,16 +1,18 @@
+import { PaperFundPanel } from "@/components/portfolio/PaperFundPanel";
 import { PortfolioDashboard } from "@/components/portfolio/PortfolioDashboard";
-import { getOperatingCoreDashboard, type OperatingCoreDashboard } from "@/lib/api";
+import { getOperatingCoreDashboard, getPaperFund } from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
 
 export default async function Home() {
-  let dashboard: OperatingCoreDashboard | null = null;
   const accessToken = await getServerAccessToken();
-
-  try {
-    dashboard = await getOperatingCoreDashboard({ accessToken });
-  } catch {
-    dashboard = null;
-  }
-
-  return <PortfolioDashboard dashboard={dashboard} />;
+  const [dashboard, paperFund] = await Promise.allSettled([
+    getOperatingCoreDashboard({ accessToken }),
+    getPaperFund({ accessToken }),
+  ]);
+  return (
+    <div className="mx-auto max-w-[1560px] space-y-8">
+      <PaperFundPanel initialOverview={paperFund.status === "fulfilled" ? paperFund.value : null} />
+      <PortfolioDashboard dashboard={dashboard.status === "fulfilled" ? dashboard.value : null} />
+    </div>
+  );
 }

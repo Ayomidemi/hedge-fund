@@ -350,6 +350,8 @@ class Trade(Base, TimestampMixin):
     quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     executed_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    executed_price_base: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    fees_base: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     fees: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=0)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     risk_notes: Mapped[str | None] = mapped_column(Text)
@@ -1950,3 +1952,6 @@ class RetailWatchlistItem(Base, TimestampMixin):
             "user_id", "instrument_id", name="uq_invest_watchlist_instrument"
         ),
     )
+
+
+from app.models.paper_fund import PaperEquitySnapshot, PaperFundRun, PaperOrder  # noqa: E402,F401

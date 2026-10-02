@@ -92,7 +92,7 @@ async def persist_quotes(
         for row in await session.scalars(
             select(InstrumentQuote).where(
                 InstrumentQuote.instrument_id.in_(instrument_ids)
-            )
+            ).order_by(InstrumentQuote.instrument_id).with_for_update()
         )
     }
     today = date.today()
@@ -120,6 +120,11 @@ async def persist_quotes(
             if quote is None:
                 if mark_missing_stale and row is not None and row.as_of < stale_cutoff:
                     row.is_stale = True
+                continue
+
+            if not quote.price.is_finite() or quote.price <= 0 or quote.as_of > datetime.now(timezone.utc):
+                continue
+            if row is not None and quote.as_of < row.as_of:
                 continue
 
             if row is None:
@@ -153,12 +158,12 @@ async def persist_quotes(
             row.currency = quote.currency
             row.source = quote.source
             row.as_of = quote.as_of
-            row.is_stale = False
+            row.is_stale = quote.as_of < stale_cutoff
             row.raw_payload = quote.raw_payload or {}
 
-            _upsert_live_bar(
-                new_bars, existing_bars, instrument_id, today, quote
-            )
+            # A previous close must never become a fabricated bar for today.
+            if quote.as_of.date() == today:
+                _upsert_live_bar(new_bars, existing_bars, instrument_id, today, quote)
 
     if new_quotes:
         quote_insert = pg_insert(InstrumentQuote).values(
@@ -184,6 +189,7 @@ async def persist_quotes(
         )
         quote_insert = quote_insert.on_conflict_do_update(
             index_elements=["instrument_id"],
+            where=quote_insert.excluded.as_of >= InstrumentQuote.as_of,
             set_={
                 "price": quote_insert.excluded.price,
                 "previous_close": func.coalesce(

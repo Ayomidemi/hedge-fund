@@ -1,6 +1,6 @@
 import logging
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
@@ -46,7 +46,7 @@ from app.models import (
     TradeStatus,
 )
 from app.services.administration.system_log import record_system_log
-from app.services.market_data.fx_convert import price_in_portfolio_base
+from app.services.market_data.fx_convert import amount_in_base, price_in_portfolio_base
 from app.services.market_data.fx_refresh import load_fx_rates, refresh_fx_rates
 from app.services.market_data.quote_cache import get_mark_price, get_mark_prices
 from app.services.portfolio.calculations import (
@@ -61,7 +61,7 @@ from app.services.portfolio.calculations import (
 )
 
 DEFAULT_PORTFOLIO_NAME = "Operating Fund"
-DEFAULT_INITIAL_CAPITAL = Decimal("1000.00")
+DEFAULT_INITIAL_CAPITAL = Decimal("10000.00")
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,10 @@ class TradeNotFoundError(RuntimeError):
 
 class TradeRiskApprovalError(RuntimeError):
     pass
+
+
+class CapitalValidationError(ValueError):
+    """A ledger mutation would violate the fund's cash or inventory invariants."""
 
 
 async def _ensure_trade_risk_approval(
@@ -91,7 +95,10 @@ async def _ensure_trade_risk_approval(
         trade_date=payload.trade_date,
         rationale=payload.rationale,
     )
-    from app.services.risk.risk_centre import load_matching_pre_trade_risk_check
+    from app.services.risk.risk_centre import (
+        create_pre_trade_risk_check_record,
+        load_matching_pre_trade_risk_check,
+    )
 
     risk_check = await load_matching_pre_trade_risk_check(
         session,
@@ -103,6 +110,11 @@ async def _ensure_trade_risk_approval(
         raise TradeRiskApprovalError(
             "Run a fresh pre-trade risk check for this exact trade."
         )
+    # Re-evaluate under the portfolio row lock: an earlier approval does not
+    # reserve cash and may no longer reflect current holdings or market marks.
+    risk_check = await create_pre_trade_risk_check_record(
+        session, risk_payload, user, commit=False
+    )
     if risk_check.decision == "reject":
         raise TradeRiskApprovalError("Risk rejected this trade; it cannot be saved.")
     if risk_check.decision != "approve" and not (
@@ -125,7 +137,7 @@ async def get_dashboard(
     trades = await _list_trades(session, portfolio.id)
     risk_limits = await _list_risk_limits(session, portfolio.id)
 
-    cash_balance = money(sum((entry.amount for entry in cash_entries), Decimal("0")))
+    cash_balance = await cash_balance_in_base(session, portfolio, cash_entries)
     position_snapshots = [
         PositionSnapshot(
             ticker=position.instrument.ticker,
@@ -217,7 +229,9 @@ async def get_or_create_default_portfolio(
     portfolio = await _load_owned_portfolio(session, user)
     if portfolio is not None:
         await _ensure_default_risk_limits(session, portfolio)
-        await session.commit()
+        # Callers may hold a portfolio lock. Committing here released that lock
+        # midway through a trade's risk check and permitted concurrent spending.
+        await session.flush()
         return portfolio
 
     try:
@@ -311,7 +325,7 @@ def _default_portfolio_name(user: AuthenticatedUser) -> str:
 def _starting_capital_for_user(user: AuthenticatedUser) -> Decimal:
     if user.starting_capital is None:
         return DEFAULT_INITIAL_CAPITAL
-    return max(user.starting_capital, DEFAULT_INITIAL_CAPITAL).quantize(Decimal("0.01"))
+    return money(max(user.starting_capital, Decimal("0")))
 
 
 async def create_cash_deposit(
@@ -368,7 +382,7 @@ def _reusable_source_reference(value: str | None) -> str | None:
     if value is None:
         return None
     cleaned = value.strip()
-    if not cleaned or cleaned == "manual_trade" or cleaned.startswith("trade:"):
+    if not cleaned or cleaned == "manual_trade" or cleaned.startswith(("trade:", "manual_trade:")):
         return None
     return cleaned
 
@@ -391,6 +405,12 @@ async def _find_replay_cash_entry(
             )
         )
         if existing is not None:
+            if (existing.entry_type, existing.amount, existing.currency) != (
+                entry_type, amount, currency
+            ):
+                raise CapitalValidationError(
+                    "This idempotency key was already used for a different cash movement."
+                )
             return existing
     if source_reference:
         existing = await session.scalar(
@@ -421,6 +441,15 @@ async def _create_cash_entry(
         session, await get_or_create_default_portfolio(session, user)
     )
     portfolio_id = portfolio.id
+    if payload.currency != portfolio.base_currency:
+        raise CapitalValidationError(
+            f"Cash movements must be recorded in {portfolio.base_currency}; convert the amount first."
+        )
+    if not amount.is_finite() or money(amount) == 0:
+        raise CapitalValidationError("Cash amount must be finite and at least one cent.")
+    amount = money(amount)
+    if payload.entry_date > date.today():
+        raise CapitalValidationError("Future cash movements cannot fund current trading.")
     idempotency_key = normalize_idempotency_key(payload.idempotency_key)
     source_reference = _reusable_source_reference(payload.source_reference)
     existing = await _find_replay_cash_entry(
@@ -434,6 +463,10 @@ async def _create_cash_entry(
     )
     if existing is not None:
         return CashLedgerEntryResponse.model_validate(existing)
+    if amount < 0:
+        cash_balance = await cash_balance_in_base(session, portfolio)
+        if cash_balance + amount < 0:
+            raise CapitalValidationError("Cash movement exceeds the available cash balance.")
     entry = CashLedgerEntry(
         portfolio_id=portfolio.id,
         entry_date=payload.entry_date,
@@ -575,6 +608,13 @@ async def upsert_instrument(
         )
         return instrument
 
+    if (instrument.currency, instrument.asset_class) != (
+        payload.currency, payload.asset_class
+    ):
+        raise CapitalValidationError(
+            "An existing instrument's currency and asset class cannot be changed by a trade."
+        )
+
     logger.info(
         "instrument_updated",
         extra={
@@ -622,7 +662,22 @@ async def create_manual_trade(
     idempotency_key = normalize_idempotency_key(payload.idempotency_key)
     replay = await _replay_trade(session, portfolio_id, idempotency_key)
     if replay is not None:
+        if (
+            replay.instrument.ticker != payload.instrument.ticker
+            or replay.side != payload.side
+            or replay.quantity != payload.quantity
+            or replay.executed_price != payload.price
+            or replay.fees != payload.fees
+        ):
+            raise CapitalValidationError(
+                "This idempotency key was already used for a different trade."
+            )
         return replay
+    trade_time = payload.trade_date
+    if trade_time.tzinfo is None:
+        trade_time = trade_time.replace(tzinfo=timezone.utc)
+    if trade_time > datetime.now(timezone.utc):
+        raise CapitalValidationError("A filled trade cannot have a future execution time.")
     risk_check = await _ensure_trade_risk_approval(session, payload, user)
     instrument = await upsert_instrument(session, payload.instrument)
 
@@ -651,10 +706,16 @@ async def create_manual_trade(
         broker_reference=payload.broker_reference,
         idempotency_key=idempotency_key,
     )
+    trade.executed_price_base = _amount_in_portfolio_base(
+        payload.price, instrument, portfolio, fx_rates
+    ).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+    trade.fees_base = money(_amount_in_portfolio_base(payload.fees, instrument, portfolio, fx_rates))
     session.add(trade)
     await session.flush()
 
     cash_values = _trade_cash_ledger_values(trade, instrument, portfolio, fx_rates)
+    if await cash_balance_in_base(session, portfolio) + cash_values["amount"] < 0:
+        raise CapitalValidationError("Trade and fees exceed the available cash balance.")
     session.add(CashLedgerEntry(portfolio_id=portfolio.id, **cash_values))
 
     await _rebuild_positions_from_filled_trades(session, portfolio)
@@ -728,76 +789,45 @@ async def update_manual_trade(
     if trade is None:
         raise TradeNotFoundError("Trade was not found.")
 
-    old_cash_values = _trade_cash_ledger_values(
-        trade,
-        trade.instrument,
-        portfolio,
-        await _ensure_fx_rates(
-            session, portfolio=portfolio, instruments=[trade.instrument]
-        ),
-    )
-    instrument = await upsert_instrument(session, payload.instrument)
-    fx_rates = await _ensure_fx_rates(
-        session, portfolio=portfolio, instruments=[instrument]
-    )
-
-    trade.instrument_id = instrument.id
-    trade.instrument = instrument
-    trade.trade_date = payload.trade_date
-    trade.side = payload.side
-    trade.quantity = payload.quantity
-    trade.executed_price = payload.price
-    trade.fees = payload.fees
+    _validate_trade_edit(trade, payload)
+    # Filled executions are accounting records. Editing their economic terms
+    # rewrote history without risk approval and could manufacture cash/holdings.
     trade.rationale = payload.rationale or ""
     trade.risk_notes = payload.risk_notes
     trade.broker_reference = payload.broker_reference
-    await session.flush()
-
-    await _sync_trade_cash_entry(session, portfolio, trade, instrument, old_cash_values, fx_rates)
-    await _rebuild_positions_from_filled_trades(session, portfolio)
-    from app.services.opportunity_queue.queue import sync_opportunities_for_instrument
-
-    await sync_opportunities_for_instrument(
-        session,
-        owner_user_id=user.id,
-        instrument=instrument,
-    )
     await record_system_log(
         session,
         owner_user_id=user.id,
         category="portfolio",
         event="trade_updated",
-        message=f"{trade.side.upper()} {trade.quantity} {trade.instrument.ticker} updated.",
-        context={
-            "trade_id": str(trade.id),
-            "ticker": trade.instrument.ticker,
-            "side": trade.side,
-        },
+        message=f"Notes for {trade.instrument.ticker} execution updated.",
+        context={"trade_id": str(trade.id)},
     )
     await session.commit()
-
-    trade = await session.scalar(
-        select(Trade)
-        .options(selectinload(Trade.instrument))
-        .where(Trade.id == trade_id, Trade.portfolio_id == portfolio.id)
-    )
-    if trade is None:
-        raise RuntimeError("Trade could not be loaded after update.")
-
-    logger.info(
-        "manual_trade_updated",
-        extra={
-            "portfolio_id": str(portfolio.id),
-            "owner_user_id": portfolio.owner_user_id,
-            "trade_id": str(trade.id),
-            "ticker": trade.instrument.ticker,
-            "side": trade.side,
-            "quantity": str(trade.quantity),
-            "executed_price": str(trade.executed_price),
-        },
-    )
-
     return _trade_response(trade)
+
+
+def _validate_trade_edit(trade: Trade, payload: ManualTradeUpdate) -> None:
+    old_time = trade.trade_date
+    new_time = payload.trade_date
+    if old_time.tzinfo is None:
+        old_time = old_time.replace(tzinfo=timezone.utc)
+    if new_time.tzinfo is None:
+        new_time = new_time.replace(tzinfo=timezone.utc)
+    if (
+        trade.status != TradeStatus.FILLED.value
+        or trade.instrument.ticker != payload.instrument.ticker
+        or trade.instrument.currency != payload.instrument.currency
+        or trade.instrument.asset_class != payload.instrument.asset_class
+        or trade.side != payload.side
+        or trade.quantity != payload.quantity
+        or trade.executed_price != payload.price
+        or trade.fees != payload.fees
+        or old_time != new_time
+    ):
+        raise CapitalValidationError(
+            "Filled execution amounts, instruments and dates are immutable; only trade notes may be edited."
+        )
 
 
 async def _apply_trade_to_position(
@@ -967,6 +997,8 @@ async def _rebuild_positions_from_filled_trades(
         state["last_price"] = trade_price
 
         if trade.side == TradeSide.BUY.value:
+            if state["quantity"] == 0:
+                state["opened_at"] = trade.trade_date
             previous_cost = state["quantity"] * state["average_cost"]
             new_cost = trade.quantity * trade_price
             new_quantity = state["quantity"] + trade.quantity
@@ -974,7 +1006,11 @@ async def _rebuild_positions_from_filled_trades(
             state["quantity"] = new_quantity
             continue
 
-        state["quantity"] = max(Decimal("0"), state["quantity"] - trade.quantity)
+        if trade.quantity > state["quantity"]:
+            raise CapitalValidationError(
+                f"Sell quantity exceeds available {trade.instrument.ticker} holdings at execution time."
+            )
+        state["quantity"] -= trade.quantity
         if state["quantity"] == 0:
             state["average_cost"] = Decimal("0")
 
@@ -1028,9 +1064,10 @@ def _trade_cash_ledger_values(
     native_price = trade.executed_price or Decimal("0")
     price = _trade_price_in_base(trade, instrument, portfolio, fx_rates)
     trade_value = money(trade.quantity * price)
-    amount = -(trade_value + trade.fees)
+    fees = _trade_fees_in_base(trade, instrument, portfolio, fx_rates)
+    amount = -(trade_value + fees)
     if trade.side == TradeSide.SELL.value:
-        amount = trade_value - trade.fees
+        amount = trade_value - fees
 
     return {
         "entry_date": trade.trade_date.date(),
@@ -1068,6 +1105,13 @@ def _trade_price_in_base(
     portfolio: Portfolio,
     fx_rates: dict,
 ) -> Decimal:
+    booked_price = getattr(trade, "executed_price_base", None)
+    if booked_price is not None:
+        return booked_price
+    if instrument.currency != portfolio.base_currency:
+        raise CapitalValidationError(
+            f"Historical {instrument.ticker} fill has no booked base-currency price. Reconcile its execution FX before reporting or trading this ledger."
+        )
     native_price = trade.executed_price or Decimal("0")
     converted = price_in_portfolio_base(
         native_price,
@@ -1085,12 +1129,25 @@ def _trade_price_in_base(
                 "portfolio_base": portfolio.base_currency,
             },
         )
-        return native_price
+        raise CapitalValidationError(
+            f"Cannot convert {instrument.ticker} from {instrument.currency} to {portfolio.base_currency}."
+        )
     return converted
 
 
 def _trade_source_reference(trade_id: UUID) -> str:
     return f"manual_trade:{trade_id}"
+
+
+def _trade_fees_in_base(
+    trade: Trade, instrument: Instrument, portfolio: Portfolio, fx_rates: dict
+) -> Decimal:
+    booked_fees = getattr(trade, "fees_base", None)
+    if booked_fees is not None:
+        return money(booked_fees)
+    if instrument.currency != portfolio.base_currency:
+        raise CapitalValidationError(f"Historical {instrument.ticker} fill has no booked base-currency fees.")
+    return money(_amount_in_portfolio_base(trade.fees, instrument, portfolio, fx_rates))
 
 
 async def _ensure_default_risk_limits(
@@ -1138,6 +1195,30 @@ async def _list_cash_entries(
         .order_by(CashLedgerEntry.entry_date.desc(), CashLedgerEntry.created_at.desc())
     )
     return list(result)
+
+
+async def cash_balance_in_base(
+    session: AsyncSession,
+    portfolio: Portfolio,
+    entries: list[CashLedgerEntry] | None = None,
+) -> Decimal:
+    entries = entries if entries is not None else await _list_cash_entries(session, portfolio.id)
+    rates = (
+        await load_fx_rates(session)
+        if any(entry.currency != portfolio.base_currency for entry in entries)
+        else {}
+    )
+    total = Decimal("0")
+    for entry in entries:
+        if entry.entry_date > date.today():
+            continue
+        converted = amount_in_base(entry.amount, entry.currency, portfolio.base_currency, rates)
+        if converted is None:
+            raise CapitalValidationError(
+                f"Cannot value {entry.currency} cash in {portfolio.base_currency} without an FX rate."
+            )
+        total += converted
+    return money(total)
 
 
 async def _list_positions(session: AsyncSession, portfolio_id) -> list[Position]:
@@ -1232,11 +1313,7 @@ def _trade_journal_entry_response(
     native_price = trade.executed_price or Decimal("0")
     base_price = _trade_price_in_base(trade, trade.instrument, portfolio, fx_rates)
     notional_value = money(trade.quantity * base_price)
-    fees_in_base = money(
-        _amount_in_portfolio_base(
-            trade.fees, trade.instrument, portfolio, fx_rates
-        )
-    )
+    fees_in_base = _trade_fees_in_base(trade, trade.instrument, portfolio, fx_rates)
     native_notional = trade.quantity * native_price
     cash_impact = _trade_cash_impact(trade, notional_value, fees_in_base)
     fee_bps = None
@@ -1315,14 +1392,11 @@ def _amount_in_portfolio_base(
     portfolio: Portfolio,
     fx_rates: dict,
 ) -> Decimal:
-    converted = price_in_portfolio_base(
-        amount,
-        instrument,
-        portfolio.base_currency,
-        fx_rates,
-    )
+    converted = amount_in_base(amount, instrument.currency, portfolio.base_currency, fx_rates)
     if converted is None:
-        return amount
+        raise CapitalValidationError(
+            f"Cannot convert {instrument.currency} amounts to {portfolio.base_currency}."
+        )
     return converted
 
 

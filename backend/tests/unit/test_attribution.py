@@ -71,7 +71,8 @@ class AttributionTests(TestCase):
         self.assertEqual(accumulator.fees, Decimal("1.50"))
         self.assertEqual(accumulator.closed_trade_count, 1)
         self.assertEqual(accumulator.winning_trade_count, 1)
-        self.assertEqual(events[0].net_realized_pnl, Decimal("14.50"))
+        # Allocate half the $1 entry fee to the one share sold, plus its $0.50 exit fee.
+        self.assertEqual(events[0].net_realized_pnl, Decimal("14.00"))
 
     def test_hit_rate_and_profit_factor_handle_empty_denominators(self) -> None:
         self.assertIsNone(_hit_rate(0, 0))

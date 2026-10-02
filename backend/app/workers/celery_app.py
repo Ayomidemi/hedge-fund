@@ -25,6 +25,7 @@ celery_app = Celery(
         "app.workers.tasks.price_refresh",
         "app.workers.tasks.radar_scan",
         "app.workers.tasks.news_poll",
+        "app.workers.tasks.paper_fund",
     ],
 )
 
@@ -65,6 +66,7 @@ def _prime_celery_fast_trace(**_kwargs) -> None:
 
 
 celery_app.conf.beat_schedule = {
+    "paper-fund": {"task": "paper_fund.cycle", "schedule": 30.0},
     "price-refresh": {
         "task": "price_refresh.run",
         "schedule": float(settings.price_refresh_interval_seconds),

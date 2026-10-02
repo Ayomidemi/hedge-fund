@@ -5,7 +5,6 @@ from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from sqlalchemy import case, func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,9 +24,7 @@ from app.api.schemas.opportunity_queue import (
     OpportunityTradeLink,
     OpportunityUpdate,
 )
-from app.api.idempotency import normalize_idempotency_key
 from app.core.auth import AuthenticatedUser
-from app.db.locks import lock_idempotency_scope
 from app.models import (
     Instrument,
     Opportunity,
@@ -41,7 +38,6 @@ from app.models import (
 )
 from app.services.administration.system_log import record_system_log
 from app.services.market_data.universe import quote_symbol_for
-from app.services.portfolio.operating_core import upsert_instrument
 from app.services.strategy_pods.pods import (
     normalize_strategy_pod_code,
     _get_or_seed_strategy_pods,
@@ -198,167 +194,16 @@ async def list_opportunity_queue(
     )
 
 
-async def _replay_opportunity(
-    session: AsyncSession,
-    user: AuthenticatedUser,
-    idempotency_key: str | None,
-) -> OpportunityResponse | None:
-    if not idempotency_key:
-        return None
-    existing = await session.scalar(
-        select(Opportunity)
-        .options(selectinload(Opportunity.instrument))
-        .where(Opportunity.owner_user_id == user.id)
-        .where(Opportunity.idempotency_key == idempotency_key)
-    )
-    if existing is None:
-        return None
-    links = await _load_links(session, user, [existing])
-    return _opportunity_response(existing, links.get(existing.id))
-
-
 async def create_opportunity(
     session: AsyncSession,
     user: AuthenticatedUser,
     payload: OpportunityCreate,
 ) -> OpportunityResponse:
-    idempotency_key = normalize_idempotency_key(payload.idempotency_key)
-    if idempotency_key:
-        await lock_idempotency_scope(session, f"opportunity:{user.id}", idempotency_key)
-        replay = await _replay_opportunity(session, user, idempotency_key)
-        if replay is not None:
-            return replay
-    elif payload.source_memo_id is not None:
-        await lock_idempotency_scope(
-            session, f"opportunity-memo:{user.id}", str(payload.source_memo_id)
-        )
-
-    source_memo = None
-    if payload.source_memo_id is not None:
-        existing = await _load_opportunity_by_source_memo(
-            session, user, payload.source_memo_id
-        )
-        if existing is not None:
-            return _opportunity_response(existing)
-
-        source_memo = await _load_owned_memo(session, user, payload.source_memo_id)
-        if source_memo is None:
-            raise OpportunityValidationError("Source memo was not found.")
-
-    if source_memo is None and payload.instrument is None:
-        raise OpportunityValidationError(
-            "Provide either a source memo or an instrument."
-        )
-    if source_memo is None and not payload.thesis:
-        raise OpportunityValidationError("Manual opportunities require a thesis.")
-
-    instrument = (
-        source_memo.instrument
-        if source_memo is not None
-        else await upsert_instrument(session, payload.instrument)
+    """Legacy research records remain readable; only the engine creates orders."""
+    raise OpportunityValidationError(
+        "Manual opportunity creation is disabled. Use the automated paper fund; "
+        "its opportunity queue contains only risk-checked automatic orders."
     )
-    scores = source_memo.scores if source_memo is not None else {}
-    now = datetime.now(timezone.utc)
-    status = payload.status
-    strategy_pod = await resolve_strategy_pod_for_opportunity(
-        session,
-        user,
-        instrument=instrument,
-        strategy_pod_code=payload.strategy_pod_code,
-        discovery_evidence=dict(payload.discovery_evidence or {}),
-        source="memo" if source_memo is not None else "manual",
-    )
-    opportunity = Opportunity(
-        owner_user_id=user.id,
-        instrument_id=instrument.id,
-        source_memo_id=source_memo.id if source_memo is not None else None,
-        source_recommendation_id=(
-            source_memo.recommendation_id if source_memo is not None else None
-        ),
-        strategy_pod_id=strategy_pod.id if strategy_pod is not None else None,
-        discovered_at=now,
-        status=status,
-        priority=payload.priority,
-        thesis=payload.thesis or source_memo.thesis,
-        research_question=payload.research_question
-        or _default_research_question(instrument),
-        next_action=payload.next_action or _default_next_action(status),
-        time_horizon=payload.time_horizon
-        or (source_memo.time_horizon if source_memo else None),
-        conviction_score=payload.conviction_score
-        or _decimal(scores.get("conviction_score")),
-        expected_edge_pct=payload.expected_edge_pct,
-        target_weight=payload.target_weight
-        or _decimal(scores.get("recommended_weight")),
-        pre_trade_risk_check_id=payload.pre_trade_check_id,
-        review_by=payload.review_by,
-        closed_at=now if status in CLOSED_STATUSES else None,
-        notes=payload.notes,
-        discovery_evidence=dict(payload.discovery_evidence or {}),
-        status_history=[_status_event(status, "Opportunity created.")],
-        idempotency_key=idempotency_key,
-    )
-    session.add(opportunity)
-    await session.flush()
-    if payload.pre_trade_check_id is not None:
-        await _validate_pre_trade_check_for_opportunity(
-            session, user, opportunity, payload.pre_trade_check_id
-        )
-    links = await _load_links(session, user, [opportunity])
-    error = status_gate_error(
-        status,
-        thesis=opportunity.thesis,
-        research_question=opportunity.research_question,
-        target_weight=opportunity.target_weight,
-        notes=opportunity.notes,
-        links=links.get(opportunity.id) or OpportunityLinks(),
-        source_memo_id=opportunity.source_memo_id,
-        discovery_evidence=opportunity.discovery_evidence,
-    )
-    if error:
-        raise OpportunityValidationError(error)
-    await record_system_log(
-        session,
-        owner_user_id=user.id,
-        category="opportunity",
-        event="opportunity_created",
-        message=f"{instrument.ticker} added to the opportunity queue ({status}).",
-        context={
-            "opportunity_id": str(opportunity.id),
-            "ticker": instrument.ticker,
-            "status": status,
-        },
-    )
-    try:
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
-        if payload.source_memo_id is not None:
-            existing = await _load_opportunity_by_source_memo(
-                session, user, payload.source_memo_id
-            )
-            if existing is not None:
-                return _opportunity_response(existing)
-        replay = await _replay_opportunity(session, user, idempotency_key)
-        if replay is not None:
-            return replay
-        raise
-    opportunity = await _load_opportunity(session, user, opportunity.id)
-    if opportunity is None:
-        raise RuntimeError("Opportunity could not be loaded after creation.")
-
-    links = await _load_links(session, user, [opportunity])
-    logger.info(
-        "opportunity_created",
-        extra={
-            "owner_user_id": user.id,
-            "opportunity_id": str(opportunity.id),
-            "ticker": opportunity.instrument.ticker,
-            "status": opportunity.status,
-        },
-    )
-
-    return _opportunity_response(opportunity, links.get(opportunity.id))
 
 
 async def update_opportunity(
@@ -367,11 +212,16 @@ async def update_opportunity(
     opportunity_id: UUID,
     payload: OpportunityUpdate,
 ) -> OpportunityResponse:
+    updates = payload.model_dump(exclude_unset=True)
+    if "status" in updates or updates.get("override_reason"):
+        raise OpportunityValidationError(
+            "Manual opportunity status changes and gate overrides are disabled. "
+            "The automated paper fund controls order approval, entry, and exit."
+        )
     opportunity = await _load_opportunity(session, user, opportunity_id)
     if opportunity is None:
         raise OpportunityNotFoundError("Opportunity was not found.")
 
-    updates = payload.model_dump(exclude_unset=True)
     override_reason = updates.pop("override_reason", None)
     strategy_pod_code = updates.pop("strategy_pod_code", None)
     pre_trade_check_id = updates.pop("pre_trade_check_id", _UNSET)
@@ -427,9 +277,8 @@ async def update_opportunity(
             plan["time_stop_sessions"] = time_stop_sessions
         if thesis_breaker is not _UNSET:
             plan["thesis_breaker"] = thesis_breaker
-        if _entry_plan_is_complete(plan):
-            plan["confirmed"] = True
-            plan["status"] = "confirmed"
+        plan["confirmed"] = _entry_plan_is_complete({**plan, "confirmed": True})
+        plan["status"] = "confirmed" if plan["confirmed"] else "incomplete"
         evidence["entry_plan"] = plan
         opportunity.discovery_evidence = evidence
 
@@ -1229,7 +1078,8 @@ def _entry_plan_is_complete(plan: object) -> bool:
     if not entry_zone or not invalidation or max_loss in (None, ""):
         return False
     try:
-        if Decimal(str(max_loss)) <= 0:
+        loss = Decimal(str(max_loss))
+        if not loss.is_finite() or loss <= 0 or loss > 10:
             return False
     except (InvalidOperation, ValueError):
         return False

@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import ssl
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,10 +20,12 @@ from typing import Any
 
 import certifi
 import websockets
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
+from app.models import Instrument, PaperOrder
 from app.services.market_data.fx_provider import LiveFxRate
 from app.services.market_data.fx_refresh import persist_fx_rate
 from app.services.market_data.ingestion import persist_quotes
@@ -107,7 +110,9 @@ def parse_iex_reference_message(
         return None
 
     received = _utc(received_at)
-    as_of = _iso_datetime(data[0]) or received
+    as_of = _iso_datetime(data[0])
+    if as_of is None or as_of > received:
+        return None
     return LiveQuote(
         ticker=ticker,
         price=price,
@@ -144,12 +149,16 @@ def parse_fx_message(
     if len(pair) != 6:
         return None
 
-    rate = _decimal(data[5]) or _decimal(data[4]) or _decimal(data[6])
+    rate = _decimal(data[5]) or _decimal(data[4]) or (
+        _decimal(data[6]) if len(data) > 6 else None
+    )
     if rate is None or rate <= 0:
         return None
 
     received = _utc(received_at)
-    as_of = _iso_datetime(data[2]) or received
+    as_of = _iso_datetime(data[2])
+    if as_of is None or as_of > received:
+        return None
     return LiveFxRate(
         base_currency=pair[:3].upper(),
         quote_currency=pair[3:].upper(),
@@ -208,13 +217,17 @@ async def run_equity_stream(
 
         async with session_factory() as session:
             universe = await build_price_universe(session)
+            paper_tickers = set(await session.scalars(
+                select(Instrument.ticker).join(PaperOrder, PaperOrder.instrument_id == Instrument.id)
+                .where(PaperOrder.status.in_(["pending", "open"])).distinct()
+            ))
         us_universe = {
             ticker: ids
             for ticker, ids in universe.items()
             if not ticker.upper().endswith(".NG")
         }
         if settings.tiingo_stream_max_tickers:
-            allowed = sorted(us_universe)[: settings.tiingo_stream_max_tickers]
+            allowed = sorted(us_universe, key=lambda ticker: (ticker not in paper_tickers, ticker))[: settings.tiingo_stream_max_tickers]
             us_universe = {ticker: us_universe[ticker] for ticker in allowed}
 
         tickers = sorted(us_universe)
@@ -289,6 +302,7 @@ async def _run_equity_subscription(
     logger.info("tiingo_equity_stream_connecting ticker_count=%s", len(tickers))
     buffer: dict[str, LiveQuote] = {}
     started_at = datetime.now(timezone.utc)
+    flush_deadline = time.monotonic() + settings.tiingo_stream_flush_seconds
 
     async with connect(
         settings.tiingo_equity_stream_url,
@@ -305,15 +319,21 @@ async def _run_equity_subscription(
             try:
                 raw = await asyncio.wait_for(
                     websocket.recv(),
-                    timeout=settings.tiingo_stream_flush_seconds,
+                    timeout=max(flush_deadline - time.monotonic(), 0.001),
                 )
             except TimeoutError:
-                await _flush_quotes(session_factory, universe, buffer)
-                buffer.clear()
+                pass
             else:
                 quote = parse_iex_reference_message(raw)
                 if quote is not None and quote.ticker in universe:
-                    buffer[quote.ticker] = quote
+                    prior = buffer.get(quote.ticker)
+                    if prior is None or quote.as_of >= prior.as_of:
+                        buffer[quote.ticker] = quote
+
+            if time.monotonic() >= flush_deadline:
+                await _flush_quotes(session_factory, universe, buffer)
+                buffer.clear()
+                flush_deadline = time.monotonic() + settings.tiingo_stream_flush_seconds
 
             if (
                 datetime.now(timezone.utc) - started_at
@@ -331,6 +351,7 @@ async def _run_fx_subscription(
 ) -> None:
     logger.info("tiingo_fx_stream_connecting pair_count=%s", len(pairs))
     buffer: dict[tuple[str, str], LiveFxRate] = {}
+    flush_deadline = time.monotonic() + settings.tiingo_stream_flush_seconds
 
     async with connect(
         settings.tiingo_fx_stream_url,
@@ -347,15 +368,21 @@ async def _run_fx_subscription(
             try:
                 raw = await asyncio.wait_for(
                     websocket.recv(),
-                    timeout=settings.tiingo_stream_flush_seconds,
+                    timeout=max(flush_deadline - time.monotonic(), 0.001),
                 )
             except TimeoutError:
-                await _flush_fx_rates(session_factory, buffer)
-                buffer.clear()
+                pass
             else:
                 rate = parse_fx_message(raw)
                 if rate is not None:
-                    buffer[(rate.base_currency, rate.quote_currency)] = rate
+                    pair = (rate.base_currency, rate.quote_currency)
+                    prior = buffer.get(pair)
+                    if prior is None or rate.as_of >= prior.as_of:
+                        buffer[pair] = rate
+            if time.monotonic() >= flush_deadline:
+                await _flush_fx_rates(session_factory, buffer)
+                buffer.clear()
+                flush_deadline = time.monotonic() + settings.tiingo_stream_flush_seconds
 
 
 async def _flush_quotes(
@@ -446,7 +473,8 @@ def _decimal(value: object) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
     except (InvalidOperation, ValueError):
         return None
 

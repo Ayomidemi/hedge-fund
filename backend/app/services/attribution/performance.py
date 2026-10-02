@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from types import SimpleNamespace
 from uuid import UUID
 
 from sqlalchemy import select
@@ -17,14 +18,22 @@ from app.api.schemas.attribution import (
 )
 from app.api.schemas.operating_core import InstrumentResponse
 from app.core.auth import AuthenticatedUser
-from app.models import CashLedgerEntry, Instrument, Position, Trade
+from app.models import CashLedgerEntry, Instrument, MarketPriceBar, Position, Trade
+from app.services.market_data.fx_convert import amount_in_base
 from app.services.portfolio.calculations import (
     PositionSnapshot,
     calculate_nav,
     money,
     percent,
 )
-from app.services.portfolio.operating_core import get_or_create_default_portfolio
+from app.services.portfolio.operating_core import (
+    CapitalValidationError,
+    _ensure_fx_rates,
+    _trade_fees_in_base,
+    _trade_price_in_base,
+    cash_balance_in_base,
+    get_or_create_default_portfolio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +48,7 @@ class InstrumentAccumulator:
     instrument: Instrument
     remaining_quantity: Decimal = Decimal("0")
     remaining_cost: Decimal = Decimal("0")
+    remaining_entry_fees: Decimal = Decimal("0")
     gross_buys: Decimal = Decimal("0")
     gross_sells: Decimal = Decimal("0")
     gross_realized_pnl: Decimal = Decimal("0")
@@ -68,21 +78,74 @@ async def build_attribution_report(
     period_start: date | None = None,
     period_end: date | None = None,
 ) -> AttributionReportResponse:
+    if period_start is not None and period_end is not None and period_start >= period_end:
+        raise CapitalValidationError("The reporting period must end after it starts.")
     portfolio = await get_or_create_default_portfolio(session, user)
     cash_entries = await _list_cash_entries(
         session,
         portfolio.id,
-        period_start=period_start,
         period_end=period_end,
     )
     positions = await _list_positions(session, portfolio.id)
-    trades = await _list_trades(
+    all_trades = await _list_trades(
         session,
         portfolio.id,
-        period_end=period_end,
     )
+    trades = [
+        trade for trade in all_trades
+        if period_end is None or trade.trade_date.date() < period_end
+    ]
 
-    cash_balance = money(sum((entry.amount for entry in cash_entries), Decimal("0")))
+    fx_rates = await _ensure_fx_rates(
+        session, portfolio=portfolio, instruments=[trade.instrument for trade in trades]
+    )
+    cash_balance = await cash_balance_in_base(session, portfolio, cash_entries)
+    normalized_cash = []
+    for entry in cash_entries:
+        if entry.entry_date > date.today():
+            continue
+        if entry.currency != portfolio.base_currency:
+            raise CapitalValidationError(
+                "Historical performance of foreign-currency cash requires booked FX flows; current FX cannot reconstruct past returns."
+            )
+        amount = amount_in_base(entry.amount, entry.currency, portfolio.base_currency, fx_rates)
+        if amount is None:
+            raise CapitalValidationError(f"Cannot convert {entry.currency} cash for attribution.")
+        normalized_cash.append(SimpleNamespace(
+            entry_date=entry.entry_date, entry_type=entry.entry_type, amount=amount
+        ))
+    opening_positions = {}
+    opening_nav = Decimal("0")
+    accumulators, realized_events, warnings = _accumulate_trade_attribution(
+        trades, period_start=period_start, portfolio=portfolio, fx_rates=fx_rates
+    )
+    if period_start is not None or period_end is not None:
+        tracked_ids = {trade.instrument_id for trade in all_trades if trade.status == FILLED_STATUS}
+        if any(position.quantity > 0 and position.instrument_id not in tracked_ids for position in positions):
+            raise CapitalValidationError(
+                "Historical attribution requires trade history for every imported position."
+            )
+    if period_end is not None and period_end <= date.today():
+        positions = await _historical_positions(session, accumulators, period_end, portfolio)
+    if period_start is not None:
+        opening_accumulators, _, _ = _accumulate_trade_attribution(
+            [trade for trade in trades if trade.trade_date.date() < period_start],
+            portfolio=portfolio, fx_rates=fx_rates,
+        )
+        opening_positions = {
+            position.instrument_id: position
+            for position in await _historical_positions(
+                session, opening_accumulators, period_start, portfolio
+            )
+        }
+        opening_nav = money(
+            sum((entry.amount for entry in normalized_cash if entry.entry_date < period_start), Decimal("0"))
+            + sum((position.market_value for position in opening_positions.values()), Decimal("0"))
+        )
+    period_cash = [
+        entry for entry in normalized_cash
+        if period_start is None or entry.entry_date >= period_start
+    ]
     invested_value = money(
         sum(
             (
@@ -107,10 +170,6 @@ async def build_attribution_report(
         ],
     )
 
-    accumulators, realized_events, warnings = _accumulate_trade_attribution(
-        trades,
-        period_start=period_start,
-    )
     for position in positions:
         accumulators.setdefault(
             position.instrument_id,
@@ -120,7 +179,10 @@ async def build_attribution_report(
     position_by_instrument_id = {
         position.instrument_id: position for position in positions
     }
-    rows = _build_rows(accumulators, position_by_instrument_id, nav)
+    rows = _build_rows(
+        accumulators, position_by_instrument_id, nav,
+        opening_positions=opening_positions,
+    )
     asset_buckets = _build_buckets(rows, nav, key="asset_class")
     sector_buckets = _build_buckets(rows, nav, key="sector")
 
@@ -130,7 +192,7 @@ async def build_attribution_report(
     )
     unrealized_pnl = money(sum((row.unrealized_pnl for row in rows), Decimal("0")))
     net_pnl = money(gross_realized_pnl + unrealized_pnl - total_fees)
-    external_entries = [_external_cash_entry(entry) for entry in cash_entries]
+    external_entries = [_external_cash_entry(entry) for entry in period_cash]
     net_external_flow = money(sum(external_entries, Decimal("0")))
     total_deposits = money(
         sum((amount for amount in external_entries if amount > 0), Decimal("0"))
@@ -138,8 +200,11 @@ async def build_attribution_report(
     total_withdrawals = money(
         abs(sum((amount for amount in external_entries if amount < 0), Decimal("0")))
     )
-    capital_base = max(total_deposits, portfolio.initial_capital, Decimal("1"))
-    portfolio_pnl_from_nav = money(nav - net_external_flow)
+    capital_base = max(
+        opening_nav + total_deposits if period_start is not None else total_deposits,
+        Decimal("1"),
+    )
+    portfolio_pnl_from_nav = money(nav - opening_nav - net_external_flow)
     reconciliation_gap = money(net_pnl - portfolio_pnl_from_nav)
     trade_count = sum(row.trade_count for row in rows)
     closed_trade_count = sum(row.closed_trade_count for row in rows)
@@ -238,6 +303,8 @@ def _accumulate_trade_attribution(
     trades: list[Trade],
     *,
     period_start: date | None = None,
+    portfolio=None,
+    fx_rates: dict | None = None,
 ) -> tuple[
     dict[UUID, InstrumentAccumulator],
     list[AttributionRealizedEventResponse],
@@ -260,18 +327,21 @@ def _accumulate_trade_attribution(
             trade.instrument_id,
             InstrumentAccumulator(instrument=trade.instrument),
         )
-        price = trade.executed_price
+        portfolio = portfolio or SimpleNamespace(base_currency="USD")
+        price = _trade_price_in_base(trade, trade.instrument, portfolio, fx_rates or {})
+        fees = _trade_fees_in_base(trade, trade.instrument, portfolio, fx_rates or {})
         quantity = trade.quantity
         notional = money(quantity * price)
         if in_period:
             accumulator.trade_count += 1
-            accumulator.fees = money(accumulator.fees + trade.fees)
+            accumulator.fees = money(accumulator.fees + fees)
 
         if trade.side == "buy":
             if in_period:
                 accumulator.gross_buys = money(accumulator.gross_buys + notional)
             accumulator.remaining_cost += quantity * price
             accumulator.remaining_quantity += quantity
+            accumulator.remaining_entry_fees += fees
             continue
 
         if in_period:
@@ -290,8 +360,13 @@ def _accumulate_trade_attribution(
                 f"{trade.instrument.ticker} sell exceeds the tracked long quantity."
             )
 
+        allocated_entry_fees = money(
+            accumulator.remaining_entry_fees * attributable_quantity / accumulator.remaining_quantity
+        )
         gross_realized = money(attributable_quantity * (price - average_cost))
-        net_realized = money(gross_realized - trade.fees)
+        exit_fees = money(fees + allocated_entry_fees)
+        net_realized = money(gross_realized - exit_fees)
+        accumulator.remaining_entry_fees -= allocated_entry_fees
         accumulator.remaining_cost -= average_cost * attributable_quantity
         accumulator.remaining_quantity -= attributable_quantity
         if accumulator.remaining_quantity == 0:
@@ -302,15 +377,15 @@ def _accumulate_trade_attribution(
                 accumulator.gross_realized_pnl + gross_realized
             )
             accumulator.closed_trade_count += 1
-            if gross_realized > 0:
+            if net_realized > 0:
                 accumulator.winning_trade_count += 1
                 accumulator.realized_profit = money(
-                    accumulator.realized_profit + gross_realized
+                    accumulator.realized_profit + net_realized
                 )
-            elif gross_realized < 0:
+            elif net_realized < 0:
                 accumulator.losing_trade_count += 1
                 accumulator.realized_loss = money(
-                    accumulator.realized_loss + abs(gross_realized)
+                    accumulator.realized_loss + abs(net_realized)
                 )
 
             realized_events.append(
@@ -322,7 +397,7 @@ def _accumulate_trade_attribution(
                     exit_price=price,
                     average_cost=_quantize_price(average_cost),
                     gross_realized_pnl=gross_realized,
-                    fees=trade.fees,
+                    fees=exit_fees,
                     net_realized_pnl=net_realized,
                     return_pct=percent(price - average_cost, average_cost),
                 )
@@ -335,6 +410,8 @@ def _build_rows(
     accumulators: dict[UUID, InstrumentAccumulator],
     position_by_instrument_id: dict[UUID, Position],
     nav: Decimal,
+    *,
+    opening_positions: dict | None = None,
 ) -> list[AttributionRowResponse]:
     rows: list[AttributionRowResponse] = []
 
@@ -356,6 +433,9 @@ def _build_rows(
             if position is not None and position.quantity > 0
             else Decimal("0")
         )
+        opening_position = (opening_positions or {}).get(instrument_id)
+        if opening_position is not None:
+            unrealized_pnl -= opening_position.unrealized_pnl
         net_pnl = money(
             accumulator.gross_realized_pnl + unrealized_pnl - accumulator.fees
         )
@@ -472,6 +552,47 @@ async def _list_positions(session: AsyncSession, portfolio_id: UUID) -> list[Pos
     return list(result)
 
 
+async def _historical_positions(
+    session: AsyncSession,
+    accumulators: dict[UUID, InstrumentAccumulator],
+    cutoff: date,
+    portfolio,
+) -> list:
+    """Reconstruct inventory and mark it before the exclusive date boundary."""
+    positions = []
+    for instrument_id, accumulator in accumulators.items():
+        if accumulator.remaining_quantity <= 0:
+            continue
+        bar = await session.scalar(
+            select(MarketPriceBar)
+            .where(
+                MarketPriceBar.instrument_id == instrument_id,
+                MarketPriceBar.bar_date < cutoff,
+                MarketPriceBar.bar_date >= cutoff - timedelta(days=7),
+            )
+            .order_by(MarketPriceBar.bar_date.desc(), MarketPriceBar.created_at.desc())
+            .limit(1)
+        )
+        if bar is None or bar.close_price <= 0:
+            raise CapitalValidationError(
+                f"Missing historical close for {accumulator.instrument.ticker} before {cutoff}."
+            )
+        if bar.currency != portfolio.base_currency:
+            raise CapitalValidationError(
+                "Historical foreign-currency attribution requires historical FX marks."
+            )
+        market_value = money(accumulator.remaining_quantity * bar.close_price)
+        positions.append(SimpleNamespace(
+            instrument_id=instrument_id,
+            instrument=accumulator.instrument,
+            quantity=accumulator.remaining_quantity,
+            average_cost=accumulator.remaining_cost / accumulator.remaining_quantity,
+            market_value=market_value,
+            unrealized_pnl=money(market_value - accumulator.remaining_cost),
+        ))
+    return positions
+
+
 async def _list_trades(
     session: AsyncSession,
     portfolio_id: UUID,
@@ -483,6 +604,7 @@ async def _list_trades(
         select(Trade)
         .options(selectinload(Trade.instrument))
         .where(Trade.portfolio_id == portfolio_id)
+        .where(Trade.trade_date <= datetime.now(timezone.utc))
     )
     if period_start is not None:
         query = query.where(
@@ -562,11 +684,12 @@ def _build_notes(
     notes = [
         "Attribution uses filled trade journal entries, current position marks, and cash-ledger external flows.",
         "Gross realized P&L is separated from transaction costs; net P&L deducts all recorded trade fees.",
-        "Unrealized P&L uses the latest position mark currently stored in the operating book.",
+        "Execution P&L and fees are reported in the portfolio base currency; new fills retain their booked FX conversion.",
+        "Hit rate and profit factor include allocated entry fees and exit fees.",
     ]
     if period_scoped:
         notes.append(
-            "This report filters cash and trades to the selected period; open-position marks still use the latest stored valuation."
+            "Period P&L subtracts opening NAV and external flows; unrealized P&L is the change since the opening historical mark. Completed periods use historical closing prices."
         )
     if trade_count == 0:
         notes.append(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import type { RadarWatchlistChart } from "@/lib/api";
 
 const priceFormat = new Intl.NumberFormat("en-US", {
@@ -29,11 +29,10 @@ const CHART_HEIGHT = 280;
 const CHART_PAD = { top: 24, right: 0, bottom: 24, left: 0 };
 
 export function TickerPriceChart({ chart, metric }: TickerPriceChartProps) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-
-  useEffect(() => {
-    setActiveIndex(null);
-  }, [chart, metric]);
+  const [hover, setHover] = useState<{
+    chart: RadarWatchlistChart | null; metric: "price" | "volume"; index: number;
+  } | null>(null);
+  const activeIndex = hover?.chart === chart && hover?.metric === metric ? hover.index : null;
 
   const { points, path, stroke, width, height } = useMemo(() => {
     if (!chart) {
@@ -47,6 +46,7 @@ export function TickerPriceChart({ chart, metric }: TickerPriceChartProps) {
     }
 
     const raw = chart.points
+      .filter((point) => metric === "price" ? point.price !== null && point.price !== "" : point.volume !== null)
       .map((point) => ({
         label: point.date || (point.at ? new Date(point.at).toLocaleTimeString() : ""),
         value: Number(metric === "price" ? point.price : point.volume),
@@ -108,7 +108,7 @@ export function TickerPriceChart({ chart, metric }: TickerPriceChartProps) {
         nearest = index;
       }
     }
-    setActiveIndex(nearest);
+    setHover({ chart, metric, index: nearest });
   }
 
   if (points.length < 2) {
@@ -121,7 +121,7 @@ export function TickerPriceChart({ chart, metric }: TickerPriceChartProps) {
 
   return (
     <div>
-      <div className="relative" onMouseLeave={() => setActiveIndex(null)}>
+      <div className="relative" onMouseLeave={() => setHover(null)}>
         <svg
           viewBox={`0 0 ${width} ${height}`}
           className="h-72 w-full cursor-crosshair rounded-lg bg-zinc-50 dark:bg-zinc-900"

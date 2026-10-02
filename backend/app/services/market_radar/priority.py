@@ -89,7 +89,9 @@ def assign_priority(
     priority, reasons = _classify(candidate, dimensions, context)
     candidate.radar_priority = priority
     candidate.priority_reasons = reasons
-    candidate.should_auto_promote = is_auto_promotable(candidate)
+    # Priority describes a radar signal. Only the paper engine can authorize a
+    # queue entry after validating an actual quote, sizing, and available cash.
+    candidate.should_auto_promote = False
     _write_priority_evidence(candidate)
     return candidate
 

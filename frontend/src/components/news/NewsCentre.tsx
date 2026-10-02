@@ -43,7 +43,8 @@ export function NewsCentre({
   initialJurisdiction,
   unavailable,
 }: NewsCentreProps) {
-  const [overview, setOverview] = useState(initialOverview);
+  const [overviewOverride, setOverview] = useState<NewsOverview | null>(null);
+  const overview = overviewOverride ?? initialOverview;
   const [market, setMarket] = useState<TickerMarket>(
     initialOverview?.ticker?.endsWith(".NG") ? "NG" : "US",
   );
@@ -59,12 +60,6 @@ export function NewsCentre({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-
-  useEffect(() => {
-    if (overview === null && initialOverview) {
-      setOverview(initialOverview);
-    }
-  }, [initialOverview, overview]);
 
   const reload = useCallback(async (next?: {
     ticker?: string | null;

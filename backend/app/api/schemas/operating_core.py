@@ -24,7 +24,7 @@ class InstrumentCreate(BaseModel):
 
 class CashMovementCreate(BaseModel):
     entry_date: date = Field(default_factory=date.today)
-    amount: Decimal
+    amount: Decimal = Field(max_digits=16, decimal_places=2)
     currency: str = Field(default="USD", min_length=3, max_length=3)
     platform: str = Field(min_length=1, max_length=64)
     description: str | None = None
@@ -88,9 +88,9 @@ class CashLedgerEntryCreate(CashDepositCreate):
 class ManualTradeCreate(BaseModel):
     instrument: InstrumentCreate
     side: str = Field(pattern="^(buy|sell)$")
-    quantity: Decimal = Field(gt=0)
-    price: Decimal = Field(gt=0)
-    fees: Decimal = Field(default=Decimal("0"), ge=0)
+    quantity: Decimal = Field(gt=0, max_digits=24, decimal_places=8)
+    price: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
+    fees: Decimal = Field(default=Decimal("0"), ge=0, max_digits=18, decimal_places=4)
     trade_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     rationale: str | None = None
     risk_notes: str | None = None

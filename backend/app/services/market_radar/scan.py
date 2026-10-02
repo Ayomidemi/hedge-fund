@@ -35,12 +35,9 @@ from app.models import (
     InstrumentQuote,
     MarketPriceBar,
     Opportunity,
-    Portfolio,
     RadarRun,
     RadarSnapshot,
 )
-from app.api.schemas.operating_core import InstrumentCreate
-from app.core.auth import AuthenticatedUser
 from app.services.administration.system_log import record_system_log
 from app.services.market_data.ingestion import persist_quotes
 from app.services.market_data.quote_provider import LiveQuote, fetch_quotes
@@ -58,12 +55,6 @@ from app.services.market_radar.catalog import (
 from app.services.market_radar.providers import fetch_ngn_discovery, fetch_us_movers
 from app.services.market_radar.priority import (
     assign_priorities,
-    build_evidence_package,
-    next_action_for,
-    queue_priority_for,
-    research_question_for,
-    select_promotions,
-    thesis_for,
 )
 from app.services.market_radar.scoring import (
     RadarCandidate,
@@ -71,8 +62,6 @@ from app.services.market_radar.scoring import (
     score_candidate,
 )
 from app.services.market_radar.watchlist import load_always_watched
-from app.services.opportunity_queue.queue import resolve_strategy_pod_for_opportunity
-from app.services.portfolio.operating_core import upsert_instrument
 
 logger = logging.getLogger(__name__)
 
@@ -235,29 +224,14 @@ async def run_radar_scan(
                     )
                 )
             flagged = [item for item in working if is_flagged(item)]
-            promotions = select_promotions(
-                [item for item in flagged if not item.carried_forward]
-            )
-            held_back = len(flagged) - len(promotions)
-            if promotions:
-                if triggered_by_user_id:
-                    promotion_owner_ids = [triggered_by_user_id]
-                else:
-                    promotion_owner_ids = await _portfolio_owner_ids(session)
-                promoted = await promote_flagged_candidates(
-                    session,
-                    promotions,
-                    owner_ids=promotion_owner_ids,
-                )
             notes.append(
-                "Flagged "
-                f"{len(flagged)} working-set names "
+                f"Flagged {len(flagged)} working-set names "
                 f"(P0={_count_priority(flagged, 'P0')}, "
                 f"P1={_count_priority(flagged, 'P1')}, "
                 f"P2={_count_priority(flagged, 'P2')}, "
                 f"P3={_count_priority(flagged, 'P3')}); "
-                f"auto-promoted {promoted} P0/P1; "
-                f"held {held_back} off the Opportunity Queue."
+                "the automated paper fund checks execution eligibility and capital "
+                "before adding orders to its queue."
             )
             await _annotate_queue_tape_moves(session, list(candidates.values()))
         else:
@@ -338,19 +312,23 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
         if existing is None:
             target[item.ticker] = item
             continue
-        if item.price is not None:
+        # A discovery list's receipt time does not supersede a verified quote.
+        replace_tape = not existing.evidence.get("quote_as_of") or bool(
+            item.evidence.get("quote_as_of")
+        )
+        if replace_tape and item.price is not None:
             existing.price = item.price
-        if item.change_pct is not None:
+        if replace_tape and item.change_pct is not None:
             existing.change_pct = item.change_pct
-        if item.volume is not None:
+        if replace_tape and item.volume is not None:
             existing.volume = item.volume
         if item.avg_volume is not None:
             existing.avg_volume = item.avg_volume
         if item.sector and not existing.sector:
             existing.sector = item.sector
-        if item.source and existing.source in {"seed", "book", ""}:
+        if replace_tape and item.source:
             existing.source = item.source
-        if item.source_as_of and (
+        if replace_tape and item.source_as_of and (
             existing.source_as_of is None or item.source_as_of > existing.source_as_of
         ):
             existing.source_as_of = item.source_as_of
@@ -454,15 +432,26 @@ def _quote_targets(
         if jurisdiction == JURISDICTION_NG
         else RADAR_US_QUOTE_REFRESH_LIMIT
     )
+    now = datetime.now(timezone.utc)
+
+    def needs_verified_quote(item: RadarCandidate) -> bool:
+        timestamp = item.evidence.get("quote_as_of")
+        verified_at = _parse_iso_datetime(str(timestamp)) if timestamp else None
+        if verified_at is None:
+            return True
+        age = (now - _aware_utc(verified_at)).total_seconds()
+        return age < 0 or age > 120
+
     missing = [
         item
         for item in candidates
-        if item.price is None
+        if needs_verified_quote(item)
         and (
             item.always_watched
             or item.on_watchlist
             or item.pinned_prior
             or item.is_catalog_member
+            or item.source in RADAR_VENDOR_QUOTE_SOURCES
         )
     ]
     missing.sort(
@@ -470,6 +459,7 @@ def _quote_targets(
             not item.on_watchlist,
             not item.always_watched,
             not item.pinned_prior,
+            -abs(item.change_pct or Decimal("0")),
             _evidence_int(item, "liquidity_rank") or 9999,
             item.ticker,
         )
@@ -1056,104 +1046,12 @@ async def promote_flagged_candidates(
     owner_ids: list[str] | None = None,
     limit: int | None = None,
 ) -> int:
-    if owner_ids is None:
-        owner_ids = [owner_user_id] if owner_user_id else await _portfolio_owner_ids(session)
-    if not owner_ids:
-        return 0
+    """Legacy compatibility: research discoveries never create executable orders.
 
-    selected = (
-        select_promotions(flagged)
-        if limit is None
-        else select_promotions(flagged, p1_limit=limit)
-    )
-    if not selected:
-        return 0
-
-    promoted = 0
-    now = datetime.now(timezone.utc)
-
-    for owner in owner_ids:
-        open_tickers = {
-            ticker.upper()
-            for ticker in await session.scalars(
-                select(Instrument.ticker)
-                .join(Opportunity, Opportunity.instrument_id == Instrument.id)
-                .where(Opportunity.owner_user_id == owner)
-                .where(Opportunity.closed_at.is_(None))
-            )
-        }
-        for candidate in selected:
-            variants = {
-                candidate.ticker,
-                candidate.ticker.removesuffix(".NG"),
-                f"{candidate.ticker.removesuffix('.NG')}.NG",
-            }
-            if open_tickers & variants:
-                continue
-            instrument = await session.scalar(
-                select(Instrument).where(Instrument.ticker == candidate.ticker)
-            )
-            if instrument is None:
-                instrument = await upsert_instrument(
-                    session,
-                    InstrumentCreate(
-                        ticker=candidate.ticker,
-                        name=candidate.name[:255],
-                        asset_class=_asset_class(candidate.asset_class),
-                        exchange=candidate.exchange,
-                        currency=candidate.currency,
-                        sector=candidate.sector,
-                        industry=candidate.industry,
-                    ),
-                )
-            evidence = build_evidence_package(candidate, as_of=now)
-            strategy_pod = await resolve_strategy_pod_for_opportunity(
-                session,
-                AuthenticatedUser(id=owner, email=None),
-                instrument=instrument,
-                discovery_evidence=evidence,
-                source="radar",
-            )
-            session.add(
-                Opportunity(
-                    owner_user_id=owner,
-                    instrument_id=instrument.id,
-                    strategy_pod_id=strategy_pod.id if strategy_pod is not None else None,
-                    discovered_at=now,
-                    status="discovered",
-                    priority=queue_priority_for(candidate.radar_priority),
-                    thesis=thesis_for(candidate),
-                    research_question=research_question_for(candidate),
-                    next_action=next_action_for(candidate),
-                    notes=_promotion_notes(candidate),
-                    discovery_evidence=evidence,
-                    status_history=[
-                        {
-                            "status": "discovered",
-                            "at": now.isoformat(),
-                            "note": "Created by market radar.",
-                            "event": "radar_promotion",
-                            "radar_priority": candidate.radar_priority,
-                            "anomaly_score": str(candidate.anomaly_score),
-                            "priority_score": str(candidate.priority_score),
-                            "strategy_pod": strategy_pod.code if strategy_pod else None,
-                        }
-                    ],
-                )
-            )
-            open_tickers.add(candidate.ticker)
-            promoted += 1
-    return promoted
-
-
-def _promotion_notes(candidate: RadarCandidate) -> str:
-    reasons = "; ".join(candidate.priority_reasons) or "n/a"
-    related = ", ".join(candidate.related_tickers[:5]) or "none"
-    return (
-        f"source=market_radar; radar_priority={candidate.radar_priority}; "
-        f"anomaly_score={candidate.anomaly_score}; priority_score={candidate.priority_score}; "
-        f"reasons={reasons}; related={related}"
-    )
+    The paper fund consumes completed radar snapshots and atomically creates
+    sized orders only after its execution, cash, and exposure gates pass.
+    """
+    return 0
 
 
 def _count_priority(candidates: list[RadarCandidate], priority: str) -> int:
@@ -1164,10 +1062,6 @@ def _asset_class(value: str | None) -> str:
     if value in {"equity", "etf", "bond", "commodity", "cash_equivalent", "other"}:
         return value
     return "equity"
-
-
-async def _portfolio_owner_ids(session: AsyncSession) -> list[str]:
-    return list(await session.scalars(select(Portfolio.owner_user_id).distinct()))
 
 
 async def _persist_vendor_tapes(
@@ -1182,22 +1076,9 @@ async def _persist_vendor_tapes(
     Instruments are created only for names that printed a live price this scan,
     not for the whole catalog.
     """
+    # Discovery endpoints report observations with a retrieval time, not a
+    # verified trade time. Never persist them as executable live quotes.
     tapes = dict(fetched)
-    for candidate in candidates:
-        if candidate.ticker in tapes or candidate.price is None:
-            continue
-        if candidate.source not in RADAR_VENDOR_QUOTE_SOURCES:
-            continue
-        tapes[candidate.ticker] = LiveQuote(
-            ticker=candidate.ticker,
-            price=candidate.price,
-            source=candidate.source,
-            as_of=candidate.source_as_of or now,
-            previous_close=candidate.previous_close,
-            change_pct=candidate.change_pct,
-            volume=candidate.volume,
-            currency=candidate.currency,
-        )
     if not tapes:
         return 0
 

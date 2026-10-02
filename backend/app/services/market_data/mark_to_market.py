@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import CashLedgerEntry, InstrumentQuote, Portfolio, Position
+from app.models import InstrumentQuote, Portfolio, Position
 from app.services.market_data.fx_convert import mark_price_for_position
 from app.services.market_data.fx_refresh import load_fx_rates
 from app.services.portfolio.calculations import money
@@ -40,6 +40,11 @@ class MarkResult:
 
 
 async def mark_open_positions(session: AsyncSession) -> MarkResult:
+    # Trade booking rebuilds inventory under the same portfolio lock. Marking
+    # must not race that rebuild or overwrite the new position with an old lot.
+    await session.scalars(select(Portfolio).where(Portfolio.id.in_(
+        select(Position.portfolio_id).where(Position.quantity > 0, Position.closed_at.is_(None))
+    )).order_by(Portfolio.id).with_for_update())
     positions = list(
         await session.scalars(
             select(Position)
@@ -118,15 +123,7 @@ async def _portfolio_snapshots(
 
     portfolio_ids = list(portfolios)
 
-    cash_rows = await session.execute(
-        select(
-            CashLedgerEntry.portfolio_id,
-            func.coalesce(func.sum(CashLedgerEntry.amount), 0),
-        )
-        .where(CashLedgerEntry.portfolio_id.in_(portfolio_ids))
-        .group_by(CashLedgerEntry.portfolio_id)
-    )
-    cash_by_portfolio = {row[0]: money(Decimal(str(row[1]))) for row in cash_rows}
+    from app.services.portfolio.operating_core import cash_balance_in_base
 
     invested_rows = await session.execute(
         select(
@@ -143,7 +140,7 @@ async def _portfolio_snapshots(
     snapshots: list[MarkedPortfolio] = []
     for portfolio_id, invested_value, position_count in invested_rows:
         portfolio = portfolios[portfolio_id]
-        cash_balance = cash_by_portfolio.get(portfolio_id, Decimal("0.00"))
+        cash_balance = await cash_balance_in_base(session, portfolio)
         invested = money(Decimal(str(invested_value)))
         snapshots.append(
             MarkedPortfolio(

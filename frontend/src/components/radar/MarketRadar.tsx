@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { WatchlistButton } from "@/components/radar/WatchlistButton";
 import { toast } from "@/components/ui/ToastProvider";
@@ -72,20 +72,10 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
     focusLists.desk.length > 0 ||
     focusLists.lurch.length > 0;
 
-  useEffect(() => {
-    if (focusLists[focusTab].length > 0) return;
-    if (focusLists.promote.length > 0) {
-      setFocusTab("promote");
-      return;
-    }
-    if (focusLists.desk.length > 0) {
-      setFocusTab("desk");
-      return;
-    }
-    if (focusLists.lurch.length > 0) setFocusTab("lurch");
-  }, [focusLists, focusTab]);
-
-  const activeFocus = focusLists[focusTab];
+  const activeTab = focusLists[focusTab].length > 0
+    ? focusTab
+    : (["promote", "desk", "lurch"] as const).find((tab) => focusLists[tab].length > 0) ?? focusTab;
+  const activeFocus = focusLists[activeTab];
 
   async function reload(nextJurisdiction = jurisdiction) {
     const data = await getMarketRadarOverview(nextJurisdiction);
@@ -200,12 +190,6 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
               vendors.
             </p>
           ) : null}
-          {run?.promoted_count ? (
-            <p className="mt-1 text-xs text-zinc-500">
-              Auto-promoted {run.promoted_count} P0/P1 name
-              {run.promoted_count === 1 ? "" : "s"} to the Opportunity Queue.
-            </p>
-          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2">
@@ -238,7 +222,7 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
             <div>
               <h3 className="text-sm font-semibold">Focus</h3>
-              <p className="mt-0.5 text-xs text-zinc-500">{focusHint(focusTab)}</p>
+              <p className="mt-0.5 text-xs text-zinc-500">{focusHint(activeTab)}</p>
             </div>
             <div className="flex flex-wrap gap-1">
               {(
@@ -267,7 +251,7 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
                     type="button"
                     onClick={() => setFocusTab(tab.key)}
                     className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                      focusTab === tab.key
+                      activeTab === tab.key
                         ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                         : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
                     }`}
@@ -282,7 +266,7 @@ export function MarketRadar({ initialOverview, unavailable }: MarketRadarProps) 
             {activeFocus.length ? (
               activeFocus.map((name) => (
                 <NameRow
-                  key={`${focusTab}-${name.ticker}`}
+                  key={`${activeTab}-${name.ticker}`}
                   name={name}
                   busy={busyTickers.has(name.ticker)}
                   onWatchToggle={handleWatchToggle}
@@ -445,10 +429,10 @@ function NameRow({
 
 function focusHint(tab: FocusTab) {
   if (tab === "promote") {
-    return "Highest-priority movers that auto-enter (or should enter) the Opportunity Queue.";
+    return "Priority signals for automatic screening. Only orders that pass execution and capital checks enter the Opportunity Queue.";
   }
   if (tab === "desk") {
-    return "Names you already hold or watch that moved enough to notice, but not enough for auto-queue.";
+    return "Signals in names you already hold or watch, for context and risk monitoring.";
   }
   return "Names that lurched versus the previous radar print — not versus yesterday.";
 }

@@ -53,7 +53,6 @@ export function InvestInstrumentDetail({
       return;
     }
     let cancelled = false;
-    setResearchLoading(true);
     void getInvestInstrumentResearch(instrument.ticker)
       .then((data) => {
         if (!cancelled) {
@@ -118,7 +117,7 @@ export function InvestInstrumentDetail({
         { idempotencyKey: orderKey.current },
       );
       orderKey.current = null;
-      toast.success(`${side} order filled for ${instrument.ticker} - ${order.status}`);
+      toast.success(`${side} order for ${instrument.ticker}: ${order.status}`);
       router.push(`/invest/portfolio?placed=${order.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Order failed.");

@@ -160,6 +160,93 @@ export function getHealth(options?: ApiRequestOptions) {
   return fetchApi<HealthResponse>("/api/health", options);
 }
 
+export type PaperFundRun = {
+  id: string;
+  status: "running" | "paused" | "liquidating" | "completed" | "halted";
+  starting_cash: string;
+  cash_balance: string;
+  reserved_cash: string;
+  available_cash: string;
+  equity: string;
+  realized_pnl: string;
+  unrealized_pnl: string;
+  total_pnl: string;
+  return_pct: string;
+  max_drawdown_pct: string;
+  fees_paid: string;
+  started_at: string;
+  ends_at: string;
+  last_cycle_at: string | null;
+  completed_at: string | null;
+  halt_reason: string | null;
+};
+
+export type PaperFundOrder = {
+  id: string;
+  ticker: string;
+  name: string;
+  status: "pending" | "open" | "closed" | "cancelled" | "expired";
+  quantity: number;
+  limit_price: string;
+  stop_price: string;
+  target_price: string;
+  entry_price: string | null;
+  exit_price: string | null;
+  mark_price: string | null;
+  realized_pnl: string;
+  fees_paid: string;
+  created_at: string;
+  expires_at: string;
+  opened_at: string | null;
+  closed_at: string | null;
+  exit_reason: string | null;
+  thesis: string;
+};
+
+export type PaperFundOverview = {
+  generated_at: string;
+  run: PaperFundRun | null;
+  orders: PaperFundOrder[];
+  equity_history: Array<{
+    recorded_at: string;
+    equity: string;
+    cash_balance: string;
+    realized_pnl: string;
+    unrealized_pnl: string;
+    drawdown_pct: string;
+  }>;
+  blockers: string[];
+  policy: {
+    max_position_pct: number;
+    risk_per_trade_pct: number;
+    max_positions: number;
+    cash_reserve_pct: number;
+    max_drawdown_pct: number;
+    stop_loss_pct: number;
+    take_profit_pct: number;
+    slippage_bps: number;
+    fee_bps: number;
+    quote_max_age_seconds: number;
+  };
+  simulation_notice: string;
+};
+
+export function getPaperFund(options?: ApiRequestOptions) {
+  return fetchApi<PaperFundOverview>("/api/paper-fund", options);
+}
+
+export function startPaperFund(options?: ApiRequestOptions) {
+  return postApi<PaperFundOverview, { starting_cash: string; duration_days: number }>(
+    "/api/paper-fund/start", { starting_cash: "10000", duration_days: 7 }, options,
+  );
+}
+
+export function setPaperFundPaused(paused: boolean, options?: ApiRequestOptions) {
+  return postApi<PaperFundOverview, Record<string, never>>(
+    `/api/paper-fund/${paused ? "pause" : "resume"}`, {}, options,
+  );
+}
+
 export function getApiInfo() {
   return fetchApi<{ message: string }>("/");
 }

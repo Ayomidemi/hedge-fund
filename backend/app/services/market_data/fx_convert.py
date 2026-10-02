@@ -101,7 +101,7 @@ def convert_to_usd(
 
     if normalized == "NGN":
         rate_row = fx_rates.get(("USD", "NGN"))
-        if rate_row is None or rate_row.rate <= 0:
+        if rate_row is None or not rate_row.rate.is_finite() or rate_row.rate <= 0:
             return None
         return amount / rate_row.rate
 
@@ -126,15 +126,14 @@ def mark_price_for_position(
     quote_currency = quote.currency.strip().upper()
     instrument_currency = instrument.currency.strip().upper()
 
-    # Nigerian quote → always convert to portfolio base, even if the
-    # instrument row has the wrong currency label (common data issue).
+    if not quote.price.is_finite() or quote.price <= 0:
+        return None
+    # Preserve support for legacy NGX instruments incorrectly labelled USD,
+    # using the quote's explicit native currency rather than its label.
     if quote_currency == "NGN" and (
         is_nigerian_instrument(instrument) or instrument_currency == "NGN"
     ):
-        return convert_to_usd(quote.price, "NGN", fx_rates)
-
-    if quote_currency == base:
-        return quote.price
+        return amount_in_base(quote.price, "NGN", base, fx_rates)
 
     if quote_currency != instrument_currency:
         logger.warning(
@@ -148,4 +147,4 @@ def mark_price_for_position(
         )
         return None
 
-    return quote.price
+    return amount_in_base(quote.price, quote_currency, base, fx_rates)

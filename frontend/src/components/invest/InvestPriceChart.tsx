@@ -11,31 +11,28 @@ const RANGES = ["1m", "3m", "1y"] as const;
 
 export function InvestPriceChart({ ticker }: { ticker: string }) {
   const [range, setRange] = useState<(typeof RANGES)[number]>("3m");
-  const [chart, setChart] = useState<RadarWatchlistChart | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const requestKey = `${ticker}:${range}`;
+  const [result, setResult] = useState<{
+    key: string; chart: RadarWatchlistChart | null; error: string | null;
+  } | null>(null);
+  const loading = result?.key !== requestKey;
+  const chart = loading ? null : result.chart;
+  const error = loading ? null : result.error;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     void getInvestInstrumentChart(ticker, range)
       .then((data) => {
-        if (!cancelled) setChart(data);
+        if (!cancelled) setResult({ key: requestKey, chart: data, error: null });
       })
       .catch((reason: unknown) => {
-        if (!cancelled) {
-          setChart(null);
-          setError(reason instanceof Error ? reason.message : "Chart could not load.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setResult({
+          key: requestKey, chart: null,
+          error: reason instanceof Error ? reason.message : "Chart could not load.",
+        });
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [ticker, range]);
+    return () => { cancelled = true; };
+  }, [ticker, range, requestKey]);
 
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">

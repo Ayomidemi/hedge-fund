@@ -37,7 +37,7 @@ const pageTitles: Record<string, string> = {
   "Research Lab": "Research Lab",
   "Strategy Pods": "Investment Pod Control",
   "Risk Centre": "Central Risk Office",
-  "Opportunity Queue": "Research Pipeline",
+  "Opportunity Queue": "Automatic Execution",
   "Trade Journal": "Execution Journal",
   Reports: "Reports",
   Administration: "Fund Administration",

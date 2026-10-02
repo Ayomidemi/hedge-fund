@@ -29,6 +29,7 @@ export default async function InvestInstrumentPage({
 
   return (
     <InvestInstrumentDetail
+      key={instrument.ticker}
       instrument={instrument}
       initialTab={query.order === "1" ? "order" : "overview"}
     />

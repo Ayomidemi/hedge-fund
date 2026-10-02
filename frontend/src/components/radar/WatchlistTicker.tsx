@@ -38,22 +38,31 @@ export function WatchlistTicker({
   unavailable,
 }: WatchlistTickerProps) {
   const [detail, setDetail] = useState(initialDetail);
-  const [chart, setChart] = useState(initialChart);
   const [range, setRange] = useState<(typeof RANGES)[number]>("1d");
   const [metric, setMetric] = useState<"price" | "volume">("price");
-  const [loadingChart, setLoadingChart] = useState(false);
+  const requestKey = `${ticker}:${range}`;
+  const [chartResult, setChartResult] = useState<{
+    key: string; chart: RadarWatchlistChart | null;
+  } | null>(null);
+  const cachedInitial = range === "1d" && initialChart?.range === "1d" ? initialChart : null;
+  const loadingChart = !cachedInitial && chartResult?.key !== requestKey;
+  const chart = cachedInitial ?? (chartResult?.key === requestKey ? chartResult.chart : null);
 
   useEffect(() => {
-    if (range === "1d" && initialChart?.range === "1d") {
-      setChart(initialChart);
-      return;
-    }
-    setLoadingChart(true);
+    if (cachedInitial) return;
+    let cancelled = false;
     void getRadarWatchlistChart(ticker, range)
-      .then(setChart)
-      .catch(() => toast.error("Chart could not load."))
-      .finally(() => setLoadingChart(false));
-  }, [initialChart, range, ticker]);
+      .then((data) => {
+        if (!cancelled) setChartResult({ key: requestKey, chart: data });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setChartResult({ key: requestKey, chart: null });
+          toast.error("Chart could not load.");
+        }
+      });
+    return () => { cancelled = true; };
+  }, [cachedInitial, range, ticker, requestKey]);
 
   async function handleRemove() {
     try {
@@ -209,6 +218,7 @@ function WatchlistChart({
   const values = useMemo(() => {
     if (!chart) return [];
     return chart.points
+      .filter((point) => metric === "price" ? point.price !== null && point.price !== "" : point.volume !== null)
       .map((point) => ({
         label: point.date || (point.at ? new Date(point.at).toLocaleTimeString() : ""),
         value: Number(metric === "price" ? point.price : point.volume),

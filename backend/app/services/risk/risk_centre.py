@@ -41,10 +41,10 @@ from app.models import (
     StressTestResult,
 )
 from app.services.administration.system_log import record_system_log
-from app.services.market_data.fx_convert import convert_to_usd
+from app.services.market_data.fx_convert import amount_in_base, convert_to_usd
 from app.services.market_data.fx_refresh import load_fx_rates, refresh_fx_rates
 from app.services.portfolio.calculations import money, percent
-from app.services.portfolio.operating_core import get_or_create_default_portfolio
+from app.services.portfolio.operating_core import cash_balance_in_base, get_or_create_default_portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -673,6 +673,20 @@ def evaluate_risk_policy(
         state, market_stats, asset_class_exposure, sector_exposure
     )
     checks = []
+    if state.nav <= 0 or state.cash_balance < 0:
+        checks.append(
+            RiskMeasurementResponse(
+                key="capital_solvency",
+                name="Solvent, cash-funded portfolio",
+                measurement_type="portfolio",
+                value=state.nav,
+                unit="currency",
+                threshold_value=Decimal("0"),
+                passed=False,
+                severity="halt",
+                message="NAV must be positive and cash cannot be negative.",
+            )
+        )
     for limit in DEFAULT_POLICY_LIMITS:
         value = metrics.get(limit["key"])
         threshold = Decimal(limit["threshold_value"])
@@ -874,8 +888,6 @@ async def _load_current_state(
         sum((position.market_value for position in risk_positions), Decimal("0"))
     )
     nav = money(cash_balance + invested_value)
-    if nav <= 0:
-        nav = Decimal("1.00")
     state = PortfolioRiskState(
         portfolio_id=portfolio.id,
         portfolio_name=portfolio.name,
@@ -892,12 +904,7 @@ async def _load_current_state(
 
 
 async def _cash_balance(session: AsyncSession, portfolio: Portfolio) -> Decimal:
-    value = await session.scalar(
-        select(func.sum(CashLedgerEntry.amount)).where(
-            CashLedgerEntry.portfolio_id == portfolio.id
-        )
-    )
-    return money(value or Decimal("0"))
+    return await cash_balance_in_base(session, portfolio)
 
 
 async def _load_price_histories(
@@ -1404,9 +1411,16 @@ def _apply_trade_to_state(
     messages: list[str] = []
     trade_price = _pre_trade_price_in_base(state, payload, fx_rates, messages)
     trade_value = money(payload.quantity * trade_price)
-    cash_impact = -(trade_value + payload.fees)
+    converted_fees = amount_in_base(
+        payload.fees, payload.instrument.currency, state.base_currency, fx_rates
+    )
+    if converted_fees is None:
+        messages.append("Trade fees could not be converted to the portfolio base currency.")
+        converted_fees = Decimal("0")
+    fees = money(converted_fees)
+    cash_impact = -(trade_value + fees)
     if payload.side == "sell":
-        cash_impact = trade_value - payload.fees
+        cash_impact = trade_value - fees
 
     positions = list(state.positions)
     existing_index = next(
@@ -1447,7 +1461,16 @@ def _apply_trade_to_state(
         if quantity < 0:
             messages.append("Sell quantity exceeds the current position.")
             quantity = Decimal("0")
-        market_value = money(quantity * trade_price)
+        mark_price = (
+            existing.market_value / existing.quantity
+            if existing.quantity > 0 else trade_price
+        )
+        average_cost = existing.average_cost
+        if payload.side == "buy" and quantity > 0:
+            average_cost = (
+                existing.quantity * existing.average_cost + payload.quantity * trade_price
+            ) / quantity
+        market_value = money(quantity * mark_price)
         positions[existing_index] = RiskPosition(
             instrument_id=existing.instrument_id,
             ticker=existing.ticker,
@@ -1455,19 +1478,21 @@ def _apply_trade_to_state(
             asset_class=existing.asset_class,
             sector=existing.sector,
             quantity=quantity,
-            average_cost=existing.average_cost,
+            average_cost=average_cost,
             market_value=market_value,
-            unrealized_pnl=money((trade_price - existing.average_cost) * quantity),
+            unrealized_pnl=money((mark_price - average_cost) * quantity),
         )
 
     positions = [position for position in positions if position.quantity > 0]
     cash_balance = money(state.cash_balance + cash_impact)
+    if cash_balance < 0:
+        messages.append("Trade exceeds available cash including fees.")
     invested_value = money(
         sum((position.market_value for position in positions), Decimal("0"))
     )
     nav = money(cash_balance + invested_value)
     if nav <= 0:
-        nav = Decimal("1.00")
+        messages.append("Portfolio has non-positive NAV after this trade.")
     return (
         PortfolioRiskState(
             portfolio_id=state.portfolio_id,
@@ -1495,6 +1520,8 @@ def _pre_trade_decision(
         "exceeds the current position" in message
         or "no existing long position" in message
         or "could not be converted" in message
+        or "exceeds available cash" in message
+        or "non-positive NAV" in message
         for message in messages
     ):
         return "reject"

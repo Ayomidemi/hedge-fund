@@ -5,12 +5,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.core.config import settings
 from app.services.market_data.tiingo_stream import run_tiingo_streams
 from app.services.realtime.connection_manager import connection_manager
 from app.services.realtime.redis_bus import subscribe_events
+from app.services.paper_fund.engine import PaperFundError
+from app.services.portfolio.operating_core import CapitalValidationError, TradeRiskApprovalError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,6 +71,13 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+
+
+@app.exception_handler(CapitalValidationError)
+@app.exception_handler(TradeRiskApprovalError)
+@app.exception_handler(PaperFundError)
+async def capital_validation_error(_request, exc):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.get("/")

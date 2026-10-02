@@ -69,7 +69,7 @@ export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                 {dashboard.portfolio.name}
               </p>
-              <h2 className="mt-1 text-2xl font-semibold tracking-tight">Fund overview</h2>
+              <h2 className="mt-1 text-2xl font-semibold tracking-tight">Capital ledger overview</h2>
               {dashboard.prices_as_of ? (
                 <p className="mt-1 text-xs text-zinc-500">
                   Prices as of{" "}

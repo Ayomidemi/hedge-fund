@@ -10,14 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 
+from app.services.paper_fund.calendar import session_bounds
+
 JURISDICTION_US = "US"
 JURISDICTION_NG = "NG"
 ALL_JURISDICTIONS = (JURISDICTION_US, JURISDICTION_NG)
 
-# Approximate regular sessions in UTC. No holiday calendar; wide enough to
-# cover DST for US and WAT (no DST) for NGX.
-_US_OPEN = time(13, 30)
-_US_CLOSE = time(21, 0)
+# NGX regular session in UTC. US sessions use the verified NYSE calendar.
 _NG_OPEN = time(9, 0)  # 10:00 WAT
 _NG_CLOSE = time(13, 30)  # 14:30 WAT
 
@@ -78,15 +77,14 @@ def session_for(
             open_label="NGX open",
             closed_label="NGX closed",
         )
-    return _session(
-        JURISDICTION_US,
-        now,
-        _US_OPEN,
-        _US_CLOSE,
-        post_close_hours,
-        open_label="US open",
-        closed_label="US closed",
-    )
+    bounds = session_bounds(now)
+    if bounds is None:
+        return JurisdictionSession(JURISDICTION_US, False, False, "US closed")
+    opened, closed = bounds
+    is_open = opened <= now < closed
+    post_close = closed <= now < closed + timedelta(hours=post_close_hours)
+    return JurisdictionSession(JURISDICTION_US, is_open, post_close,
+                               "US open" if is_open else "US post-close" if post_close else "US closed")
 
 
 def sessions_now(

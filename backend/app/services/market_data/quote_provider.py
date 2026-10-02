@@ -93,7 +93,6 @@ async def _fetch_fmp_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
     """FMP /stable/quote is per-symbol on the free tier, so this is used as
     a fallback for symbols the Tiingo batch missed - not for full batches."""
     base_url = settings.fmp_base_url.removesuffix("/api")
-    now = datetime.now(timezone.utc)
     quotes: dict[str, LiveQuote] = {}
     async with httpx.AsyncClient(
         base_url=base_url,
@@ -118,13 +117,14 @@ async def _fetch_fmp_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
             if not isinstance(item, dict):
                 continue
             price = _decimal(item.get("price"))
-            if price is None or price <= 0:
+            as_of = _epoch_datetime(item.get("timestamp"))
+            if price is None or price <= 0 or as_of is None:
                 continue
             quotes[ticker.upper()] = LiveQuote(
                 ticker=ticker.upper(),
                 price=price,
                 source="fmp",
-                as_of=_epoch_datetime(item.get("timestamp")) or now,
+                as_of=as_of,
                 previous_close=_decimal(item.get("previousClose")),
                 change_pct=_decimal(item.get("changePercentage")),
                 day_open=_decimal(item.get("open")),
@@ -162,13 +162,14 @@ async def _fetch_polygon_prev_close(tickers: list[str]) -> dict[str, LiveQuote]:
             if not isinstance(item, dict):
                 continue
             price = _decimal(item.get("c"))
-            if price is None or price <= 0:
+            as_of = _epoch_datetime(item.get("t"))
+            if price is None or price <= 0 or as_of is None:
                 continue
             quotes[ticker.upper()] = LiveQuote(
                 ticker=ticker.upper(),
                 price=price,
                 source="polygon",
-                as_of=_epoch_datetime(item.get("t")) or datetime.now(timezone.utc),
+                as_of=as_of,
                 day_open=_decimal(item.get("o")),
                 day_high=_decimal(item.get("h")),
                 day_low=_decimal(item.get("l")),
@@ -198,7 +199,6 @@ async def _fetch_tiingo_iex(tickers: list[str]) -> dict[str, LiveQuote]:
     if not isinstance(payload, list):
         return {}
 
-    now = datetime.now(timezone.utc)
     quotes: dict[str, LiveQuote] = {}
     for item in payload:
         if not isinstance(item, dict):
@@ -209,9 +209,9 @@ async def _fetch_tiingo_iex(tickers: list[str]) -> dict[str, LiveQuote]:
             or _decimal(item.get("tngoLast"))
             or _decimal(item.get("mid"))
         )
-        if not ticker or price is None or price <= 0:
+        as_of = _iso_datetime(item.get("lastSaleTimestamp"))
+        if not ticker or price is None or price <= 0 or as_of is None:
             continue
-        as_of = _iso_datetime(item.get("lastSaleTimestamp")) or now
         quotes[ticker] = LiveQuote(
             ticker=ticker,
             price=price,
@@ -329,7 +329,8 @@ def _decimal(value: object) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
     except (InvalidOperation, ValueError):
         return None
 
@@ -339,7 +340,7 @@ def _int(value: object) -> int | None:
         return None
     try:
         return int(float(str(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

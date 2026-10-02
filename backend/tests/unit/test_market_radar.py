@@ -576,9 +576,10 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
         fetch_us.assert_not_awaited()
         fetch_ng.assert_awaited_once()
         fetch_quotes.assert_awaited_once()
-        self.assertEqual(fetch_quotes.await_args.args[0], ["GTCO.NG"])
+        # Discovery prices need a separately verified quote before use.
+        self.assertEqual(fetch_quotes.await_args.args[0], ["GTCO.NG", "DANGCEM.NG"])
         self.assertEqual(run.jurisdictions_scanned, ["NG"])
-        self.assertEqual(run.vendor_calls, 3)
+        self.assertEqual(run.vendor_calls, 4)
 
     async def test_force_scan_calls_vendors_when_closed(self) -> None:
         closed = {
@@ -686,11 +687,10 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
         ):
                 run = await run_radar_scan(session, triggered_by_user_id="trigger-user")
 
-        promote.assert_awaited_once()
-        self.assertEqual(promote.await_args.kwargs["owner_ids"], ["trigger-user"])
-        self.assertEqual(run.promotion_owner_ids, ["trigger-user"])
-        promoted = promote.await_args.args[1]
-        self.assertTrue(all(item.radar_priority in {"P0", "P1"} for item in promoted))
+        # Radar observations are not executable orders; only the paper engine queues them.
+        promote.assert_not_awaited()
+        self.assertEqual(run.promotion_owner_ids, [])
+        self.assertEqual(run.promoted_count, 0)
 
 
 class RadarPriorityTests(TestCase):
@@ -990,5 +990,3 @@ class MoveScopeTests(TestCase):
         self.assertEqual(context.flagged_count, 0)
         self.assertEqual(context.status, "quiet")
         self.assertEqual(names[0].evidence["move_scope"], "none")
-
-

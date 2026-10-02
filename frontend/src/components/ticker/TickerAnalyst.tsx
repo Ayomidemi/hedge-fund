@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useEffectEvent, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TickerSelector } from "@/components/ticker/TickerSelector";
@@ -9,7 +9,6 @@ import { Modal } from "@/components/ui/Modal";
 import { toast } from "@/components/ui/ToastProvider";
 import {
   addRadarWatchlistItem,
-  createOpportunity,
   createTickerAIDraft,
   createTickerAnalysis,
   createTickerTriage,
@@ -19,9 +18,6 @@ import {
   getTickerMLReport,
   getTickerPrefill,
   runResearchDataPipeline,
-  type OpportunityCreateInput,
-  type OpportunityPriority,
-  type OpportunityStatus,
   type TickerAIDraft,
   type TickerAIDraftInput,
   type TickerAnalysis,
@@ -38,7 +34,6 @@ import {
   normalizeTickerInput,
   type TickerMarket,
 } from "@/lib/ticker-prefill-form";
-import { newIdempotencyKey } from "@/lib/idempotency";
 import { tickerHubPath } from "@/lib/ticker-hub-path";
 
 type TickerAnalystProps = {
@@ -131,11 +126,6 @@ export function TickerAnalyst({
   );
 
   useEffect(() => {
-    if (!initialTicker || !startInWorkflow) return;
-    void startNewAnalysis(initialTicker);
-  }, [initialTicker, startInWorkflow]);
-
-  useEffect(() => {
     if (!initialTicker || initialDesk || startInWorkflow) return;
     let cancelled = false;
     void (async () => {
@@ -206,6 +196,17 @@ export function TickerAnalyst({
       setPendingAction(null);
     }
   }
+
+  const startInitialAnalysis = useEffectEvent(startNewAnalysis);
+  useEffect(() => {
+    let cancelled = false;
+    if (initialTicker && startInWorkflow) {
+      void Promise.resolve().then(() => {
+        if (!cancelled) void startInitialAnalysis(initialTicker);
+      });
+    }
+    return () => { cancelled = true; };
+  }, [initialTicker, startInWorkflow]);
 
   function returnToHistory() {
     setMode("history");
@@ -608,7 +609,7 @@ function QueueStatusNotice({
   if (opportunity) {
     return (
       <p className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-        In the Opportunity Queue as{" "}
+        Research record: {" "}
         {queueStatusLabels[opportunity.status] ?? opportunity.status}.{" "}
         <Link href="/opportunity-queue" className="underline-offset-4 hover:underline">
           Open queue
@@ -619,8 +620,7 @@ function QueueStatusNotice({
 
   return (
     <p className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-      Saved memo. It is not in the Opportunity Queue yet — add it from the queue
-      candidate list.{" "}
+      Saved research memo. Executable orders are selected and sized automatically by the paper fund.{" "}
       <Link href="/opportunity-queue" className="underline-offset-4 hover:underline">
         Open queue
       </Link>
@@ -1214,7 +1214,7 @@ function QuickTriageResult({
       ) : (
         <div className="mt-5 grid gap-3 text-sm text-zinc-500 sm:grid-cols-3">
           <p>Radar: {desk?.radar?.scan_state ? formatLabel(desk.radar.scan_state) : "No recent flag"}</p>
-          <p>Queue: {desk?.opportunity ? formatLabel(desk.opportunity.status) : "Not queued"}</p>
+          <p>Research status: {desk?.opportunity ? formatLabel(desk.opportunity.status) : "No research record"}</p>
           <p>Position: {desk?.position ? "Owned" : "No live position"}</p>
         </div>
       )}
@@ -1404,17 +1404,8 @@ function TriageActions({
   onNewAnalysis: (prefill: TickerPrefill) => void;
   onOpenTicker?: (ticker: string) => void;
 }) {
-  const [pending, setPending] = useState<"watchlist" | "opportunity" | null>(null);
-  const opportunityKey = useRef<string | null>(null);
-  const queued = Boolean(desk?.opportunity);
+  const [pending, setPending] = useState<"watchlist" | null>(null);
   const watched = Boolean(desk?.on_watchlist);
-  const capitalBlocked = verdict.capital_blocked;
-  const planConfirmed = Boolean(verdict.entry_plan?.confirmed);
-  const queueBlocked =
-    verdict.triage_decision === "hard_pass" ||
-    verdict.triage_decision === "setup_invalid" ||
-    verdict.triage_decision === "reject" ||
-    !planConfirmed;
 
   async function refreshDesk() {
     if (!onDeskChange) return;
@@ -1442,33 +1433,6 @@ function TriageActions({
     }
   }
 
-  async function handleOpportunity() {
-    if (queueBlocked) {
-      toast.error(
-        planConfirmed
-          ? "Hard pass / chase setups cannot move to the queue."
-          : "Confirm entry zone, invalidation, and max loss before queueing.",
-      );
-      return;
-    }
-    if (!opportunityKey.current) {
-      opportunityKey.current = newIdempotencyKey();
-    }
-    setPending("opportunity");
-    try {
-      await createOpportunity(buildOpportunityFromVerdict(verdict), {
-        idempotencyKey: opportunityKey.current,
-      });
-      opportunityKey.current = null;
-      await refreshDesk();
-      toast.success(`${verdict.ticker} moved into the opportunity queue.`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Opportunity could not be created.");
-    } finally {
-      setPending(null);
-    }
-  }
-
   return (
     <div className="mt-5 flex flex-wrap gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-900">
       <button
@@ -1486,31 +1450,9 @@ function TriageActions({
       >
         {watched ? "On Watchlist" : pending === "watchlist" ? "Saving..." : "Add Watchlist"}
       </button>
-      <button
-        type="button"
-        onClick={() => void handleOpportunity()}
-        disabled={queued || queueBlocked || pending !== null}
-        className={secondaryButtonClassName}
-        title={
-          !planConfirmed
-            ? "Confirm the entry/exit plan before moving to the queue."
-            : queueBlocked
-              ? "Hard pass and chase setups stay out of the queue."
-              : capitalBlocked
-                ? "You can queue for research, but size stays blocked until entry rules are clear."
-                : undefined
-        }
-      >
-        {queued
-          ? "In Queue"
-          : !planConfirmed
-            ? "Confirm plan first"
-            : queueBlocked
-              ? "Queue blocked"
-              : pending === "opportunity"
-                ? "Saving..."
-                : "Move to Queue"}
-      </button>
+      <Link href="/opportunity-queue" className={secondaryButtonClassName}>
+        View automatic orders
+      </Link>
       {onOpenTicker ? (
         <button
           type="button"
@@ -2641,81 +2583,6 @@ function prefillFromVerdict(verdict: TickerVerdict): TickerPrefill {
       triage_run_id: verdict.triage_run_id,
     },
   };
-}
-
-function buildOpportunityFromVerdict(verdict: TickerVerdict): OpportunityCreateInput {
-  const plan = verdict.entry_plan;
-  return {
-    instrument: opportunityInstrument(verdict.instrument),
-    strategy_pod_code: "fundamental_equity",
-    status: opportunityStatus(verdict.triage_decision),
-    priority: opportunityPriority(verdict.research_priority),
-    thesis: `${verdict.action_label}: ${verdict.why_now}`,
-    research_question: `Should ${verdict.ticker} move from quick triage into a funded candidate?`,
-    next_action: verdict.next_action,
-    time_horizon: "6-18 months",
-    conviction_score: verdict.conviction_score,
-    target_weight: verdict.capital_blocked ? "0" : verdict.recommended_weight,
-    discovery_evidence: plan
-      ? {
-          source: "quick_triage",
-          triage_run_id: verdict.triage_run_id,
-          entry_plan: {
-            status: plan.status,
-            confirmed: Boolean(plan.confirmed),
-            entry_zone: plan.entry_zone,
-            invalidation: plan.invalidation,
-            max_loss_pct_nav: plan.max_loss_pct_nav,
-            time_stop_sessions: plan.time_stop_sessions,
-            thesis_breaker: plan.thesis_breaker ?? null,
-            chase_note: plan.chase_note,
-          },
-        }
-      : { source: "quick_triage", triage_run_id: verdict.triage_run_id },
-    notes: [
-      `Quick Triage: ${formatLabel(verdict.triage_decision)}`,
-      `Capital: ${verdict.capital_score ?? "n/a"} · Timing: ${verdict.timing_score ?? "n/a"}`,
-      `Initial view: ${formatLabel(verdict.initial_view)}`,
-      plan?.entry_zone ? `Entry zone: ${plan.entry_zone}` : null,
-      plan?.invalidation ? `Invalidation: ${plan.invalidation}` : null,
-      plan?.max_loss_pct_nav ? `Max loss: ${plan.max_loss_pct_nav}% NAV` : null,
-      plan?.thesis_breaker ? `Thesis breaker: ${plan.thesis_breaker}` : null,
-      plan?.chase_note ?? null,
-      `Provider: ${verdict.provider}`,
-      `Data timestamp: ${formatDateTime(verdict.data_timestamp)}`,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  };
-}
-
-function opportunityInstrument(
-  instrument: TickerResolvedInstrument,
-): OpportunityCreateInput["instrument"] {
-  return {
-    ticker: instrument.ticker,
-    name: instrument.name,
-    asset_class: instrument.asset_class,
-    exchange: instrument.exchange ?? undefined,
-    currency: instrument.currency,
-    sector: instrument.sector ?? undefined,
-    industry: instrument.industry ?? undefined,
-  };
-}
-
-function opportunityStatus(decision: string): OpportunityStatus {
-  if (decision === "candidate" || decision === "research") return "research";
-  if (decision === "watch") return "parked";
-  if (decision === "hard_pass" || decision === "setup_invalid" || decision === "reject") {
-    return "screening";
-  }
-  return "screening";
-}
-
-function opportunityPriority(priority: string): OpportunityPriority {
-  if (priority === "high") return "high";
-  if (priority === "low") return "low";
-  return "medium";
 }
 
 function buildPayload(formData: FormData): TickerAnalysisInput {

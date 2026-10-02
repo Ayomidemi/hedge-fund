@@ -22,6 +22,7 @@ from app.models import (
     InvestMarketBoardItem,
     ModelRecommendation,
     Opportunity,
+    PaperOrder,
     Position,
     RetailPosition,
     RetailWatchlistItem,
@@ -46,6 +47,10 @@ async def build_price_universe(session: AsyncSession) -> dict[str, list[uuid.UUI
         .distinct()
     )
     instrument_ids.update(position_ids)
+
+    instrument_ids.update(await session.scalars(
+        select(PaperOrder.instrument_id).where(PaperOrder.status.in_(["pending", "open"])).distinct()
+    ))
 
     instrument_ids.update(
         await session.scalars(

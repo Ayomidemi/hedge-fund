@@ -29,17 +29,17 @@ export function NotebookPanel({ active, experiments }: NotebookPanelProps) {
 
   useEffect(() => {
     if (!active || notes !== null) return;
-    void loadNotes();
+    let cancelled = false;
+    void getResearchNotes().then((data) => {
+      if (!cancelled) setNotes(data);
+    }).catch(() => {
+      if (!cancelled) {
+        setNotes([]);
+        toast.error("Notebook entries could not be loaded.");
+      }
+    });
+    return () => { cancelled = true; };
   }, [active, notes]);
-
-  async function loadNotes() {
-    try {
-      setNotes(await getResearchNotes());
-    } catch {
-      setNotes([]);
-      toast.error("Notebook entries could not be loaded.");
-    }
-  }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
