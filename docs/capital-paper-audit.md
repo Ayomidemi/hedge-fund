@@ -1,5 +1,9 @@
 # Capital audit and $10,000 paper run
 
+Historical audit: the separate account described below has been replaced by
+[automatic execution within the Capital account](capital-automatic-trading.md).
+Manual mode now stops both automatic entries and exits.
+
 The capital dashboard, Market Radar and Opportunity Queue now share an isolated
 USD paper run. A run starts with exactly $10,000 and runs for seven calendar
 days. Existing portfolios, fills and cash ledgers are preserved. New default

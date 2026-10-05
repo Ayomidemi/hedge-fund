@@ -50,6 +50,13 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
     async def seed_signal(self):
         ticker = "TEST" + uuid4().hex[:10].upper()
         async with self.factory() as session:
+            from app.models import RiskLimit
+            portfolio = await get_or_create_default_portfolio(session, self.user)
+            # This fixture explicitly permits the original 10% sizing policy;
+            # default-account limits are tested separately below.
+            limit = await session.scalar(select(RiskLimit).where(RiskLimit.portfolio_id == portfolio.id,
+                RiskLimit.limit_type == "max_single_equity_position_pct"))
+            limit.threshold_value = D("10")
             instrument = Instrument(ticker=ticker, name="Paper test", currency="USD", asset_class="equity", sector="Technology")
             run = RadarRun(started_at=NOW, finished_at=NOW, status="completed")
             session.add_all([instrument, run])
@@ -109,6 +116,170 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
         async with self.factory() as session:
             count = await session.scalar(select(func.count(PaperOrder.id)).where(PaperOrder.run_id == a.run.id))
             self.assertEqual(count, 1)
+
+    async def test_automatic_fills_use_the_capital_ledger_and_journal(self):
+        from app.services.portfolio.operating_core import get_dashboard, get_trade_journal
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            initial = await start_run(session, self.owner, PaperStart(), now=NOW)
+            self.assertEqual(initial.capital.cash_balance, D("10000"))
+        await self.call_cycle()
+        at = NOW + timedelta(seconds=30)
+        await self.quote(instrument_id, "100", at)
+        filled = await self.call_cycle(at)
+        async with self.factory() as session:
+            dashboard = await get_dashboard(session, self.user)
+            self.assertEqual(dashboard.cash_balance, filled.run.cash_balance)
+            self.assertEqual(dashboard.nav, filled.run.equity)
+            self.assertEqual(dashboard.trade_count, 1)
+            self.assertEqual(dashboard.open_position_count, 1)
+            self.assertEqual(dashboard.positions[0].quantity, 9)
+            self.assertEqual(dashboard.recent_trades[0].broker_reference, "automatic_paper")
+            entry = next(entry for entry in dashboard.recent_cash_entries if entry.entry_type == "trade_buy")
+            self.assertEqual(entry.amount, D("-901.36"))
+        at += timedelta(seconds=30)
+        await self.quote(instrument_id, "107", at)
+        closed = await self.call_cycle(at)
+        async with self.factory() as session:
+            dashboard = await get_dashboard(session, self.user)
+            self.assertEqual(dashboard.cash_balance, closed.run.cash_balance)
+            self.assertEqual(dashboard.open_position_count, 0)
+            self.assertEqual(dashboard.trade_count, 2)
+            self.assertEqual(closed.run.total_pnl, closed.run.realized_pnl)
+            self.assertEqual(closed.run.unrealized_pnl, 0)
+
+    async def test_manual_mode_stops_exits_and_resumes_without_new_money(self):
+        from app.services.paper_fund.engine import set_trading_mode
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            initial = await start_run(session, self.owner, PaperStart(), now=NOW)
+        await self.call_cycle()
+        at = NOW + timedelta(seconds=30)
+        await self.quote(instrument_id, "100", at)
+        filled = await self.call_cycle(at)
+        async with self.factory() as session:
+            manual = await set_trading_mode(session, self.owner, "manual")
+            self.assertEqual(manual.trading_mode, "manual")
+        at += timedelta(seconds=30)
+        await self.quote(instrument_id, "95", at)
+        stopped = await self.call_cycle(at)
+        self.assertEqual(stopped.orders[0].status, "open")
+        self.assertEqual(stopped.run.cash_balance, filled.run.cash_balance)
+        self.assertEqual(stopped.capital.trade_count, 1)
+        async with self.factory() as session:
+            resumed = await set_trading_mode(session, self.owner, "automatic")
+            self.assertEqual(resumed.run.id, initial.run.id)
+            self.assertEqual(resumed.run.cash_balance, filled.run.cash_balance)
+        closed = await self.call_cycle(at)
+        self.assertEqual(closed.orders[0].status, "closed")
+        self.assertEqual(closed.capital.trade_count, 2)
+
+    async def test_enabling_automatic_uses_available_capital_not_a_new_ten_thousand(self):
+        from app.services.paper_fund.engine import set_trading_mode
+        async with self.factory() as session:
+            portfolio = await get_or_create_default_portfolio(session, self.user)
+            await create_cash_withdrawal(session, CashWithdrawalCreate(amount=D("7000"), currency="USD", platform="test"), self.user)
+        async with self.factory() as session:
+            initial = await start_run(session, self.owner, PaperStart(), now=NOW)
+            self.assertEqual(initial.run.starting_cash, D("3000"))
+            self.assertEqual(initial.run.cash_balance, D("3000"))
+            self.assertEqual(initial.capital.cash_balance, D("3000"))
+            await set_trading_mode(session, self.owner, "manual")
+            resumed = await set_trading_mode(session, self.owner, "automatic")
+            self.assertEqual(resumed.run.id, initial.run.id)
+            self.assertEqual(resumed.run.cash_balance, D("3000"))
+            count = await session.scalar(select(func.count()).select_from(CashLedgerEntry).where(CashLedgerEntry.portfolio_id == portfolio.id))
+            self.assertEqual(count, 2)
+
+    async def test_pending_automatic_orders_reserve_capital_against_withdrawals(self):
+        from app.services.paper_fund.engine import set_trading_mode
+        await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        queued = await self.call_cycle()
+        self.assertGreater(queued.run.reserved_cash, 0)
+        async with self.factory() as session:
+            with self.assertRaises(CapitalValidationError):
+                await create_cash_withdrawal(session, CashWithdrawalCreate(amount=D("9500"), currency="USD", platform="test"), self.user)
+            await session.rollback()
+            manual = await set_trading_mode(session, self.owner, "manual")
+            self.assertEqual(manual.orders[0].status, "cancelled")
+            self.assertEqual(manual.run.reserved_cash, 0)
+            await create_cash_withdrawal(session, CashWithdrawalCreate(amount=D("9500"), currency="USD", platform="test"), self.user)
+        async with self.factory() as session:
+            state = await overview(session, self.owner)
+            self.assertEqual(state.capital.cash_balance, D("500"))
+            self.assertEqual(state.run.cash_balance, D("500"))
+
+    async def test_automatic_sizing_respects_capitals_tighter_position_limit(self):
+        from app.models import RiskLimit
+        await self.seed_signal()
+        async with self.factory() as session:
+            portfolio = await get_or_create_default_portfolio(session, self.user)
+            limit = await session.scalar(select(RiskLimit).where(RiskLimit.portfolio_id == portfolio.id,
+                RiskLimit.limit_type == "max_single_equity_position_pct"))
+            limit.threshold_value = D("5")
+            await session.commit()
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        state = await self.call_cycle()
+        self.assertEqual(state.orders[0].quantity, 4)
+        self.assertEqual(state.policy["max_position_pct"], 5)
+        self.assertLessEqual(state.run.reserved_cash, D("500"))
+
+    async def test_legacy_run_attaches_fills_once_without_depositing_capital(self):
+        from tests.unit.test_paper_fund import make_order, make_quote, make_run
+        from app.services.paper_fund.engine import process_orders
+        instrument_id, _ = await self.seed_signal()
+        legacy = make_run(owner_user_id=self.owner, blockers=[])
+        order = make_order(run_id=legacy.id, instrument_id=instrument_id, thesis="Legacy automatic entry", evidence={})
+        process_orders(legacy, [order], {instrument_id: make_quote(order)}, NOW + timedelta(seconds=30))
+        async with self.factory() as session:
+            session.add(legacy)
+            await session.flush()
+            session.add(order)
+            await session.commit()
+        async with self.factory() as session:
+            attached = await start_run(session, self.owner, PaperStart(), now=NOW)
+            self.assertEqual(attached.run.id, legacy.id)
+            self.assertEqual(attached.capital.cash_balance, D("9098.64"))
+            self.assertEqual(attached.capital.trade_count, 1)
+            replay = await start_run(session, self.owner, PaperStart(), now=NOW)
+            self.assertEqual(replay.capital.cash_balance, D("9098.64"))
+            self.assertEqual(replay.capital.trade_count, 1)
+            count = await session.scalar(select(func.count()).select_from(CashLedgerEntry).where(
+                CashLedgerEntry.portfolio_id == attached.capital.portfolio.id, CashLedgerEntry.entry_type == "initial_capital"))
+            self.assertEqual(count, 1)
+
+    async def test_manual_partial_sale_cannot_leave_an_oversized_automatic_exit(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from app.api.schemas.operating_core import InstrumentCreate, ManualTradeCreate
+        from app.services.paper_fund.engine import set_trading_mode
+        from app.services.portfolio.operating_core import create_manual_trade
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        await self.call_cycle()
+        at = NOW + timedelta(seconds=30)
+        await self.quote(instrument_id, "100", at)
+        await self.call_cycle(at)
+        async with self.factory() as session:
+            manual = await set_trading_mode(session, self.owner, "manual")
+            instrument = await session.get(Instrument, instrument_id)
+            payload = ManualTradeCreate(instrument=InstrumentCreate(ticker=instrument.ticker, name=instrument.name,
+                asset_class="equity", currency="USD", sector="Technology"), side="sell", quantity=4,
+                price=102, fees=0, trade_date=at + timedelta(seconds=1))
+            with patch("app.services.portfolio.operating_core._ensure_trade_risk_approval",
+                       AsyncMock(return_value=SimpleNamespace(id=None, decision="approve"))):
+                await create_manual_trade(session, payload, self.user)
+            resumed = await set_trading_mode(session, self.owner, "automatic")
+            self.assertEqual(resumed.orders[0].status, "cancelled")
+            self.assertEqual(resumed.capital.positions[0].quantity, 5)
+        at += timedelta(seconds=30)
+        await self.quote(instrument_id, "90", at)
+        state = await self.call_cycle(at)
+        self.assertEqual(state.capital.positions[0].quantity, 5)
+        self.assertEqual(state.capital.trade_count, 2)
 
     async def test_order_expires_with_original_source_signal(self):
         instrument_id, radar_id = await self.seed_signal()
@@ -323,7 +494,8 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             hidden = await client.get(f"/api/paper-fund?run_id={run_id}")
             self.assertIsNone(hidden.json()["run"])
             missing = await client.post("/api/paper-fund/pause")
-            self.assertEqual(missing.status_code, 409)
+            self.assertEqual(missing.status_code, 200)
+            self.assertEqual(missing.json()["trading_mode"], "manual")
 
     async def test_concurrent_withdrawals_cannot_overdraw_capital_ledger(self):
         async with self.factory() as session:

@@ -241,7 +241,7 @@ async def get_or_create_default_portfolio(
         return await _seed_default_portfolio(session, user)
     except IntegrityError as exc:
         await session.rollback()
-        if "ix_portfolios_owner_user_id_unique" not in str(exc):
+        if not any(name in str(exc) for name in ("ix_portfolios_owner_user_id_unique", "ix_portfolios_owner_name")):
             raise
 
         portfolio = await _load_owned_portfolio(session, user)
@@ -468,7 +468,9 @@ async def _create_cash_entry(
         return CashLedgerEntryResponse.model_validate(existing)
     if amount < 0:
         cash_balance = await cash_balance_in_base(session, portfolio)
-        if cash_balance + amount < 0:
+        from app.services.paper_fund.capital import reserved_capital
+        reserved = await reserved_capital(session, portfolio.id)
+        if cash_balance + amount < reserved:
             raise CapitalValidationError("Cash movement exceeds the available cash balance.")
     entry = CashLedgerEntry(
         portfolio_id=portfolio.id,
@@ -661,6 +663,8 @@ async def create_manual_trade(
     portfolio = await lock_portfolio(
         session, await get_or_create_default_portfolio(session, user)
     )
+    if portfolio.trading_mode == "automatic":
+        raise CapitalValidationError("Switch Capital to Manual before recording a manual trade.")
     portfolio_id = portfolio.id
     idempotency_key = normalize_idempotency_key(payload.idempotency_key)
     replay = await _replay_trade(session, portfolio_id, idempotency_key)
@@ -722,6 +726,8 @@ async def create_manual_trade(
     session.add(CashLedgerEntry(portfolio_id=portfolio.id, **cash_values))
 
     await _rebuild_positions_from_filled_trades(session, portfolio)
+    from app.services.paper_fund.capital import release_manual_management
+    await release_manual_management(session, portfolio, instrument.id)
     from app.services.opportunity_queue.queue import sync_opportunities_for_instrument
 
     await sync_opportunities_for_instrument(

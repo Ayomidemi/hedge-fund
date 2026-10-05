@@ -13,8 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas.paper_fund import (
     PaperEquityResponse, PaperFundResponse, PaperOrderResponse, PaperRunResponse, PaperStart,
 )
-from app.db.locks import lock_idempotency_scope
-from app.models import Instrument, InstrumentQuote, PaperEquitySnapshot, PaperFundRun, PaperOrder, RadarRun, RadarSnapshot
+from app.core.auth import AuthenticatedUser
+from app.db.locks import lock_idempotency_scope, lock_portfolio
+from app.models import Instrument, InstrumentQuote, PaperEquitySnapshot, PaperFundRun, PaperOrder, Position, RadarRun, RadarSnapshot
+from app.services.portfolio.operating_core import get_or_create_default_portfolio, get_dashboard
+from app.services.paper_fund.capital import bind_book, book_fills, capital_policy, load_book
 from app.services.market_radar.execution import MAX_SIGNAL_AGE_SECONDS, execution_rejection, quote_rejection
 from app.services.paper_fund.calendar import market_blocker
 
@@ -28,7 +31,7 @@ POLICY = {
     "order_ttl_minutes": 30,
 }
 SIMULATION_NOTICE = (
-    "$10,000 USD paper fund; no live orders. Whole-share, long-only momentum strategy, "
+    "Capital trades currently use simulated execution; no live broker orders. Whole-share, long-only momentum strategy, "
     "not a validated profit forecast. Fills use later observed prices with 10 bps adverse slippage "
     "and 5 bps fees per side. Order-book depth, queue priority, partial fills, dividends and corporate "
     "actions are not simulated. Moves between observations can be missed. Stops can fill below their "
@@ -58,7 +61,7 @@ def reservation(order: PaperOrder, policy: dict) -> Decimal:
 
 
 def accounting(run: PaperFundRun, orders: list[PaperOrder]) -> dict:
-    opened = [o for o in orders if o.status == "open"]
+    opened = [o for o in orders if o.status == "open"] + getattr(run, "_external_holdings", [])
     invested = money(sum(((o.mark_price or o.entry_price) * o.quantity for o in opened), ZERO))
     unrealized = money(sum((((o.mark_price or o.entry_price) - o.entry_price) * o.quantity - o.entry_fee
                             for o in opened), ZERO))
@@ -79,7 +82,7 @@ def size_order(run: PaperFundRun, orders: list[PaperOrder], price: Decimal, sect
     policy = run.policy
     state = accounting(run, orders)
     equity = state["equity"]
-    active = [o for o in orders if o.status in {"open", "pending"}]
+    active = [o for o in orders if o.status in {"open", "pending"}] + getattr(run, "_external_holdings", [])
     limit = (price * (1 + Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
     stop = (limit * (1 - Decimal(str(policy["stop_loss_pct"])) / 100)).quantize(CENT, rounding=ROUND_FLOOR)
     target = (limit * (1 + Decimal(str(policy["take_profit_pct"])) / 100)).quantize(CENT, rounding=ROUND_CEILING)
@@ -109,7 +112,7 @@ def _cancel_pending(orders: list[PaperOrder], reason: str) -> None:
 
 
 def _update_drawdown(run: PaperFundRun, orders: list[PaperOrder]) -> Decimal:
-    equity = accounting(run, orders)["equity"]
+    equity = accounting(run, orders)["equity"] - getattr(run, "_net_flow_since_start", ZERO)
     run.high_water_equity = max(run.high_water_equity, equity)
     drawdown = max(ZERO, (1 - equity / run.high_water_equity) * 100)
     run.max_drawdown_pct = max(run.max_drawdown_pct, drawdown)
@@ -125,7 +128,8 @@ def _position_quote_rejection(order: PaperOrder, quote: InstrumentQuote | None, 
     return None
 
 
-def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, now: datetime) -> list[str]:
+def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, now: datetime,
+                   *, automatic_execution: bool = True) -> list[str]:
     """Pure state transition used by the locked service and deterministic tests."""
     now = utc(now)
     policy = run.policy
@@ -135,7 +139,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
     session_error = market_blocker(now)
     if session_error:
         blockers.append(session_error)
-    if now >= utc(run.ends_at) and run.status != "halted":
+    if automatic_execution and now >= utc(run.ends_at) and run.status != "halted":
         run.status = "liquidating"
     if run.status != "running":
         _cancel_pending(orders, f"Run {run.status}; entry cancelled.")
@@ -158,7 +162,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         run.status = "halted"
         _cancel_pending(orders, run.halt_reason)
     for order in orders:
-        if order.status != "open" or session_error:
+        if order.status != "open" or session_error or not automatic_execution:
             continue
         quote = quotes.get(order.instrument_id)
         if _position_quote_rejection(order, quote, now) or utc(quote.as_of) <= utc(order.entry_quote_at):
@@ -185,9 +189,9 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         order.exit_quote_at = quote.as_of
         order.exit_reason = reason
     # Any unreliable open mark stops new risk, but never disables exit processing.
-    uncertain_marks = any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
+    uncertain_marks = getattr(run, "_external_marks_unreliable", False) or any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
     for order in orders:
-        if order.status != "pending" or run.status != "running" or session_error or uncertain_marks:
+        if order.status != "pending" or run.status != "running" or session_error or uncertain_marks or not automatic_execution:
             continue
         quote = quotes.get(order.instrument_id)
         error = quote_rejection(quote, now)
@@ -208,7 +212,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         cost = price * order.quantity + fee(price * order.quantity, policy)
         other_reserved = state["reserved_cash"] - reservation(order, policy)
         reserve_floor = state["equity"] * Decimal(str(policy["cash_reserve_pct"])) / 100
-        sector_used = sum(((o.mark_price or o.limit_price) * o.quantity for o in orders
+        sector_used = sum(((o.mark_price or o.limit_price) * o.quantity for o in orders + getattr(run, "_external_holdings", [])
                            if o is not order and o.status in {"pending", "open"} and o.sector == order.sector), ZERO)
         stop_fill = (order.stop_price * (1 - Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
         planned_loss = (price - stop_fill) * order.quantity + fee(price * order.quantity, policy) + fee(stop_fill * order.quantity, policy)
@@ -257,24 +261,48 @@ async def _orders(session: AsyncSession, run: PaperFundRun) -> list[PaperOrder]:
                                       .order_by(PaperOrder.submitted_at).execution_options(populate_existing=True)))
 
 
-async def _snapshot(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, *, force=False) -> None:
+async def _snapshot(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, *, force=False, book=None) -> None:
     last = await session.scalar(select(PaperEquitySnapshot).where(PaperEquitySnapshot.run_id == run.id)
                                 .order_by(PaperEquitySnapshot.recorded_at.desc()).limit(1))
     if not force and last and now - utc(last.recorded_at) < timedelta(minutes=5):
         return
-    state = accounting(run, orders)
+    state = book.state if book else accounting(run, orders)
     session.add(PaperEquitySnapshot(
         run_id=run.id, recorded_at=now, equity=state["equity"], cash_balance=run.cash_balance,
         realized_pnl=state["realized_pnl"], unrealized_pnl=state["unrealized_pnl"],
-        drawdown_pct=max(ZERO, (1 - state["equity"] / run.high_water_equity) * 100),
+        drawdown_pct=max(ZERO, (1 - (state["equity"] - getattr(run, "_net_flow_since_start", ZERO)) / run.high_water_equity) * 100),
     ))
 
 
+async def _portfolio(session, owner, *, read=False):
+    portfolio = await get_or_create_default_portfolio(session, AuthenticatedUser(id=owner, email=None))
+    return await lock_portfolio(session, portfolio, read=read)
+
+
+async def attach_to_capital(session, portfolio, run, orders):
+    """Preserve an existing run and book its fills, without adding any capital."""
+    if run.portfolio_id is not None:
+        if run.portfolio_id != portfolio.id:
+            raise PaperFundError("Execution account does not match Capital.")
+        return
+    await book_fills(session, portfolio, orders)
+    book = await load_book(session, portfolio)
+    run.portfolio_id = portfolio.id
+    run.net_contributions_at_start = book.net_contributions
+    run.cash_balance = book.cash
+    portfolio.trading_mode = "automatic" if run.status in {"running", "liquidating", "halted"} else "manual"
+    await session.flush()
+
+
 async def start_run(session: AsyncSession, owner: str, payload: PaperStart, *, now: datetime | None = None,
-                    idempotency_key: str | None = None) -> PaperFundResponse:
+                    idempotency_key: str | None = None, resume: bool = False) -> PaperFundResponse:
     now = utc(now or datetime.now(timezone.utc))
-    # Serialize start retries and button double-clicks per owner, before any row exists.
+    # Seed only genuinely new accounts before taking transaction-scoped locks.
+    portfolio = await get_or_create_default_portfolio(session, AuthenticatedUser(id=owner, email=None))
     await lock_idempotency_scope(session, "paper-fund-start", owner)
+    portfolio = await lock_portfolio(session, portfolio)
+    if portfolio.base_currency != "USD":
+        raise PaperFundError("Automatic execution currently requires a USD Capital account.")
     if idempotency_key:
         prior = await session.scalar(select(PaperFundRun).where(
             PaperFundRun.owner_user_id == owner, PaperFundRun.start_key == idempotency_key))
@@ -283,58 +311,115 @@ async def start_run(session: AsyncSession, owner: str, payload: PaperStart, *, n
             return await overview(session, owner, now=now, run_id=prior.id)
     run = await _latest(session, owner, lock=True)
     if run is None or run.status == "completed":
-        run = PaperFundRun(owner_user_id=owner, start_key=idempotency_key, status="running", starting_cash=payload.starting_cash,
-                           cash_balance=payload.starting_cash, high_water_equity=payload.starting_cash,
-                           max_drawdown_pct=ZERO, started_at=now, ends_at=now + timedelta(days=payload.duration_days),
-                           policy=dict(POLICY), blockers=["Waiting for the automatic execution worker."],
-                           last_cycle_at=None, completed_at=None, halt_reason=None)
+        book = await load_book(session, portfolio)
+        if book.state["equity"] <= 0:
+            raise PaperFundError("Capital must have positive equity before enabling automatic trading.")
+        run = PaperFundRun(owner_user_id=owner, portfolio_id=portfolio.id,
+            net_contributions_at_start=book.net_contributions, start_key=idempotency_key,
+            status="running", starting_cash=book.state["equity"], cash_balance=book.cash,
+            high_water_equity=book.state["equity"], max_drawdown_pct=ZERO,
+            started_at=now, ends_at=now + timedelta(days=payload.duration_days),
+            policy=await capital_policy(session, portfolio.id, POLICY),
+            blockers=["Waiting for the automatic execution worker."], last_cycle_at=None,
+            completed_at=None, halt_reason=None)
         session.add(run)
+        portfolio.trading_mode = "automatic"
         await session.flush()
-        await _snapshot(session, run, [], now, force=True)
+        await _snapshot(session, run, [], now, force=True, book=book)
+    else:
+        orders = await _orders(session, run)
+        await attach_to_capital(session, portfolio, run, orders)
+        if resume:
+            if run.halt_reason:
+                raise PaperFundError("The risk halt requires review; switching modes cannot override it.")
+            run.status = "running" if now < utc(run.ends_at) else "liquidating"
+            portfolio.trading_mode = "automatic"
     await session.commit()
     return await overview(session, owner, now=now)
 
 
-async def control_run(session: AsyncSession, owner: str, action: str) -> PaperFundResponse:
+async def set_trading_mode(session, owner, mode):
+    if mode == "automatic":
+        return await start_run(session, owner, PaperStart(), resume=True)
+    if mode != "manual":
+        raise PaperFundError("Choose Manual or Automatic trading.")
+    portfolio = await _portfolio(session, owner)
     run = await _latest(session, owner, lock=True)
-    if run is None:
-        raise PaperFundError("Start the paper fund first.")
-    orders = await _orders(session, run)
-    if action == "pause":
+    portfolio.trading_mode = "manual"
+    if run is not None and run.status != "completed":
+        orders = await _orders(session, run)
+        if run.portfolio_id is None:
+            await attach_to_capital(session, portfolio, run, orders)
+            portfolio.trading_mode = "manual"
         if run.status == "running":
             run.status = "paused"
-            _cancel_pending(orders, "Entries paused; protective exits remain active.")
-    elif action == "resume":
-        if run.status != "paused" or run.halt_reason or datetime.now(timezone.utc) >= utc(run.ends_at):
-            raise PaperFundError("Only a paused fund within its trading period can resume; risk halts cannot be overridden.")
-        run.status = "running"
-    else:
-        raise PaperFundError("Unknown paper fund action.")
+        _cancel_pending(orders, "Manual mode; automatic entry cancelled.")
     await session.commit()
     return await overview(session, owner)
 
 
+async def control_run(session: AsyncSession, owner: str, action: str) -> PaperFundResponse:
+    # Compatibility for existing clients. Mode is always stored on Capital.
+    if action not in {"pause", "resume"}:
+        raise PaperFundError("Unknown trading control.")
+    return await set_trading_mode(session, owner, "manual" if action == "pause" else "automatic")
+
+
 async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = None) -> PaperFundResponse:
+    # All Capital mutations use this same lock before touching execution state.
+    portfolio = await _portfolio(session, owner)
     run = await _latest(session, owner, lock=True)
-    # Evaluate freshness after waiting for the previous cycle's lock.
     now = utc(now or datetime.now(timezone.utc))
     if run is None:
-        raise PaperFundError("Start the paper fund first.")
+        raise PaperFundError("Enable automatic trading first.")
+    if run.portfolio_id is None:
+        raise PaperFundError("Existing execution history must be attached to Capital before trading.")
     if run.status == "completed" or (run.last_cycle_at is not None and now < utc(run.last_cycle_at)):
         return await overview(session, owner, now=now)
     orders = await _orders(session, run)
+    run.policy = await capital_policy(session, portfolio.id, run.policy)
+    book = await load_book(session, portfolio)
+    bind_book(run, orders, book)
+    instrument_ids = {o.instrument_id for o in orders} | {p.instrument_id for p in book.positions}
     quotes = {q.instrument_id: q for q in await session.scalars(select(InstrumentQuote).where(
-        InstrumentQuote.instrument_id.in_([o.instrument_id for o in orders])).execution_options(populate_existing=True))} if orders else {}
+        InstrumentQuote.instrument_id.in_(instrument_ids)).execution_options(populate_existing=True))} if instrument_ids else {}
+    external_errors = []
+    for holding in run._external_holdings:
+        quote = quotes.get(holding.instrument_id)
+        error = quote_rejection(quote, now)
+        if error:
+            external_errors.append("An existing Capital holding lacks a fresh eligible quote; new automatic buys are blocked.")
+        else:
+            holding.mark_price = quote.price
+    run._external_marks_unreliable = bool(external_errors)
+    automatic = portfolio.trading_mode == "automatic"
+    if not automatic:
+        _cancel_pending(orders, "Manual mode; automatic entry cancelled.")
     before = [(o.id, o.status) for o in orders]
-    blockers = process_orders(run, orders, quotes, now)
-    if run.status == "running" and not market_blocker(now):
+    blockers = process_orders(run, orders, quotes, now, automatic_execution=automatic)
+    blockers.extend(external_errors)
+    if not automatic:
+        blockers.insert(0, "Manual mode: automatic buys and sells are stopped.")
+    await book_fills(session, portfolio, orders)
+    # The engine's validated marks update the shared position book as well.
+    for position in await session.scalars(select(Position).where(Position.portfolio_id == portfolio.id, Position.quantity > 0)):
+        quote = quotes.get(position.instrument_id)
+        if not market_blocker(now) and not quote_rejection(quote, now):
+            position.market_value = money(position.quantity * quote.price)
+            position.unrealized_pnl = money((quote.price - position.average_cost) * position.quantity)
+    await session.flush()
+    book = await load_book(session, portfolio)
+    bind_book(run, orders, book)
+    if automatic and run.status == "running" and not market_blocker(now) and not external_errors:
         stale_held = any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
         if not stale_held:
             await _queue_signals(session, run, orders, now, blockers)
+    if run.status == "completed":
+        portfolio.trading_mode = "manual"
     run.last_cycle_at = now
-    run.blockers = blockers[:30]
+    run.blockers = list(dict.fromkeys(blockers))[:30]
     await session.flush()
-    await _snapshot(session, run, orders, now,
+    await _snapshot(session, run, orders, now, book=book,
                     force=before != [(o.id, o.status) for o in orders] or run.status == "completed")
     await session.commit()
     return await overview(session, owner, now=now)
@@ -352,7 +437,7 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
         .where(RadarSnapshot.run_id == radar_run.id)
         .where(RadarSnapshot.radar_priority.in_(["P0", "P1"]))
         .order_by(RadarSnapshot.priority_score.desc(), RadarSnapshot.ticker))).all())
-    seen = {o.instrument_id for o in orders}
+    seen = {o.instrument_id for o in orders} | {p.instrument_id for p in getattr(run, "_external_holdings", [])}
     added = 0
     for snapshot, instrument, quote in rows:
         if instrument.id in seen:
@@ -394,13 +479,17 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
     now = utc(now or datetime.now(timezone.utc))
     # Keep cash, orders and history on the same committed state while a worker
     # fills orders. The request's session releases this read lock on close.
+    portfolio = await _portfolio(session, owner, read=True)
     run = await _latest(session, owner, run_id=run_id, read_lock=True)
+    capital = await get_dashboard(session, AuthenticatedUser(id=owner, email=None))
     if run is None:
-        return PaperFundResponse(generated_at=now, run=None, orders=[], equity_history=[],
-                                 blockers=["Start the $10,000 paper fund to enable automatic execution."],
+        return PaperFundResponse(generated_at=now, trading_mode=portfolio.trading_mode, capital=capital, run=None, orders=[], equity_history=[],
+                                 blockers=["Choose Automatic to enable execution using this Capital account."],
                                  policy=POLICY, simulation_notice=SIMULATION_NOTICE)
     orders = await _orders(session, run)
-    state = accounting(run, orders)
+    book = await load_book(session, portfolio)
+    reserved = money(sum((reservation(o, run.policy) for o in orders if o.status == "pending"), ZERO))
+    state = {**book.state, "reserved_cash": reserved, "available_cash": money(book.cash - reserved)}
     history = list(await session.scalars(select(PaperEquitySnapshot).where(PaperEquitySnapshot.run_id == run.id)
                                         .order_by(PaperEquitySnapshot.recorded_at)))
     if len(history) > 500:
@@ -413,9 +502,9 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
         if closed and closed not in blockers:
             blockers.insert(0, closed)
     return PaperFundResponse(
-        generated_at=now,
+        generated_at=now, trading_mode=portfolio.trading_mode, capital=capital,
         run=PaperRunResponse(id=run.id, status=run.status, starting_cash=run.starting_cash,
-            cash_balance=run.cash_balance, max_drawdown_pct=run.max_drawdown_pct,
+            cash_balance=book.cash, max_drawdown_pct=run.max_drawdown_pct,
             started_at=run.started_at, ends_at=run.ends_at, last_cycle_at=run.last_cycle_at,
             completed_at=run.completed_at, halt_reason=run.halt_reason, **state),
         orders=[PaperOrderResponse(id=o.id, ticker=o.ticker, name=o.name, status=o.status,

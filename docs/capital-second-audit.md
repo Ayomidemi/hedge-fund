@@ -1,5 +1,9 @@
 # Capital and automatic execution: second audit
 
+Subsequent change: execution now shares the existing Capital ledger and has a
+[Manual / Automatic toggle](capital-automatic-trading.md). The separate paper
+account discussed in this historical audit is no longer the product flow.
+
 Reviewed October 5, 2026. Scope: the Capital ledger and reset, paper-fund
 accounting and order lifecycle, radar admission, quote freshness, worker
 scheduling and locking, database migrations, and the paper dashboard/queue.

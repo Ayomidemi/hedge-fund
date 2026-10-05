@@ -6,6 +6,7 @@ from decimal import Decimal
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -146,6 +147,7 @@ class Portfolio(Base, TimestampMixin):
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     mandate: Mapped[str | None] = mapped_column(Text)
     initial_capital: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    trading_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
 
     cash_entries: Mapped[list["CashLedgerEntry"]] = relationship(
         back_populates="portfolio"
@@ -161,6 +163,7 @@ class Portfolio(Base, TimestampMixin):
     )
 
     __table_args__ = (
+        CheckConstraint("trading_mode IN ('manual','automatic')", name="ck_portfolio_trading_mode"),
         Index("ix_portfolios_owner_user_id_unique", "owner_user_id", unique=True),
         Index("ix_portfolios_owner_name", "owner_user_id", "name", unique=True),
     )

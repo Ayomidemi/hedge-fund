@@ -14,7 +14,9 @@ from app.api.schemas.operating_core import (
     PortfolioDashboardResponse,
     TradeJournalResponse,
     TradeResponse,
+    TradingModeUpdate,
 )
+from app.api.schemas.paper_fund import PaperFundResponse
 from app.api.idempotency import merge_idempotency_key, optional_idempotency_key
 from app.core.auth import AuthenticatedUser, require_capital_user
 from app.db.session import get_session
@@ -32,6 +34,16 @@ from app.services.portfolio.operating_core import (
 )
 
 router = APIRouter(prefix="/operating-core")
+
+
+@router.post("/trading-mode", response_model=PaperFundResponse)
+async def set_capital_trading_mode(
+    payload: TradingModeUpdate,
+    user: AuthenticatedUser = Depends(require_capital_user),
+    session: AsyncSession = Depends(get_session),
+):
+    from app.services.paper_fund.engine import set_trading_mode
+    return await set_trading_mode(session, user.id, payload.mode)
 
 
 def _with_idempotency_key(payload, header: str | None):

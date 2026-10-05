@@ -4,10 +4,11 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.api.schemas.operating_core import PortfolioDashboardResponse
 
 
 class PaperStart(BaseModel):
-    # Fix the experiment baseline so runs can be compared without deposits.
+    # Compatibility for older clients only; never funds or resets the account.
     starting_cash: Decimal = Field(default=Decimal("10000"), ge=10000, le=10000, allow_inf_nan=False)
     duration_days: int = Field(default=7, ge=7, le=7)
 
@@ -67,6 +68,8 @@ class PaperEquityResponse(BaseModel):
 
 class PaperFundResponse(BaseModel):
     generated_at: datetime
+    trading_mode: Literal["manual", "automatic"] = "manual"
+    capital: PortfolioDashboardResponse | None = None
     run: PaperRunResponse | None
     orders: list[PaperOrderResponse]
     equity_history: list[PaperEquityResponse]

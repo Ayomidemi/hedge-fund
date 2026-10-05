@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -112,6 +113,11 @@ class PortfolioResponse(BaseModel):
     base_currency: str
     mandate: str | None
     initial_capital: Decimal
+    trading_mode: Literal["manual", "automatic"] = "manual"
+
+
+class TradingModeUpdate(BaseModel):
+    mode: Literal["manual", "automatic"]
 
 
 class InstrumentResponse(BaseModel):

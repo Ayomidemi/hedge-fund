@@ -6,6 +6,8 @@ Unlike the ORM integration fixtures, these tests never call create_all().
 """
 
 import os
+import json
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest import IsolatedAsyncioTestCase, skipUnless
@@ -28,7 +30,7 @@ from app.models import PaperEquitySnapshot, PaperFundRun, PaperOrder
 
 TEST_URL = os.environ.get("HF_TEST_DATABASE_URL")
 PRE_REPAIR_HEAD = "202610020002"
-REPAIR_HEAD = "202610050001"
+REPAIR_HEAD = "202610050002"
 BACKEND = Path(__file__).resolve().parents[2]
 
 
@@ -140,7 +142,17 @@ class PaperFundMigrationTests(IsolatedAsyncioTestCase):
         await self._start_and_read("repaired-start")
 
     async def test_current_schema_upgrade_preserves_run_and_start_replay(self):
-        run_id = await self._start_and_read("before-repair")
+        from app.services.paper_fund.engine import POLICY
+        run_id = str(uuid4())
+        now = datetime.now(timezone.utc)
+        async with self.engine.begin() as connection:
+            await connection.execute(text("""INSERT INTO paper_fund_runs
+                (id, owner_user_id, start_key, status, starting_cash, cash_balance,
+                 high_water_equity, max_drawdown_pct, started_at, ends_at, policy, blockers)
+                VALUES (:id, :owner, 'before-repair', 'running', 10000, 10000,
+                        10000, 0, :now, :ends, CAST(:policy AS JSONB), '[]'::jsonb)"""),
+                {"id": run_id, "owner": self.owner, "now": now,
+                 "ends": now + timedelta(days=7), "policy": json.dumps(POLICY)})
         await self._repair()
         await self._repair()
         await self._assert_schema_matches_models()

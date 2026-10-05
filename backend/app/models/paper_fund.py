@@ -1,4 +1,4 @@
-"""Isolated paper capital. No broker credentials or live execution path."""
+"""Automatic execution plans for the Capital ledger. No live broker orders."""
 
 import uuid
 from datetime import datetime
@@ -16,6 +16,8 @@ class PaperFundRun(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    portfolio_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("portfolios.id"), index=True)
+    net_contributions_at_start: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     start_key: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     starting_cash: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)

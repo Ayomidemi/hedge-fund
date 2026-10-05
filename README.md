@@ -2,9 +2,10 @@
 
 Monorepo for a quantitative trading and portfolio operations platform.
 
-The Capital dashboard includes an automatic **$10,000, seven-day paper run**.
-See [capital audit and paper-run instructions](docs/capital-paper-audit.md) for
-the execution rules, accounting fixes, setup, tests and simulation limits.
+Capital has a **Manual / Automatic** trading toggle for the same account.
+Automatic fills use its existing cash ledger, positions and trade journal;
+execution is simulated for now. Switching modes never funds or resets the
+account. See [Capital automatic trading](docs/capital-automatic-trading.md).
 
 - **Backend:** Python + FastAPI
 - **Frontend:** Next.js (App Router, TypeScript, Tailwind)

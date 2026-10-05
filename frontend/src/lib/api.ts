@@ -205,6 +205,8 @@ export type PaperFundOrder = {
 
 export type PaperFundOverview = {
   generated_at: string;
+  trading_mode: "manual" | "automatic";
+  capital: OperatingCoreDashboard | null;
   run: PaperFundRun | null;
   orders: PaperFundOrder[];
   equity_history: Array<{
@@ -233,6 +235,12 @@ export type PaperFundOverview = {
 
 export function getPaperFund(options?: ApiRequestOptions) {
   return fetchApi<PaperFundOverview>("/api/paper-fund", options);
+}
+
+export function setCapitalTradingMode(mode: "manual" | "automatic", options?: ApiRequestOptions) {
+  return postApi<PaperFundOverview, { mode: "manual" | "automatic" }>(
+    "/api/operating-core/trading-mode", { mode }, options,
+  );
 }
 
 export function startPaperFund(options?: ApiRequestOptions) {

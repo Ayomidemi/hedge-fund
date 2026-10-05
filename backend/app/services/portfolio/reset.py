@@ -240,6 +240,7 @@ async def reset_capital(
     reset_id = uuid4()
     backup = await export_reset_state(session, portfolio, reset_id=reset_id, summary=summary)
     write_private_backup(backup_path, backup)
+    portfolio.trading_mode = "manual"
     for model, predicate in _targets(owner_user_id, portfolio.id):
         await session.execute(delete(model).where(predicate).execution_options(synchronize_session=False))
     now = now or datetime.now(timezone.utc)

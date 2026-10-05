@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ManualTradeModal } from "@/components/portfolio/ManualTradeModal";
 import { HorizontalBarPlot } from "@/components/ui/plots";
 import {
@@ -13,6 +13,9 @@ import type { OperatingCoreDashboard } from "@/lib/api";
 
 type PortfolioDashboardProps = {
   dashboard: OperatingCoreDashboard | null;
+  controls?: ReactNode;
+  automatic?: boolean;
+  onTradeClosed?: () => void;
 };
 
 const currency = new Intl.NumberFormat("en-US", {
@@ -39,7 +42,7 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
+export function PortfolioDashboard({ dashboard, controls, automatic = false, onTradeClosed }: PortfolioDashboardProps) {
   const [tradeModalOpen, setTradeModalOpen] = useState(false);
 
   if (!dashboard) {
@@ -69,7 +72,8 @@ export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                 {dashboard.portfolio.name}
               </p>
-              <h2 className="mt-1 text-2xl font-semibold tracking-tight">Capital ledger overview</h2>
+              <h2 className="mt-1 text-2xl font-semibold tracking-tight">Capital</h2>
+              {controls ? <div className="mt-4">{controls}</div> : null}
               {dashboard.prices_as_of ? (
                 <p className="mt-1 text-xs text-zinc-500">
                   Prices as of{" "}
@@ -170,7 +174,9 @@ export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
                 <button
                   type="button"
                   onClick={() => setTradeModalOpen(true)}
-                  className={ghostButtonClassName}
+                  disabled={automatic}
+                  title={automatic ? "Switch to Manual to record a trade" : undefined}
+                  className={`${ghostButtonClassName} disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   Record trade
                 </button>
@@ -247,7 +253,7 @@ export function PortfolioDashboard({ dashboard }: PortfolioDashboardProps) {
         </DataTable>
       </div>
 
-      <ManualTradeModal open={tradeModalOpen} onClose={() => setTradeModalOpen(false)} />
+      <ManualTradeModal open={tradeModalOpen} onClose={() => { setTradeModalOpen(false); onTradeClosed?.(); }} />
     </>
   );
 }

@@ -15,6 +15,7 @@ const platformLabels: Record<string, string> = {
   fidelity: "Fidelity",
   schwab: "Schwab",
   manual: "Manual",
+  automatic_paper: "Automatic (simulated)",
 };
 
 export const cashPlatformSuggestions = [

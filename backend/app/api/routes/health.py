@@ -4,7 +4,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.models import PaperEquitySnapshot, PaperFundRun, PaperOrder, Trade
+from app.models import PaperEquitySnapshot, PaperFundRun, PaperOrder, Portfolio, Trade
 
 router = APIRouter()
 
@@ -26,6 +26,7 @@ async def database_health_check(
         for model in (PaperFundRun, PaperOrder, PaperEquitySnapshot):
             await session.execute(select(model).limit(0))
         await session.execute(select(Trade.executed_price_base, Trade.fees_base).limit(0))
+        await session.execute(select(Portfolio.trading_mode).limit(0))
     except ProgrammingError as exc:
         await session.rollback()
         raise HTTPException(status_code=503, detail="Database schema is out of date. Apply backend migrations.") from exc

@@ -620,7 +620,7 @@ function QueueStatusNotice({
 
   return (
     <p className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-      Saved research memo. Executable orders are selected and sized automatically by the paper fund.{" "}
+      Saved research memo. In Automatic mode, Capital selects and sizes executable orders.{" "}
       <Link href="/opportunity-queue" className="underline-offset-4 hover:underline">
         Open queue
       </Link>

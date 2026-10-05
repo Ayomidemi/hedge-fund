@@ -4,14 +4,13 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   getPaperFund,
-  setPaperFundPaused,
-  startPaperFund,
+  setCapitalTradingMode,
   type PaperFundOrder,
   type PaperFundOverview,
 } from "@/lib/api";
-import { newIdempotencyKey } from "@/lib/idempotency";
+import { PortfolioDashboard } from "@/components/portfolio/PortfolioDashboard";
 import { tickerHubPath } from "@/lib/ticker-hub-path";
-import { buttonPrimaryClassName, buttonSecondaryClassName } from "@/components/ui/form-styles";
+import { buttonSecondaryClassName } from "@/components/ui/form-styles";
 import { toast } from "@/components/ui/ToastProvider";
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -40,7 +39,6 @@ export function PaperFundPanel({
   const [error, setError] = useState<string | null>(null);
   const actionInFlight = useRef(false);
   const hasSnapshot = useRef(initialOverview !== null);
-  const startKey = useRef<string | null>(null);
   const requestVersion = useRef(0);
 
   useEffect(() => {
@@ -61,7 +59,7 @@ export function PaperFundPanel({
         if (!cancelled && version === requestVersion.current) {
           setError(hasSnapshot.current
             ? "Updates are unavailable. Displayed balances are from the last successful refresh."
-            : "The paper fund is unavailable. Retry to load balances and trading controls.");
+            : "The Capital account is unavailable. Retry to load balances and trading controls.");
         }
       } finally {
         refreshing = false;
@@ -84,29 +82,23 @@ export function PaperFundPanel({
     };
   }, []);
 
-  async function act(action: "refresh" | "start" | "pause" | "resume") {
+  async function act(action: "refresh" | "manual" | "automatic") {
     if (actionInFlight.current) return;
     actionInFlight.current = true;
     const version = ++requestVersion.current;
     setPending(true);
     setError(null);
     try {
-      if (action === "start" && !startKey.current) startKey.current = newIdempotencyKey();
-      const data = action === "start"
-        ? await startPaperFund({ idempotencyKey: startKey.current! })
-        : action === "refresh"
-          ? await getPaperFund()
-          : await setPaperFundPaused(action === "pause");
+      const data = action === "refresh" ? await getPaperFund() : await setCapitalTradingMode(action);
       if (version === requestVersion.current) {
         hasSnapshot.current = true;
         setOverview(data);
       }
-      if (action === "start") startKey.current = null;
       if (action !== "refresh") {
-        toast.success(action === "start" ? "$10,000 paper fund started." : action === "pause" ? "New entries paused. Automatic exits remain active." : "Automatic entries resumed.");
+        toast.success(action === "automatic" ? "Capital is trading automatically." : "Manual mode: automatic buys and sells stopped.");
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Paper fund request failed.");
+      setError(reason instanceof Error ? reason.message : "Capital request failed.");
     } finally {
       actionInFlight.current = false;
       setPending(false);
@@ -118,57 +110,56 @@ export function PaperFundPanel({
   const positions = overview?.orders.filter((order) => order.status === "open") ?? [];
   const history = overview?.orders.filter((order) => !["pending", "open"].includes(order.status)) ?? [];
   const loading = overview === null && error === null;
-  const status = overview ? run?.status ?? "not started" : loading ? "loading" : "unavailable";
-  const canStart = overview && (!run || run.status === "completed");
+  const automatic = overview?.trading_mode === "automatic";
   const staleCycle = Boolean(run && run.status !== "completed" && run.last_cycle_at && overview
     && Date.parse(overview.generated_at) - Date.parse(run.last_cycle_at) > 90_000);
 
+  const controls = <div className="space-y-2">
+    <div className="flex flex-wrap items-center gap-3">
+      <span className="text-sm font-medium">Trading mode</span>
+      <div role="group" aria-label="Trading mode" className="inline-flex rounded-lg border border-zinc-200 p-1 dark:border-zinc-700">
+        {(["manual", "automatic"] as const).map((value) => <button key={value} type="button"
+          aria-pressed={overview?.trading_mode === value} disabled={pending || !overview}
+          onClick={() => void act(value)}
+          className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize disabled:opacity-50 ${overview?.trading_mode === value ? "bg-emerald-700 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900"}`}>
+          {value}
+        </button>)}
+      </div>
+      <button disabled={pending} onClick={() => void act("refresh")} className={buttonSecondaryClassName} aria-label="Refresh Capital">{pending ? "Updating…" : error ? "Retry" : "Refresh"}</button>
+    </div>
+    <p className="text-xs text-zinc-500">{automatic
+      ? "Automatic entries and exits use this account’s cash, positions and trade journal. Execution is simulated for now."
+      : "Manual mode stops all automatic buys and sells, including stop and target exits. Existing holdings remain in Capital."}</p>
+  </div>;
+
   return (
     <div className="space-y-5">
-      <section className={panel} aria-label="Automatic paper fund">
-        <div className="flex flex-wrap items-start justify-between gap-4 p-5 sm:p-6">
-          <div className="max-w-2xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-400">Paper trading · USD · Weekly review</p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight">
-              {mode === "queue" ? "Opportunity Queue" : "$10,000 automatic paper fund"}
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-zinc-500">
-              {mode === "queue"
-                ? "Only sized limit orders accepted by the engine enter this queue. Entries, stops, targets, and time exits are automatic."
-                : "The system screens radar signals, sizes positions, and manages entry and exit orders. Track the actual simulated gain or loss over one week."}
-            </p>
-            <p className="mt-2 text-xs text-zinc-500">The paper fund has its own cash and positions. Each trading period lasts seven days.</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-medium capitalize dark:bg-zinc-900">{status}</span>
-            {canStart ? <button disabled={pending} onClick={() => void act("start")} className={buttonPrimaryClassName}>
-              {pending ? "Starting…" : run ? "Start next $10,000 trading period" : "Start $10,000 paper fund"}
-            </button> : null}
-            {run?.status === "running" || run?.status === "paused" ? <button disabled={pending} onClick={() => void act(run.status === "running" ? "pause" : "resume")} className={buttonSecondaryClassName}>
-              {run.status === "running" ? "Pause new entries" : "Resume new entries"}
-            </button> : null}
-            <button disabled={pending} onClick={() => void act("refresh")} className={buttonSecondaryClassName} aria-label="Refresh paper fund">{pending ? "Updating…" : error ? "Retry" : "Refresh"}</button>
-          </div>
-        </div>
+      {mode === "dashboard" && overview?.capital ? <PortfolioDashboard dashboard={overview.capital}
+        controls={controls} automatic={automatic} onTradeClosed={() => void act("refresh")} /> : null}
+      <section className={panel} aria-label="Capital trading controls">
+        {mode !== "dashboard" || !overview?.capital ? <div className="p-5 sm:p-6">
+          <h2 className="mb-4 text-2xl font-semibold tracking-tight">{mode === "queue" ? "Opportunity Queue" : "Capital"}</h2>
+          {controls}
+        </div> : null}
 
         {error ? <p role="alert" className="mx-5 mb-5 rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
-        {loading ? <p role="status" className="mx-5 mb-5 text-sm text-zinc-500">Loading paper fund balances and trading controls…</p> : null}
+        {loading ? <p role="status" className="mx-5 mb-5 text-sm text-zinc-500">Loading Capital account balances and trading controls…</p> : null}
 
         {run ? <>
-          <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 sm:px-6 xl:grid-cols-4">
-            <Metric label="Paper equity" value={money(run.equity)} detail={`Started with ${money(run.starting_cash)}`} />
-            <Metric label="Net profit / loss" value={money(run.total_pnl)} detail={`${Number(run.return_pct).toFixed(2)}% return · after simulated fees`} tone={Number(run.total_pnl) < 0 ? "negative" : Number(run.total_pnl) > 0 ? "positive" : undefined} />
-            <Metric label="Available cash" value={money(run.available_cash)} detail={`${money(run.reserved_cash)} reserved for orders`} />
-            <Metric label="Maximum drawdown" value={`${Number(run.max_drawdown_pct).toFixed(2)}%`} detail={`${queued.length} queued · ${positions.length} open positions`} />
+          <div className="grid gap-3 p-5 sm:grid-cols-2 sm:px-6 xl:grid-cols-4">
+            <Metric label="Net profit / loss" value={money(run.total_pnl)} detail={`${Number(run.return_pct).toFixed(2)}% of net contributions · after fees`} tone={Number(run.total_pnl) < 0 ? "negative" : Number(run.total_pnl) > 0 ? "positive" : undefined} />
+            <Metric label="Available cash" value={money(run.available_cash)} detail={`${money(run.reserved_cash)} reserved for automatic orders`} />
+            <Metric label="Maximum drawdown" value={`${Number(run.max_drawdown_pct).toFixed(2)}%`} detail="Current review period" />
+            <Metric label="Execution" value={automatic ? "Automatic" : "Manual"} detail={`${queued.length} queued · ${positions.length} managed positions`} />
           </div>
           <div className="flex flex-wrap justify-between gap-2 border-t border-zinc-100 px-5 py-3 text-xs text-zinc-500 dark:border-zinc-900 sm:px-6">
-            <span>Started {when(run.started_at)} · Trading period ends {when(run.ends_at)}</span>
+            <span>Review started {when(run.started_at)} · Review ends {when(run.ends_at)}</span>
             <span>Last engine cycle: {when(run.last_cycle_at)}</span>
           </div>
           {staleCycle ? <p className="mx-5 mb-4 text-sm text-amber-700 dark:text-amber-400">The engine has not reported a cycle for over 90 seconds. Automatic execution may be delayed.</p> : null}
           {run.halt_reason ? <p role="status" className="mx-5 mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{run.halt_reason}</p> : null}
-          {run.status === "paused" ? <p className="mx-5 mb-4 text-sm text-zinc-500">New buys are paused. Existing positions retain their automatic exits.</p> : null}
-          {run.status === "liquidating" ? <p className="mx-5 mb-4 text-sm text-zinc-500">The paper fund is closing positions when eligible market quotes are available. Final profit or loss remains provisional until every position closes.</p> : null}
+          {run.status === "paused" ? <p className="mx-5 mb-4 text-sm text-zinc-500">Automatic execution is stopped. You control existing positions in Manual mode.</p> : null}
+          {run.status === "liquidating" ? <p className="mx-5 mb-4 text-sm text-zinc-500">Automatic execution is closing positions when eligible market quotes are available. Final profit or loss remains provisional until every position closes.</p> : null}
         </> : null}
 
         {mode === "radar" ? <div className="border-t border-zinc-100 px-5 py-4 dark:border-zinc-900">
@@ -179,7 +170,7 @@ export function PaperFundPanel({
       {overview && mode !== "radar" ? <>
         <div className="grid gap-5 lg:grid-cols-2">
           <section className={`${panel} p-5`}>
-            <h3 className="text-sm font-semibold">{run?.status === "completed" ? "Weekly review" : "Week-to-date performance"}</h3>
+            <h3 className="text-sm font-semibold">{run?.status === "completed" ? "Weekly review" : "Capital performance"}</h3>
             {run ? <>
               <EquityChart history={overview.equity_history} startingCash={run.starting_cash} />
               <dl className="grid grid-cols-3 gap-3 text-sm">
@@ -187,7 +178,7 @@ export function PaperFundPanel({
                 <div><dt className="text-xs text-zinc-500">Unrealized P&amp;L</dt><dd className="mt-1 tabular-nums">{money(run.unrealized_pnl)}</dd></div>
                 <div><dt className="text-xs text-zinc-500">Simulated fees</dt><dd className="mt-1 tabular-nums">{money(run.fees_paid)}</dd></div>
               </dl>
-            </> : <p className="mt-3 text-sm leading-6 text-zinc-500">Start the paper fund to establish a $10,000 baseline. The weekly review will reflect observed fills and market moves; there is no projected profit.</p>}
+            </> : <p className="mt-3 text-sm leading-6 text-zinc-500">Choose Automatic to let the engine trade this Capital account. Switching modes never adds cash or resets your history.</p>}
           </section>
           <section className={`${panel} p-5`}>
             <h3 className="text-sm font-semibold">Capital rules</h3>
@@ -204,7 +195,7 @@ export function PaperFundPanel({
         </div>
 
         <OrderTable title="Ready for automatic execution" orders={queued} kind="queue" empty="No executable opportunities right now. The engine waits for qualifying signals, fresh quotes, and available risk capacity." />
-        {mode === "queue" || positions.length > 0 ? <OrderTable title="Open paper positions" orders={positions} kind="positions" empty="No open paper positions." /> : null}
+        {mode === "queue" || positions.length > 0 ? <OrderTable title="Automatically managed positions" orders={positions} kind="positions" empty="No automatically managed positions." /> : null}
         {mode === "queue" && history.length > 0 ? <OrderTable title="Execution history" orders={history} kind="history" empty="No executions yet." /> : null}
         {mode === "dashboard" ? <Link href="/opportunity-queue" className="inline-block text-sm font-medium text-emerald-700 hover:underline dark:text-emerald-400">View orders, positions, and execution history →</Link> : null}
       </> : null}
@@ -243,8 +234,8 @@ function EquityChart({ history, startingCash }: { history: PaperFundOverview["eq
   const y = (value: number) => 130 - (value - min) / span * 100;
   const path = points.map((point, index) => `${index ? "L" : "M"}${10 + (Date.parse(point.recorded_at) - firstAt) / duration * 480},${y(Number(point.equity))}`).join(" ");
   return <figure className="my-4">
-    <svg role="img" aria-label={`Paper equity from ${money(points[0].equity)} to ${money(points[points.length - 1].equity)}`} viewBox="0 0 500 155" className="h-40 w-full">
-      <title>Observed paper equity over time</title>
+    <svg role="img" aria-label={`Capital equity from ${money(points[0].equity)} to ${money(points[points.length - 1].equity)}`} viewBox="0 0 500 155" className="h-40 w-full">
+      <title>Observed Capital equity over time</title>
       <line x1="10" x2="490" y1={y(start)} y2={y(start)} className="stroke-zinc-300 dark:stroke-zinc-700" strokeDasharray="4 4" />
       <path d={path} fill="none" strokeWidth="2.5" className={values[values.length - 1] < start ? "stroke-red-500" : "stroke-emerald-500"} />
     </svg>
