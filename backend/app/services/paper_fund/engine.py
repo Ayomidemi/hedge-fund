@@ -28,7 +28,7 @@ POLICY = {
     "order_ttl_minutes": 30,
 }
 SIMULATION_NOTICE = (
-    "Isolated $10,000 USD paper trial; no live orders. Whole-share, long-only momentum experiment, "
+    "$10,000 USD paper fund; no live orders. Whole-share, long-only momentum strategy, "
     "not a validated profit forecast. Fills use later observed prices with 10 bps adverse slippage "
     "and 5 bps fees per side. Order-book depth, queue priority, partial fills, dividends and corporate "
     "actions are not simulated. Moves between observations can be missed. Stops can fill below their "
@@ -156,7 +156,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
             continue
         reason = None
         if run.status in {"liquidating", "halted"}:
-            reason = "drawdown_halt" if run.halt_reason else "trial_ended"
+            reason = "drawdown_halt" if run.halt_reason else "review_period_ended"
         elif quote.price <= order.stop_price:
             reason = "stop_loss"
         elif quote.price >= order.target_price:
@@ -285,7 +285,7 @@ async def start_run(session: AsyncSession, owner: str, payload: PaperStart, *, n
 async def control_run(session: AsyncSession, owner: str, action: str) -> PaperFundResponse:
     run = await _latest(session, owner, lock=True)
     if run is None:
-        raise PaperFundError("Start a paper trial first.")
+        raise PaperFundError("Start the paper fund first.")
     orders = await _orders(session, run)
     if action == "pause":
         if run.status == "running":
@@ -293,10 +293,10 @@ async def control_run(session: AsyncSession, owner: str, action: str) -> PaperFu
             _cancel_pending(orders, "Entries paused; protective exits remain active.")
     elif action == "resume":
         if run.status != "paused" or run.halt_reason or datetime.now(timezone.utc) >= utc(run.ends_at):
-            raise PaperFundError("Only an unexpired, paused trial can resume; risk halts cannot be overridden.")
+            raise PaperFundError("Only a paused fund within its trading period can resume; risk halts cannot be overridden.")
         run.status = "running"
     else:
-        raise PaperFundError("Unknown paper trial action.")
+        raise PaperFundError("Unknown paper fund action.")
     await session.commit()
     return await overview(session, owner)
 
@@ -305,7 +305,7 @@ async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = Non
     now = utc(now or datetime.now(timezone.utc))
     run = await _latest(session, owner, lock=True)
     if run is None:
-        raise PaperFundError("Start a paper trial first.")
+        raise PaperFundError("Start the paper fund first.")
     if run.status == "completed":
         return await overview(session, owner, now=now)
     orders = await _orders(session, run)
@@ -379,7 +379,7 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
     run = await _latest(session, owner, run_id=run_id)
     if run is None:
         return PaperFundResponse(generated_at=now, run=None, orders=[], equity_history=[],
-                                 blockers=["Start a $10,000 paper trial to enable automatic execution."],
+                                 blockers=["Start the $10,000 paper fund to enable automatic execution."],
                                  policy=POLICY, simulation_notice=SIMULATION_NOTICE)
     orders = await _orders(session, run)
     state = accounting(run, orders)

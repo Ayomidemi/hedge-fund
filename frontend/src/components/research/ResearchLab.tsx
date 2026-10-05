@@ -646,7 +646,7 @@ function ExperimentsPanel({
   experiments: ResearchExperiment[];
 }) {
   return (
-    <Panel title="Experiments" subtitle="Model versions and research trials">
+    <Panel title="Experiments" subtitle="Model versions and research runs">
       <DataTable
         empty="No experiments are registered yet."
         headers={["Experiment", "Type", "Metric", "Feature set", "Status", "Created"]}

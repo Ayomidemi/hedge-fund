@@ -37,28 +37,51 @@ export function PaperFundPanel({
 }) {
   const [overview, setOverview] = useState(initialOverview);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(initialOverview ? null : "Paper fund could not be loaded. Refresh to retry.");
+  const [error, setError] = useState<string | null>(null);
   const actionInFlight = useRef(false);
+  const hasSnapshot = useRef(initialOverview !== null);
   const startKey = useRef<string | null>(null);
   const requestVersion = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible" || actionInFlight.current) return;
+    let refreshing = false;
+    async function refresh() {
+      if (cancelled || refreshing || actionInFlight.current) return;
+      refreshing = true;
       const version = ++requestVersion.current;
-      void getPaperFund().then((data) => {
+      try {
+        const data = await getPaperFund();
         if (!cancelled && version === requestVersion.current) {
+          hasSnapshot.current = true;
           setOverview(data);
           setError(null);
         }
-      }).catch(() => {
+      } catch {
         if (!cancelled && version === requestVersion.current) {
-          setError("Updates are unavailable. Displayed balances are from the last successful refresh.");
+          setError(hasSnapshot.current
+            ? "Updates are unavailable. Displayed balances are from the last successful refresh."
+            : "The paper fund is unavailable. Retry to load balances and trading controls.");
         }
-      });
-    }, 30_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+      } finally {
+        refreshing = false;
+      }
+    }
+    function refreshWhenVisible() {
+      if (document.visibilityState !== "visible" || actionInFlight.current) return;
+      void refresh();
+    }
+    // A failed server render should recover as soon as the browser can reach the API.
+    if (!hasSnapshot.current) void refresh();
+    const timer = window.setInterval(refreshWhenVisible, 30_000);
+    window.addEventListener("online", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("online", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, []);
 
   async function act(action: "refresh" | "start" | "pause" | "resume") {
@@ -74,10 +97,13 @@ export function PaperFundPanel({
         : action === "refresh"
           ? await getPaperFund()
           : await setPaperFundPaused(action === "pause");
-      if (version === requestVersion.current) setOverview(data);
+      if (version === requestVersion.current) {
+        hasSnapshot.current = true;
+        setOverview(data);
+      }
       if (action === "start") startKey.current = null;
       if (action !== "refresh") {
-        toast.success(action === "start" ? "$10,000 paper trial started." : action === "pause" ? "New entries paused. Automatic exits remain active." : "Automatic entries resumed.");
+        toast.success(action === "start" ? "$10,000 paper fund started." : action === "pause" ? "New entries paused. Automatic exits remain active." : "Automatic entries resumed.");
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Paper fund request failed.");
@@ -91,7 +117,8 @@ export function PaperFundPanel({
   const queued = overview?.orders.filter((order) => order.status === "pending") ?? [];
   const positions = overview?.orders.filter((order) => order.status === "open") ?? [];
   const history = overview?.orders.filter((order) => !["pending", "open"].includes(order.status)) ?? [];
-  const status = run?.status ?? "not started";
+  const loading = overview === null && error === null;
+  const status = overview ? run?.status ?? "not started" : loading ? "loading" : "unavailable";
   const canStart = overview && (!run || run.status === "completed");
   const staleCycle = Boolean(run && run.status !== "completed" && run.last_cycle_at && overview
     && Date.parse(overview.generated_at) - Date.parse(run.last_cycle_at) > 5 * 60_000);
@@ -101,7 +128,7 @@ export function PaperFundPanel({
       <section className={panel} aria-label="Automatic paper fund">
         <div className="flex flex-wrap items-start justify-between gap-4 p-5 sm:p-6">
           <div className="max-w-2xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-400">Paper trading · USD · 7-day trial</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-400">Paper trading · USD · Weekly review</p>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">
               {mode === "queue" ? "Opportunity Queue" : "$10,000 automatic paper fund"}
             </h2>
@@ -110,21 +137,22 @@ export function PaperFundPanel({
                 ? "Only sized limit orders accepted by the engine enter this queue. Entries, stops, targets, and time exits are automatic."
                 : "The system screens radar signals, sizes positions, and manages entry and exit orders. Track the actual simulated gain or loss over one week."}
             </p>
-            <p className="mt-2 text-xs text-zinc-500">This paper trial has its own cash and positions. Your capital ledger is separate.</p>
+            <p className="mt-2 text-xs text-zinc-500">The paper fund has its own cash and positions. Each trading period lasts seven days.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-medium capitalize dark:bg-zinc-900">{status}</span>
             {canStart ? <button disabled={pending} onClick={() => void act("start")} className={buttonPrimaryClassName}>
-              {pending ? "Starting…" : run ? "Start another $10,000 trial" : "Start $10,000 paper trial"}
+              {pending ? "Starting…" : run ? "Start next $10,000 trading period" : "Start $10,000 paper fund"}
             </button> : null}
             {run?.status === "running" || run?.status === "paused" ? <button disabled={pending} onClick={() => void act(run.status === "running" ? "pause" : "resume")} className={buttonSecondaryClassName}>
               {run.status === "running" ? "Pause new entries" : "Resume new entries"}
             </button> : null}
-            <button disabled={pending} onClick={() => void act("refresh")} className={buttonSecondaryClassName} aria-label="Refresh paper fund">{pending ? "Updating…" : "Refresh"}</button>
+            <button disabled={pending} onClick={() => void act("refresh")} className={buttonSecondaryClassName} aria-label="Refresh paper fund">{pending ? "Updating…" : error ? "Retry" : "Refresh"}</button>
           </div>
         </div>
 
         {error ? <p role="alert" className="mx-5 mb-5 rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
+        {loading ? <p role="status" className="mx-5 mb-5 text-sm text-zinc-500">Loading paper fund balances and trading controls…</p> : null}
 
         {run ? <>
           <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 sm:px-6 xl:grid-cols-4">
@@ -134,24 +162,24 @@ export function PaperFundPanel({
             <Metric label="Maximum drawdown" value={`${Number(run.max_drawdown_pct).toFixed(2)}%`} detail={`${queued.length} queued · ${positions.length} open positions`} />
           </div>
           <div className="flex flex-wrap justify-between gap-2 border-t border-zinc-100 px-5 py-3 text-xs text-zinc-500 dark:border-zinc-900 sm:px-6">
-            <span>Started {when(run.started_at)} · Trial ends {when(run.ends_at)}</span>
+            <span>Started {when(run.started_at)} · Trading period ends {when(run.ends_at)}</span>
             <span>Last engine cycle: {when(run.last_cycle_at)}</span>
           </div>
           {staleCycle ? <p className="mx-5 mb-4 text-sm text-amber-700 dark:text-amber-400">The engine has not reported a cycle for over five minutes. Check worker status before relying on automatic execution.</p> : null}
           {run.halt_reason ? <p role="status" className="mx-5 mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{run.halt_reason}</p> : null}
           {run.status === "paused" ? <p className="mx-5 mb-4 text-sm text-zinc-500">New buys are paused. Existing positions retain their automatic exits.</p> : null}
-          {run.status === "liquidating" ? <p className="mx-5 mb-4 text-sm text-zinc-500">The trial is closing positions when eligible market quotes are available. Final profit or loss remains provisional until every position closes.</p> : null}
+          {run.status === "liquidating" ? <p className="mx-5 mb-4 text-sm text-zinc-500">The paper fund is closing positions when eligible market quotes are available. Final profit or loss remains provisional until every position closes.</p> : null}
         </> : null}
 
         {mode === "radar" ? <div className="border-t border-zinc-100 px-5 py-4 dark:border-zinc-900">
-          <Link href="/opportunity-queue" className="text-sm font-medium text-emerald-700 hover:underline dark:text-emerald-400">View {queued.length} automatically queued order{queued.length === 1 ? "" : "s"} →</Link>
+          <Link href="/opportunity-queue" className="text-sm font-medium text-emerald-700 hover:underline dark:text-emerald-400">{overview ? `View ${queued.length} automatically queued order${queued.length === 1 ? "" : "s"}` : "View automatic execution queue"} →</Link>
         </div> : null}
       </section>
 
       {overview && mode !== "radar" ? <>
         <div className="grid gap-5 lg:grid-cols-2">
           <section className={`${panel} p-5`}>
-            <h3 className="text-sm font-semibold">{run?.status === "completed" ? "Trial result" : "Week-to-date performance"}</h3>
+            <h3 className="text-sm font-semibold">{run?.status === "completed" ? "Weekly review" : "Week-to-date performance"}</h3>
             {run ? <>
               <EquityChart history={overview.equity_history} startingCash={run.starting_cash} />
               <dl className="grid grid-cols-3 gap-3 text-sm">
@@ -159,7 +187,7 @@ export function PaperFundPanel({
                 <div><dt className="text-xs text-zinc-500">Unrealized P&amp;L</dt><dd className="mt-1 tabular-nums">{money(run.unrealized_pnl)}</dd></div>
                 <div><dt className="text-xs text-zinc-500">Simulated fees</dt><dd className="mt-1 tabular-nums">{money(run.fees_paid)}</dd></div>
               </dl>
-            </> : <p className="mt-3 text-sm leading-6 text-zinc-500">Start the trial to establish a $10,000 baseline. The result will reflect observed fills and market moves; there is no projected profit.</p>}
+            </> : <p className="mt-3 text-sm leading-6 text-zinc-500">Start the paper fund to establish a $10,000 baseline. The weekly review will reflect observed fills and market moves; there is no projected profit.</p>}
           </section>
           <section className={`${panel} p-5`}>
             <h3 className="text-sm font-semibold">Capital rules</h3>

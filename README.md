@@ -2,8 +2,8 @@
 
 Monorepo for a quantitative trading and portfolio operations platform.
 
-The Capital dashboard includes an automatic **$10,000, seven-day paper trial**.
-See [capital audit and paper-trial instructions](docs/capital-paper-audit.md) for
+The Capital dashboard includes an automatic **$10,000, seven-day paper run**.
+See [capital audit and paper-run instructions](docs/capital-paper-audit.md) for
 the execution rules, accounting fixes, setup, tests and simulation limits.
 
 - **Backend:** Python + FastAPI

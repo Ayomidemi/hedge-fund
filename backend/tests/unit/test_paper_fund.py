@@ -174,7 +174,7 @@ class PaperFundTests(TestCase):
         self.assertEqual(order.status, "open")
         process_orders(run, [order], {order.instrument_id: make_quote(order, "103", at=end)}, end)
         self.assertEqual(run.status, "completed")
-        self.assertEqual(order.exit_reason, "trial_ended")
+        self.assertEqual(order.exit_reason, "review_period_ended")
         final_cash = run.cash_balance
         process_orders(run, [order], {order.instrument_id: make_quote(order, "200", at=end)}, end)
         self.assertEqual(run.cash_balance, final_cash)

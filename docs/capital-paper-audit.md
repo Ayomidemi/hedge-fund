@@ -1,7 +1,7 @@
-# Capital audit and $10,000 paper trial
+# Capital audit and $10,000 paper run
 
 The capital dashboard, Market Radar and Opportunity Queue now share an isolated
-USD paper trial. A trial starts with exactly $10,000 and runs for seven calendar
+USD paper run. A run starts with exactly $10,000 and runs for seven calendar
 days. Existing portfolios, fills and cash ledgers are preserved. New default
 capital portfolios also start at $10,000 unless explicit account metadata sets
 a different opening balance.
@@ -21,11 +21,11 @@ a different opening balance.
 4. An entry can fill only on a later observed quote within its limit after
    adverse slippage. A quote that created an order cannot also fill it. Entry
    orders expire within 30 minutes, sooner when the underlying 15-minute signal
-   expires. A symbol gets at most one plan per trial, including expired plans;
+   expires. A symbol gets at most one plan per run, including expired plans;
    this deliberately prevents repeated entries and churn during the first test.
-5. Stop, profit-target, drawdown and end-of-trial exits are automatic. Pausing
+5. Stop, profit-target, drawdown and end-of-run exits are automatic. Pausing
    cancels pending buys but leaves protective exits running. A drawdown halt
-   cannot be manually resumed. End-of-trial liquidation waits for valid prices
+   cannot be manually resumed. End-of-run liquidation waits for valid prices
    during an open session; results remain provisional until positions close.
 
 The worker runs every 30 seconds through Celery beat, independently of browser
@@ -91,7 +91,7 @@ The isolated paper run reconciles `equity = cash + open market value` and
 Snapshots, orders, source evidence and completed runs remain in the database.
 An archived run is readable with `GET /api/paper-fund?run_id=<uuid>`.
 
-## Run the trial
+## Start the paper fund
 
 Apply the database migrations with the backend environment configured:
 
@@ -109,26 +109,35 @@ Start or restart the API and Celery worker/beat to load the new task:
 The existing `HF_TIINGO_STREAM_ENABLED`/provider settings supply market prices.
 A slow REST refresh alone can leave quotes outside the 120-second execution
 window; the engine waits rather than fabricating freshness. Keep the API stream,
-Redis, Celery worker and beat running through the trial.
+Redis, Celery worker and beat running through the run.
 
-On Capital or Opportunity Queue, select **Start $10,000 paper trial**. Entries, share
+On Capital or Opportunity Queue, select **Start $10,000 paper fund**. Entries, share
 counts and exits are then automatic. The panel shows available/reserved cash,
 equity, realized/unrealized P&L, fees, maximum drawdown and actual execution
 history. No one-week result exists until market observations accumulate.
 
 ## Validation
 
-Validation on October 2, 2026: **292 backend tests passed**, including six
+Validation on October 5, 2026: **299 backend tests passed**, including
 PostgreSQL integration tests; frontend lint, TypeScript checking and production
-build passed. The configured database reports migration `202610020002` and a
-responding Celery worker has `paper_fund.cycle` registered. No paper trial had
-been started at the time of that readiness check.
+build passed. Migration `202610050001` repairs databases where the earlier paper
+migration had already been applied without `start_key`. Database health now
+checks the required columns, not just connectivity or the migration version.
+Regression tests reproduce that schema mismatch and verify the repair through
+the API, including start retries.
+
+The requested Capital account reset was committed after a private backup. It
+clears that owner's Capital trades, positions, opportunities, paper runs and
+derived history, preserves other accounts and Invest, and establishes one
+$10,000 USD opening cash entry. Integration tests verify owner isolation,
+transactional reset guards and backup permissions. A new paper run awaits the
+**Start $10,000 paper fund** action.
 
 Unit tests cover accounting, immutable fills, precision, currency handling,
 signals, quote provenance, session boundaries, reservations, costs, stop gaps,
 drawdown halts, pause behavior and weekly termination. PostgreSQL tests cover
 concurrent starts/cycles/withdrawals, API owner isolation, quote ordering,
-historical attribution and preserved trial history. All migrations were also
+historical attribution and preserved run history. All migrations were also
 applied from an empty PostgreSQL database.
 
 ```sh
