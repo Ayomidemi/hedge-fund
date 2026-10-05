@@ -5,7 +5,7 @@ HF_PRICE_REFRESH_INTERVAL_SECONDS, HF_NEWS_POLL_INTERVAL_SECONDS, and
 HF_NEWS_POLL_JURISDICTIONS.
 
 Run locally:
-    celery -A app.workers.celery_app worker --beat -l info
+    ./scripts/dev-backend.sh
 """
 
 from celery import Celery, current_app
@@ -35,6 +35,8 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     task_ignore_result=True,
     worker_prefetch_multiplier=1,
+    # Long research/data jobs must never occupy the only execution worker.
+    task_routes={"paper_fund.cycle": {"queue": "execution"}},
     # A refresh cycle should never outlive the next tick by much.
     task_time_limit=max(settings.price_refresh_interval_seconds * 2, 180),
 )
@@ -66,7 +68,8 @@ def _prime_celery_fast_trace(**_kwargs) -> None:
 
 
 celery_app.conf.beat_schedule = {
-    "paper-fund": {"task": "paper_fund.cycle", "schedule": 30.0},
+    "paper-fund": {"task": "paper_fund.cycle", "schedule": 30.0,
+                   "options": {"expires": 30}},
     "price-refresh": {
         "task": "price_refresh.run",
         "schedule": float(settings.price_refresh_interval_seconds),

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.market_constants import RADAR_SECTOR_ETFS
-from app.models import Instrument, Opportunity, Position, RadarWatchlistItem
+from app.models import Instrument, Opportunity, PaperOrder, Position, RadarWatchlistItem
 from app.services.market_data.sessions import jurisdiction_for_ticker
 from app.services.market_data.universe import quote_symbol_for
 from app.services.market_radar.scoring import RadarCandidate
@@ -47,6 +47,9 @@ async def load_always_watched(session: AsyncSession) -> AlwaysWatchedSet:
             .distinct()
         )
     )
+    position_ids.update(await session.scalars(
+        select(PaperOrder.instrument_id).where(PaperOrder.status == "open").distinct()
+    ))
     opportunity_ids = set(
         await session.scalars(
             select(Opportunity.instrument_id)
@@ -55,6 +58,9 @@ async def load_always_watched(session: AsyncSession) -> AlwaysWatchedSet:
             .distinct()
         )
     )
+    opportunity_ids.update(await session.scalars(
+        select(PaperOrder.instrument_id).where(PaperOrder.status == "pending").distinct()
+    ))
     instrument_ids = position_ids | opportunity_ids
 
     if instrument_ids:

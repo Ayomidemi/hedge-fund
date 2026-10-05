@@ -3,10 +3,11 @@
 This module is the ONLY place allowed to call market data providers for live
 prices. Everything else reads from the instrument_quotes table.
 
-Chain (ordered by what free-tier plans actually allow):
-1. Tiingo IEX     - true batch endpoint, one request per cycle
-2. FMP /stable/quote - per-symbol fallback (free tier, ~250 calls/day)
-3. Polygon prev-close - per-symbol last resort (previous day's close)
+Chain:
+1. Tiingo IEX is the primary US quote source (one batch request).
+2. FMP, then Polygon, run only when Tiingo is unavailable: no key,
+   backoff, or the request itself failed. A successful Tiingo response
+   that omits a symbol is coverage, not a reason to call FMP.
 
 Nigerian tickers (SYMBOL.NG) are fetched from NGN Market's free search
 endpoint individually.
@@ -58,22 +59,30 @@ async def fetch_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
     for batch in _batches(us_tickers, PRICE_BATCH_SIZE):
         remaining = list(batch)
 
+        tiingo_available = False
         if remaining and settings.hf_tiingo_api_key:
-            fetched = await _fetch_tiingo_iex(remaining)
+            fetched, tiingo_available = await _fetch_tiingo_iex(remaining)
             quotes.update(fetched)
             remaining = [ticker for ticker in remaining if ticker not in fetched]
 
-        if remaining and settings.hf_fmp_api_key:
+        # Per-symbol providers are backups for an unavailable Tiingo, not a
+        # fill-in for names the IEX batch simply did not include.
+        if remaining and not tiingo_available and settings.hf_fmp_api_key:
             fetched = await _fetch_fmp_quotes(remaining)
             quotes.update(fetched)
             remaining = [ticker for ticker in remaining if ticker not in fetched]
 
-        if remaining and settings.hf_polygon_api_key:
+        if remaining and not tiingo_available and settings.hf_polygon_api_key:
             fetched = await _fetch_polygon_prev_close(remaining)
             quotes.update(fetched)
             remaining = [ticker for ticker in remaining if ticker not in fetched]
 
-        if remaining:
+        if remaining and tiingo_available:
+            logger.info(
+                "tiingo_quotes_omitted",
+                extra={"count": len(remaining)},
+            )
+        elif remaining:
             logger.warning(
                 "quotes_missing_after_provider_chain",
                 extra={"tickers": remaining},
@@ -90,8 +99,7 @@ def _batches(items: list[str], size: int) -> list[list[str]]:
 
 
 async def _fetch_fmp_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
-    """FMP /stable/quote is per-symbol on the free tier, so this is used as
-    a fallback for symbols the Tiingo batch missed - not for full batches."""
+    """Per-symbol FMP quotes. Call only when Tiingo could not serve the batch."""
     base_url = settings.fmp_base_url.removesuffix("/api")
     quotes: dict[str, LiveQuote] = {}
     now = datetime.now(timezone.utc)
@@ -110,7 +118,7 @@ async def _fetch_fmp_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
-                if _halt_provider_on_rate_limit("fmp", ticker, exc, now):
+                if _halt_provider("fmp", ticker, exc, now):
                     break
                 logger.warning(
                     "fmp_quote_failed",
@@ -159,7 +167,7 @@ async def _fetch_polygon_prev_close(tickers: list[str]) -> dict[str, LiveQuote]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
-                if _halt_provider_on_rate_limit("polygon", ticker, exc, now):
+                if _halt_provider("polygon", ticker, exc, now):
                     break
                 logger.warning(
                     "polygon_prev_close_failed",
@@ -189,10 +197,17 @@ async def _fetch_polygon_prev_close(tickers: list[str]) -> dict[str, LiveQuote]:
     return quotes
 
 
-async def _fetch_tiingo_iex(tickers: list[str]) -> dict[str, LiveQuote]:
+async def _fetch_tiingo_iex(
+    tickers: list[str],
+) -> tuple[dict[str, LiveQuote], bool]:
+    """Return quotes and whether Tiingo itself answered.
+
+    The second value is False when Tiingo is backing off or the request
+    failed. A list response is available even if some symbols are omitted.
+    """
     now = datetime.now(timezone.utc)
     if _provider_is_backing_off("tiingo", now):
-        return {}
+        return {}, False
     try:
         async with httpx.AsyncClient(
             base_url=settings.tiingo_base_url,
@@ -206,12 +221,12 @@ async def _fetch_tiingo_iex(tickers: list[str]) -> dict[str, LiveQuote]:
             response.raise_for_status()
             payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        if not _halt_provider_on_rate_limit("tiingo", ",".join(tickers[:3]), exc, now):
+        if not _halt_provider("tiingo", ",".join(tickers[:3]), exc, now):
             logger.warning("tiingo_iex_failed", extra={"error": str(exc)})
-        return {}
+        return {}, False
 
     if not isinstance(payload, list):
-        return {}
+        return {}, False
 
     quotes: dict[str, LiveQuote] = {}
     for item in payload:
@@ -238,7 +253,7 @@ async def _fetch_tiingo_iex(tickers: list[str]) -> dict[str, LiveQuote]:
             volume=_int(item.get("volume")),
             raw_payload=item,
         )
-    return quotes
+    return quotes, True
 
 
 async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
@@ -265,7 +280,7 @@ async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
-                if _halt_provider_on_rate_limit("ngn", ticker, exc, now):
+                if _halt_provider("ngn", ticker, exc, now):
                     break
                 logger.warning(
                     "ngn_quote_failed",
@@ -319,20 +334,29 @@ def _clear_provider_backoff(provider: str | None = None) -> None:
     _provider_backoff_until.pop(provider, None)
 
 
-def _halt_provider_on_rate_limit(
+# These will not succeed for the next symbol. One response is enough.
+_PROVIDER_HALT_STATUSES = frozenset({401, 402, 403, 429})
+
+
+def _halt_provider(
     provider: str,
     ticker: str,
     exc: Exception,
     now: datetime,
 ) -> bool:
-    """Stop the provider after one 429. Later calls stay quiet until backoff ends."""
-    if not _is_rate_limit_error(exc):
+    """Stop the provider after one plan, auth, or rate-limit failure.
+
+    Later calls stay quiet until backoff ends. Symbol-level misses (404) do not halt.
+    """
+    status_code = _provider_halt_status(exc)
+    if status_code is None:
         return False
     retry_after = _set_provider_backoff(provider, now)
     logger.warning(
-        f"{provider}_quote_rate_limited",
+        f"{provider}_quote_halted",
         extra={
             "ticker_symbol": ticker,
+            "status_code": status_code,
             "error": str(exc),
             "retry_after": retry_after.isoformat(),
         },
@@ -340,12 +364,13 @@ def _halt_provider_on_rate_limit(
     return True
 
 
-def _is_rate_limit_error(exc: Exception) -> bool:
-    return (
-        isinstance(exc, httpx.HTTPStatusError)
-        and exc.response is not None
-        and exc.response.status_code == 429
-    )
+def _provider_halt_status(exc: Exception) -> int | None:
+    if not isinstance(exc, httpx.HTTPStatusError) or exc.response is None:
+        return None
+    status_code = exc.response.status_code
+    if status_code in _PROVIDER_HALT_STATUSES or status_code >= 500:
+        return status_code
+    return None
 
 
 def _ngn_company_match(payload: object, symbol: str) -> dict | None:

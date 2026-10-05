@@ -7,10 +7,11 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest import IsolatedAsyncioTestCase, skipUnless
+from unittest.mock import patch
 from uuid import uuid4
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
 
@@ -108,6 +109,181 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
         async with self.factory() as session:
             count = await session.scalar(select(func.count(PaperOrder.id)).where(PaperOrder.run_id == a.run.id))
             self.assertEqual(count, 1)
+
+    async def test_order_expires_with_original_source_signal(self):
+        instrument_id, radar_id = await self.seed_signal()
+        async with self.factory() as session:
+            snapshot = await session.scalar(select(RadarSnapshot).where(RadarSnapshot.run_id == radar_id))
+            snapshot.source_as_of = NOW - timedelta(minutes=14)
+            await session.commit()
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        queued = await self.call_cycle()
+        self.assertEqual(queued.orders[0].expires_at, NOW + timedelta(minutes=1))
+        await self.quote(instrument_id, "100", NOW + timedelta(minutes=1))
+        expired = await self.call_cycle(NOW + timedelta(minutes=1))
+        self.assertEqual(expired.orders[0].status, "expired")
+        self.assertEqual(expired.run.cash_balance, D("10000"))
+
+    async def test_paper_orders_stay_on_radar_until_the_position_closes(self):
+        from app.services.market_radar.watchlist import load_always_watched
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        queued = await self.call_cycle()
+        ticker = queued.orders[0].ticker
+        async with self.factory() as session:
+            candidate = (await load_always_watched(session)).candidates[ticker]
+            self.assertTrue(candidate.in_opportunity_queue)
+            self.assertTrue(candidate.always_watched)
+            self.assertFalse(candidate.in_portfolio)
+        at = NOW + timedelta(seconds=30)
+        await self.quote(instrument_id, "100", at)
+        await self.call_cycle(at)
+        async with self.factory() as session:
+            candidate = (await load_always_watched(session)).candidates[ticker]
+            self.assertTrue(candidate.in_portfolio)
+            self.assertFalse(candidate.in_opportunity_queue)
+        at += timedelta(seconds=30)
+        await self.quote(instrument_id, "107", at)
+        await self.call_cycle(at)
+        async with self.factory() as session:
+            self.assertNotIn(ticker, (await load_always_watched(session)).candidates)
+
+    async def test_overview_during_fill_cannot_report_phantom_profit(self):
+        from app.services.paper_fund import engine as paper_engine
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        await self.call_cycle()
+        at = NOW + timedelta(seconds=30)
+        await self.quote(instrument_id, "100", at)
+        original_orders = paper_engine._orders
+        writer = None
+        async with self.factory() as reader:
+            async def orders_with_concurrent_fill(session, run):
+                nonlocal writer
+                if session is reader:
+                    writer = asyncio.create_task(self.call_cycle(at))
+                    # Give the competing transaction a chance to commit. A
+                    # coherent reader holds it until all balances are read.
+                    await asyncio.wait({writer}, timeout=0.2)
+                return await original_orders(session, run)
+            with patch.object(paper_engine, "_orders", orders_with_concurrent_fill):
+                report = await overview(reader, self.owner, now=at)
+        await asyncio.wait_for(writer, timeout=5)
+        self.assertEqual(report.run.total_pnl, report.run.realized_pnl + report.run.unrealized_pnl)
+        self.assertEqual(report.run.equity, D("10000"))
+        self.assertEqual(report.orders[0].status, "pending")
+
+    async def test_reused_session_refreshes_cash_orders_and_quotes(self):
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        await self.call_cycle()
+        async with self.factory() as reader:
+            old_run = await reader.scalar(select(PaperFundRun).where(PaperFundRun.owner_user_id == self.owner))
+            old_order = await reader.scalar(select(PaperOrder).where(PaperOrder.run_id == old_run.id))
+            old_quote = await reader.scalar(select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument_id))
+            await reader.commit()
+            at = NOW + timedelta(seconds=30)
+            await self.quote(instrument_id, "100", at)
+            filled = await self.call_cycle(at)
+            report = await overview(reader, self.owner, now=at)
+            self.assertEqual(report.run.cash_balance, filled.run.cash_balance)
+            self.assertEqual(report.orders[0].status, "open")
+            await reader.commit()
+            at += timedelta(seconds=30)
+            await self.quote(instrument_id, "107", at)
+            closed = await cycle(reader, self.owner, now=at)
+            self.assertEqual(closed.orders[0].status, "closed")
+            self.assertEqual(closed.run.total_pnl, closed.run.realized_pnl)
+            self.assertEqual(old_quote.price, D("107"))
+            self.assertEqual(old_order.status, "closed")
+
+    async def test_job_lock_survives_job_commits_and_releases_after_failure(self):
+        from app.db.locks import JOB_LOCK_NAMESPACE, hold_job_lock
+        key = 7_100_001
+        with self.assertRaisesRegex(RuntimeError, "job failed"):
+            async with hold_job_lock(self.engine, key) as acquired:
+                self.assertTrue(acquired)
+                async with self.factory() as session:
+                    await session.execute(text("SELECT 1"))
+                    await session.commit()
+                    # A live transaction pins the server connection even behind
+                    # a transaction pooler; a session lock followed by commit
+                    # leaves this NULL and can be stranded on another backend.
+                    pinned = await session.scalar(text("""
+                        SELECT a.xact_start IS NOT NULL
+                        FROM pg_locks AS l JOIN pg_stat_activity AS a ON a.pid = l.pid
+                        WHERE l.locktype = 'advisory' AND l.classid = :namespace
+                          AND l.objid = :key AND l.granted
+                    """), {"key": key, "namespace": JOB_LOCK_NAMESPACE})
+                    self.assertTrue(pinned)
+                async with hold_job_lock(self.engine, key) as duplicate:
+                    self.assertFalse(duplicate)
+                raise RuntimeError("job failed")
+        async with hold_job_lock(self.engine, key) as reacquired:
+            self.assertTrue(reacquired)
+
+    async def test_legacy_pooler_session_lock_cannot_strand_new_worker(self):
+        from app.db.locks import hold_job_lock
+        key = 7_100_002
+        async with self.engine.connect() as legacy_connection:
+            self.assertTrue(await legacy_connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key}))
+            await legacy_connection.commit()
+            try:
+                async with hold_job_lock(self.engine, key) as acquired:
+                    self.assertTrue(acquired)
+            finally:
+                await legacy_connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+                await legacy_connection.commit()
+
+    async def test_backdated_cycle_cannot_rewind_heartbeat(self):
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        later = NOW + timedelta(minutes=1)
+        await self.call_cycle(later)
+        report = await self.call_cycle(NOW)
+        self.assertEqual(report.run.last_cycle_at, later)
+
+    async def test_capital_dashboard_read_blocks_partial_trade_visibility(self):
+        from app.db.locks import lock_portfolio
+        from app.models import Portfolio
+        from app.services.portfolio import operating_core
+        async with self.factory() as session:
+            portfolio = await get_or_create_default_portfolio(session, self.user)
+            instrument = Instrument(ticker="CONSISTENT", name="Read race", asset_class="equity", currency="USD")
+            session.add(instrument)
+            await session.commit()
+            portfolio_id, instrument_id = portfolio.id, instrument.id
+
+        async def book_position():
+            async with self.factory() as session:
+                portfolio = await session.get(Portfolio, portfolio_id)
+                await lock_portfolio(session, portfolio)
+                session.add_all([
+                    CashLedgerEntry(portfolio_id=portfolio_id, entry_date=date.today(), amount=-1000,
+                                    currency="USD", entry_type="trade_buy"),
+                    Position(portfolio_id=portfolio_id, instrument_id=instrument_id, quantity=10,
+                             average_cost=100, market_value=1000, unrealized_pnl=0, opened_at=NOW),
+                ])
+                await session.commit()
+
+        original_cash = operating_core._list_cash_entries
+        writer = None
+        async with self.factory() as reader:
+            async def cash_with_concurrent_trade(session, portfolio_id):
+                nonlocal writer
+                entries = await original_cash(session, portfolio_id)
+                if session is reader:
+                    writer = asyncio.create_task(book_position())
+                    await asyncio.wait({writer}, timeout=0.2)
+                return entries
+            with patch.object(operating_core, "_list_cash_entries", cash_with_concurrent_trade):
+                dashboard = await operating_core.get_dashboard(reader, self.user)
+        await asyncio.wait_for(writer, timeout=5)
+        self.assertEqual(dashboard.nav, D("10000"))
+        self.assertEqual(dashboard.open_position_count, 0)
 
     async def test_pause_resume_week_end_and_start_replay_preserve_history(self):
         async with self.factory() as session:

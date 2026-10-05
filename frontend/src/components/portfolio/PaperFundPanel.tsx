@@ -121,7 +121,7 @@ export function PaperFundPanel({
   const status = overview ? run?.status ?? "not started" : loading ? "loading" : "unavailable";
   const canStart = overview && (!run || run.status === "completed");
   const staleCycle = Boolean(run && run.status !== "completed" && run.last_cycle_at && overview
-    && Date.parse(overview.generated_at) - Date.parse(run.last_cycle_at) > 5 * 60_000);
+    && Date.parse(overview.generated_at) - Date.parse(run.last_cycle_at) > 90_000);
 
   return (
     <div className="space-y-5">
@@ -165,7 +165,7 @@ export function PaperFundPanel({
             <span>Started {when(run.started_at)} · Trading period ends {when(run.ends_at)}</span>
             <span>Last engine cycle: {when(run.last_cycle_at)}</span>
           </div>
-          {staleCycle ? <p className="mx-5 mb-4 text-sm text-amber-700 dark:text-amber-400">The engine has not reported a cycle for over five minutes. Check worker status before relying on automatic execution.</p> : null}
+          {staleCycle ? <p className="mx-5 mb-4 text-sm text-amber-700 dark:text-amber-400">The engine has not reported a cycle for over 90 seconds. Automatic execution may be delayed.</p> : null}
           {run.halt_reason ? <p role="status" className="mx-5 mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{run.halt_reason}</p> : null}
           {run.status === "paused" ? <p className="mx-5 mb-4 text-sm text-zinc-500">New buys are paused. Existing positions retain their automatic exits.</p> : null}
           {run.status === "liquidating" ? <p className="mx-5 mb-4 text-sm text-zinc-500">The paper fund is closing positions when eligible market quotes are available. Final profit or loss remains provisional until every position closes.</p> : null}

@@ -79,7 +79,7 @@ def execution_rejection(
         if not isinstance(timestamp, datetime):
             return "The radar signal is missing an observation timestamp."
         age = (_utc(now) - _utc(timestamp)).total_seconds()
-        if age < 0 or age > MAX_SIGNAL_AGE_SECONDS:
+        if age < 0 or age >= MAX_SIGNAL_AGE_SECONDS:
             return "The radar signal must be no more than 15 minutes old and not future dated."
     if snapshot.radar_priority not in {"P0", "P1"}:
         return "The radar signal is below the execution priority threshold."

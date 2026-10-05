@@ -12,6 +12,9 @@ from app.models import Portfolio, RetailAccount
 PRICE_REFRESH_LOCK_KEY = 4_100_001
 RADAR_SCAN_LOCK_KEY = 4_100_002
 NEWS_POLL_LOCK_KEY = 4_100_003
+# Use the two-integer key space, separate from legacy bigint session locks
+# which may remain on pooler connections after an old worker has exited.
+JOB_LOCK_NAMESPACE = 20_261_005
 
 
 async def lock_retail_account(
@@ -27,9 +30,10 @@ async def lock_retail_account(
     return locked
 
 
-async def lock_portfolio(session: AsyncSession, portfolio: Portfolio) -> Portfolio:
+async def lock_portfolio(session: AsyncSession, portfolio: Portfolio, *, read: bool = False) -> Portfolio:
     locked = await session.scalar(
-        select(Portfolio).where(Portfolio.id == portfolio.id).with_for_update()
+        select(Portfolio).where(Portfolio.id == portfolio.id).with_for_update(read=read)
+        .execution_options(populate_existing=True)
     )
     if locked is None:
         raise RuntimeError("Portfolio was not found.")
@@ -51,25 +55,16 @@ async def lock_idempotency_scope(session: AsyncSession, scope: str, key: str) ->
 
 @asynccontextmanager
 async def hold_job_lock(engine: AsyncEngine, key: int) -> AsyncIterator[bool]:
-    """Hold a session advisory lock on a connection that outlives commits.
+    """Keep a dedicated lock transaction alive while job sessions commit.
 
-    The ORM session releases its connection on commit, which would strand a
-    lock taken on that connection and make later jobs skip forever.
+    Transaction poolers may change server connections at every commit, so a
+    session advisory lock can be stranded or accidentally re-entered. This
+    transaction pins its server connection and releases the lock on exit,
+    including exceptions, independently of commits in the job's ORM sessions.
     """
-    async with engine.connect() as connection:
+    async with engine.begin() as connection:
         locked = await connection.scalar(
-            text("SELECT pg_try_advisory_lock(:key)"),
-            {"key": key},
+            text("SELECT pg_try_advisory_xact_lock(:namespace, :key)"),
+            {"namespace": JOB_LOCK_NAMESPACE, "key": key},
         )
-        await connection.commit()
-        if not locked:
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            await connection.execute(
-                text("SELECT pg_advisory_unlock(:key)"),
-                {"key": key},
-            )
-            await connection.commit()
+        yield bool(locked)

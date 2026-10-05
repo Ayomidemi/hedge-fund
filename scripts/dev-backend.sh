@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the full backend stack: Redis, API, Celery worker + beat.
+# Start Redis, API, data worker + beat, and a dedicated execution worker.
 # Ctrl+C stops everything cleanly.
 set -euo pipefail
 
@@ -41,8 +41,12 @@ trap cleanup EXIT INT TERM
 
 cd "$BACKEND"
 
-echo "→ Starting Celery worker + beat..."
-"$VENV/bin/celery" -A app.workers.celery_app worker --beat -l info --concurrency "$CELERY_CONCURRENCY" &
+echo "→ Starting data worker + beat..."
+"$VENV/bin/celery" -A app.workers.celery_app worker --beat -l info --queues celery --hostname 'data@%h' --concurrency "$CELERY_CONCURRENCY" &
+PIDS+=($!)
+
+echo "→ Starting automatic execution worker..."
+"$VENV/bin/celery" -A app.workers.celery_app worker -l info --queues execution --hostname 'execution@%h' --concurrency 1 &
 PIDS+=($!)
 
 echo "→ Starting API at http://${API_HOST}:${API_PORT}"

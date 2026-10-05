@@ -28,8 +28,10 @@ a different opening balance.
    cannot be manually resumed. End-of-run liquidation waits for valid prices
    during an open session; results remain provisional until positions close.
 
-The worker runs every 30 seconds through Celery beat, independently of browser
-activity. A stale heartbeat appears after 90 seconds. Data and capacity blockers
+Celery beat schedules execution every 30 seconds on a dedicated `execution`
+queue, independently of browser activity and the data worker's longer jobs.
+Ticks expire after 30 seconds to avoid processing an accumulated backlog.
+A stale heartbeat appears after 90 seconds. Data and capacity blockers
 are visible in the UI. The stream subscription prioritizes open/pending paper
 orders, and continuous streaming traffic is flushed on a bounded cadence.
 
@@ -118,7 +120,7 @@ history. No one-week result exists until market observations accumulate.
 
 ## Validation
 
-Validation on October 5, 2026: **299 backend tests passed**, including
+Validation on October 5, 2026: **312 backend tests passed**, including
 PostgreSQL integration tests; frontend lint, TypeScript checking and production
 build passed. Migration `202610050001` repairs databases where the earlier paper
 migration had already been applied without `start_key`. Database health now
@@ -131,7 +133,9 @@ clears that owner's Capital trades, positions, opportunities, paper runs and
 derived history, preserves other accounts and Invest, and establishes one
 $10,000 USD opening cash entry. Integration tests verify owner isolation,
 transactional reset guards and backup permissions. A new paper run awaits the
-**Start $10,000 paper fund** action.
+**Start $10,000 paper fund** action. The owner subsequently started the new run;
+the second audit verified it running at $10,000 with no orders while waiting
+for the regular US session.
 
 Unit tests cover accounting, immutable fills, precision, currency handling,
 signals, quote provenance, session boundaries, reservations, costs, stop gaps,
@@ -154,3 +158,6 @@ npm run build
 
 Unit fixtures and database tests validate implementation behavior, not strategy
 profitability. The actual seven-day paper run is a separate experiment.
+
+See [the second audit](capital-second-audit.md) for additional concurrency,
+execution scheduling, signal expiry, and radar integration corrections.

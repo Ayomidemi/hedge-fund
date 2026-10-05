@@ -8,6 +8,7 @@ import httpx
 from app.core.config import settings
 from app.services.market_data.ingestion import is_us_market_open
 from app.services.market_data.quote_provider import (
+    LiveQuote,
     _clear_provider_backoff,
     _decimal,
     _epoch_datetime,
@@ -15,6 +16,7 @@ from app.services.market_data.quote_provider import (
     _fetch_polygon_prev_close,
     _int,
     _iso_datetime,
+    fetch_quotes,
 )
 from app.services.market_data.tiingo_stream import (
     build_subscribe_message,
@@ -137,6 +139,14 @@ class QuoteParsingTests(TestCase):
 
 
 class FxConversionTests(TestCase):
+    def test_ngn_trade_cannot_be_silently_valued_as_usd_in_an_eur_portfolio(self):
+        from app.models import FxRate, Instrument
+        from app.services.market_data.fx_convert import price_in_portfolio_base
+        rates = {("USD", "NGN"): FxRate(rate=Decimal("1500"))}
+        instrument = Instrument(ticker="NGTEST", currency="NGN", asset_class="equity")
+        self.assertIsNone(price_in_portfolio_base(Decimal("15000"), instrument, "EUR", rates))
+        self.assertEqual(price_in_portfolio_base(Decimal("15000"), instrument, "USD", rates), Decimal("10"))
+
     def test_convert_ngn_to_usd(self) -> None:
         from app.models import FxRate
 
@@ -217,7 +227,7 @@ class QuoteProviderRateLimitTests(IsolatedAsyncioTestCase):
         _clear_provider_backoff()
 
     async def test_fmp_stops_after_one_rate_limit_and_stays_quiet(self) -> None:
-        client = _rate_limited_client()
+        client = _status_error_client(429)
         with patch(
             "app.services.market_data.quote_provider.httpx.AsyncClient",
             return_value=client,
@@ -229,8 +239,21 @@ class QuoteProviderRateLimitTests(IsolatedAsyncioTestCase):
         self.assertEqual(second, {})
         self.assertEqual(client.get.await_count, 1)
 
+    async def test_fmp_stops_after_one_payment_required(self) -> None:
+        client = _status_error_client(402)
+        with patch(
+            "app.services.market_data.quote_provider.httpx.AsyncClient",
+            return_value=client,
+        ):
+            first = await _fetch_fmp_quotes(["EXYN", "EYPT", "FBDT"])
+            second = await _fetch_fmp_quotes(["NVDA"])
+
+        self.assertEqual(first, {})
+        self.assertEqual(second, {})
+        self.assertEqual(client.get.await_count, 1)
+
     async def test_polygon_stops_after_one_rate_limit_and_stays_quiet(self) -> None:
-        client = _rate_limited_client()
+        client = _status_error_client(429)
         with patch(
             "app.services.market_data.quote_provider.httpx.AsyncClient",
             return_value=client,
@@ -242,11 +265,83 @@ class QuoteProviderRateLimitTests(IsolatedAsyncioTestCase):
         self.assertEqual(second, {})
         self.assertEqual(client.get.await_count, 1)
 
+    async def test_fmp_is_skipped_when_tiingo_answers(self) -> None:
+        quote = _sample_quote("NVDA")
+        with (
+            patch(
+                "app.services.market_data.quote_provider.settings.hf_tiingo_api_key",
+                "tiingo-key",
+            ),
+            patch(
+                "app.services.market_data.quote_provider.settings.hf_fmp_api_key",
+                "fmp-key",
+            ),
+            patch(
+                "app.services.market_data.quote_provider.settings.hf_polygon_api_key",
+                "polygon-key",
+            ),
+            patch(
+                "app.services.market_data.quote_provider._fetch_tiingo_iex",
+                new=AsyncMock(return_value=({"NVDA": quote}, True)),
+            ),
+            patch(
+                "app.services.market_data.quote_provider._fetch_fmp_quotes",
+                new=AsyncMock(),
+            ) as fmp,
+            patch(
+                "app.services.market_data.quote_provider._fetch_polygon_prev_close",
+                new=AsyncMock(),
+            ) as polygon,
+        ):
+            quotes = await fetch_quotes(["NVDA", "EXYN"])
 
-def _rate_limited_client() -> AsyncMock:
+        self.assertEqual(set(quotes), {"NVDA"})
+        fmp.assert_not_awaited()
+        polygon.assert_not_awaited()
+
+    async def test_fmp_runs_only_when_tiingo_is_unavailable(self) -> None:
+        quote = _sample_quote("NVDA", source="fmp")
+        with (
+            patch(
+                "app.services.market_data.quote_provider.settings.hf_tiingo_api_key",
+                "tiingo-key",
+            ),
+            patch(
+                "app.services.market_data.quote_provider.settings.hf_fmp_api_key",
+                "fmp-key",
+            ),
+            patch(
+                "app.services.market_data.quote_provider.settings.hf_polygon_api_key",
+                None,
+            ),
+            patch(
+                "app.services.market_data.quote_provider._fetch_tiingo_iex",
+                new=AsyncMock(return_value=({}, False)),
+            ),
+            patch(
+                "app.services.market_data.quote_provider._fetch_fmp_quotes",
+                new=AsyncMock(return_value={"NVDA": quote}),
+            ) as fmp,
+        ):
+            quotes = await fetch_quotes(["NVDA"])
+
+        self.assertEqual(quotes["NVDA"].source, "fmp")
+        fmp.assert_awaited_once()
+
+
+def _sample_quote(ticker: str, source: str = "tiingo") -> LiveQuote:
+    return LiveQuote(
+        ticker=ticker,
+        price=Decimal("100"),
+        source=source,
+        as_of=datetime(2026, 10, 5, tzinfo=timezone.utc),
+    )
+
+
+def _status_error_client(status_code: int) -> AsyncMock:
     request = httpx.Request("GET", "https://example.test/quote")
-    response = httpx.Response(429, request=request)
-    error = httpx.HTTPStatusError("429", request=request, response=response)
+    response = httpx.Response(status_code, request=request)
+    error = httpx.HTTPStatusError(str(status_code), request=request, response=response)
 
     client = AsyncMock()
     client.__aenter__.return_value = client

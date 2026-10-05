@@ -185,8 +185,41 @@ class PaperFundTests(TestCase):
         process_orders(run, [order], {order.instrument_id: make_quote(order, at=saturday)}, saturday)
         self.assertEqual(order.status, "pending")
 
+    def test_delayed_quote_cannot_close_a_position_or_admit_new_risk(self):
+        run, order = make_run(), make_order()
+        process_orders(run, [order], {order.instrument_id: make_quote(order)}, NOW + timedelta(seconds=30))
+        latest = NOW + timedelta(seconds=90)
+        process_orders(run, [order], {order.instrument_id: make_quote(order, "103", at=latest)}, latest)
+        pending = make_order(ticker="NEXT", submitted_at=latest)
+        now = NOW + timedelta(seconds=100)
+        blockers = process_orders(run, [order, pending], {
+            order.instrument_id: make_quote(order, "90", at=NOW + timedelta(seconds=60)),
+            pending.instrument_id: make_quote(pending, at=now),
+        }, now)
+        self.assertEqual(order.status, "open")
+        self.assertEqual(order.mark_price, D("103"))
+        self.assertEqual(pending.status, "pending")
+        self.assertTrue(any("predates" in reason for reason in blockers))
+
+    def test_sizing_accounts_for_stop_fill_rounding_at_risk_boundary(self):
+        run = make_run()
+        run.policy.update(max_position_pct=100, max_sector_pct=100, cash_reserve_pct=0)
+        for price in (D("5.17"), D("9.99"), D("18.27"), D("100.07")):
+            quantity, limit, stop, target = size_order(run, [], price, "Technology")
+            order = make_order(quantity=quantity, limit_price=limit, stop_price=stop, target_price=target)
+            # A same-reference-price fill must not cancel its own accepted risk plan.
+            from decimal import ROUND_FLOOR
+            fillable_quote = (limit / D("1.001")).quantize(D("0.000001"), rounding=ROUND_FLOOR)
+            fresh_run = make_run(policy=dict(run.policy))
+            process_orders(fresh_run, [order], {order.instrument_id: make_quote(order, str(fillable_quote))}, NOW + timedelta(seconds=30))
+            self.assertEqual(order.status, "open", f"sized order at {price} rejected its own planned risk")
+
 
 class ExecutionEligibilityTests(TestCase):
+    def test_signal_at_expiry_is_not_queued(self):
+        signal = make_signal(source_as_of=NOW - timedelta(minutes=15))
+        self.assertIsNotNone(execution_rejection(signal, make_quote(make_order(), at=NOW), NOW))
+
     def test_complete_signal_is_eligible_but_not_negative_or_illiquid(self):
         quote = make_quote(make_order(), at=NOW)
         self.assertIsNone(execution_rejection(make_signal(), quote, NOW))

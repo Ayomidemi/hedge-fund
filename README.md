@@ -70,6 +70,10 @@ Start the full backend stack (Redis + API + Celery) with one command:
 ./scripts/dev-backend.sh
 ```
 
+This starts a data worker on the `celery` queue and a separate worker on the
+`execution` queue. Keep both workers and beat running: paper entries and exits
+must remain independent of slow radar, news, or price-refresh jobs.
+
 Stop API and Celery:
 
 ```bash

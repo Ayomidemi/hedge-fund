@@ -15,7 +15,7 @@ from app.api.schemas.paper_fund import (
 )
 from app.db.locks import lock_idempotency_scope
 from app.models import Instrument, InstrumentQuote, PaperEquitySnapshot, PaperFundRun, PaperOrder, RadarRun, RadarSnapshot
-from app.services.market_radar.execution import execution_rejection, quote_rejection
+from app.services.market_radar.execution import MAX_SIGNAL_AGE_SECONDS, execution_rejection, quote_rejection
 from app.services.paper_fund.calendar import market_blocker
 
 ZERO = Decimal("0")
@@ -91,7 +91,7 @@ def size_order(run: PaperFundRun, orders: list[PaperOrder], price: Decimal, sect
     budget = min(cash_budget, equity * Decimal(str(policy["max_position_pct"])) / 100, sector_budget)
     risk_budget = equity * Decimal(str(policy["risk_per_trade_pct"])) / 100
     # Include modeled stop slippage and both execution fees in planned risk.
-    stop_fill = stop * (1 - Decimal(str(policy["slippage_bps"])) / 10000)
+    stop_fill = (stop * (1 - Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
     risk_per_share = limit - stop_fill + (limit + stop_fill) * Decimal(str(policy["fee_bps"])) / 10000
     quantity = max(0, int(min(budget / limit, risk_budget / risk_per_share)))
     while quantity and (quantity * limit + fee(quantity * limit, policy) > budget
@@ -116,6 +116,15 @@ def _update_drawdown(run: PaperFundRun, orders: list[PaperOrder]) -> Decimal:
     return drawdown
 
 
+def _position_quote_rejection(order: PaperOrder, quote: InstrumentQuote | None, now: datetime) -> str | None:
+    error = quote_rejection(quote, now)
+    if error:
+        return error
+    if order.mark_as_of is not None and utc(quote.as_of) < utc(order.mark_as_of):
+        return "The quote predates the position's latest mark."
+    return None
+
+
 def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, now: datetime) -> list[str]:
     """Pure state transition used by the locked service and deterministic tests."""
     now = utc(now)
@@ -137,7 +146,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         if order.status != "open":
             continue
         quote = quotes.get(order.instrument_id)
-        error = quote_rejection(quote, now)
+        error = _position_quote_rejection(order, quote, now)
         if error:
             blockers.append(f"{order.ticker}: {error} Holding last available mark; exit awaits valid data.")
         elif not session_error and (order.mark_as_of is None or utc(quote.as_of) >= utc(order.mark_as_of)):
@@ -152,7 +161,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         if order.status != "open" or session_error:
             continue
         quote = quotes.get(order.instrument_id)
-        if quote_rejection(quote, now) or utc(quote.as_of) <= utc(order.entry_quote_at):
+        if _position_quote_rejection(order, quote, now) or utc(quote.as_of) <= utc(order.entry_quote_at):
             continue
         reason = None
         if run.status in {"liquidating", "halted"}:
@@ -176,7 +185,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         order.exit_quote_at = quote.as_of
         order.exit_reason = reason
     # Any unreliable open mark stops new risk, but never disables exit processing.
-    uncertain_marks = any(quote_rejection(quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
+    uncertain_marks = any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
     for order in orders:
         if order.status != "pending" or run.status != "running" or session_error or uncertain_marks:
             continue
@@ -230,18 +239,22 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
     return list(dict.fromkeys(blockers))
 
 
-async def _latest(session: AsyncSession, owner: str, *, lock: bool = False, run_id: UUID | None = None) -> PaperFundRun | None:
+async def _latest(session: AsyncSession, owner: str, *, lock: bool = False,
+                  read_lock: bool = False, run_id: UUID | None = None) -> PaperFundRun | None:
     stmt = select(PaperFundRun).where(PaperFundRun.owner_user_id == owner)
     if run_id is not None:
         stmt = stmt.where(PaperFundRun.id == run_id)
     stmt = stmt.order_by(PaperFundRun.started_at.desc()).limit(1)
     if lock:
-        stmt = stmt.with_for_update().execution_options(populate_existing=True)
-    return await session.scalar(stmt)
+        stmt = stmt.with_for_update()
+    elif read_lock:
+        stmt = stmt.with_for_update(read=True)
+    return await session.scalar(stmt.execution_options(populate_existing=True))
 
 
 async def _orders(session: AsyncSession, run: PaperFundRun) -> list[PaperOrder]:
-    return list(await session.scalars(select(PaperOrder).where(PaperOrder.run_id == run.id).order_by(PaperOrder.submitted_at)))
+    return list(await session.scalars(select(PaperOrder).where(PaperOrder.run_id == run.id)
+                                      .order_by(PaperOrder.submitted_at).execution_options(populate_existing=True)))
 
 
 async def _snapshot(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, *, force=False) -> None:
@@ -302,19 +315,20 @@ async def control_run(session: AsyncSession, owner: str, action: str) -> PaperFu
 
 
 async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = None) -> PaperFundResponse:
-    now = utc(now or datetime.now(timezone.utc))
     run = await _latest(session, owner, lock=True)
+    # Evaluate freshness after waiting for the previous cycle's lock.
+    now = utc(now or datetime.now(timezone.utc))
     if run is None:
         raise PaperFundError("Start the paper fund first.")
-    if run.status == "completed":
+    if run.status == "completed" or (run.last_cycle_at is not None and now < utc(run.last_cycle_at)):
         return await overview(session, owner, now=now)
     orders = await _orders(session, run)
     quotes = {q.instrument_id: q for q in await session.scalars(select(InstrumentQuote).where(
-        InstrumentQuote.instrument_id.in_([o.instrument_id for o in orders])))} if orders else {}
+        InstrumentQuote.instrument_id.in_([o.instrument_id for o in orders])).execution_options(populate_existing=True))} if orders else {}
     before = [(o.id, o.status) for o in orders]
     blockers = process_orders(run, orders, quotes, now)
     if run.status == "running" and not market_blocker(now):
-        stale_held = any(quote_rejection(quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
+        stale_held = any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
         if not stale_held:
             await _queue_signals(session, run, orders, now, blockers)
     run.last_cycle_at = now
@@ -360,7 +374,9 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
             limit_price=limit, stop_price=stop, target_price=target,
             entry_fee=ZERO, exit_fee=ZERO, realized_pnl=ZERO,
             submitted_at=now, expires_at=min(now + timedelta(minutes=run.policy["order_ttl_minutes"]),
-                                            utc(snapshot.as_of) + timedelta(minutes=15), utc(run.ends_at)),
+                                            utc(snapshot.as_of) + timedelta(seconds=MAX_SIGNAL_AGE_SECONDS),
+                                            utc(snapshot.source_as_of) + timedelta(seconds=MAX_SIGNAL_AGE_SECONDS),
+                                            utc(run.ends_at)),
             thesis=f"Confirmed positive radar momentum ({snapshot.change_pct}% session move), with measured liquidity and confirmation.",
             evidence={"radar_snapshot_id": str(snapshot.id), "radar_run_id": str(radar_run.id),
                       "quote_as_of": quote.as_of.isoformat(), "quote_source": quote.source,
@@ -376,7 +392,9 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
 
 async def overview(session: AsyncSession, owner: str, *, now: datetime | None = None, run_id: UUID | None = None) -> PaperFundResponse:
     now = utc(now or datetime.now(timezone.utc))
-    run = await _latest(session, owner, run_id=run_id)
+    # Keep cash, orders and history on the same committed state while a worker
+    # fills orders. The request's session releases this read lock on close.
+    run = await _latest(session, owner, run_id=run_id, read_lock=True)
     if run is None:
         return PaperFundResponse(generated_at=now, run=None, orders=[], equity_history=[],
                                  blockers=["Start the $10,000 paper fund to enable automatic execution."],

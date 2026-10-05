@@ -130,7 +130,10 @@ async def get_dashboard(
     session: AsyncSession,
     user: AuthenticatedUser,
 ) -> PortfolioDashboardResponse:
-    portfolio = await get_or_create_default_portfolio(session, user)
+    # Cash and inventory must not straddle a concurrently committed trade/reset.
+    portfolio = await lock_portfolio(
+        session, await get_or_create_default_portfolio(session, user), read=True
+    )
 
     cash_entries = await _list_cash_entries(session, portfolio.id)
     positions = await _list_positions(session, portfolio.id)

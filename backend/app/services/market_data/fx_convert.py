@@ -30,9 +30,7 @@ def price_in_portfolio_base(
     if currency == base:
         return price
 
-    if currency == "NGN" and (
-        is_nigerian_instrument(instrument) or currency == "NGN"
-    ):
+    if currency == "NGN" and base == "USD":
         return convert_to_usd(price, "NGN", fx_rates)
 
     logger.warning(
