@@ -78,7 +78,7 @@ export function InvestCash({
   return (
     <div className="w-full space-y-4">
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-xs uppercase tracking-wide text-zinc-500">Cash</p>
+        <p className="text-xs uppercase tracking-wide text-zinc-500">Total cash</p>
         <p className="mt-2 text-3xl font-semibold tabular-nums">{money(account.cash)}</p>
         <p className="mt-2 text-sm text-zinc-500">
           Buying power {money(account.buying_power)} · paper only

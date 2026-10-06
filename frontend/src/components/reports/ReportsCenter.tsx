@@ -113,7 +113,7 @@ export function ReportsCenter({
   const summaryMetrics = useMemo(() => {
     if (!report) return [];
     return [
-      { label: "NAV", value: money(report.nav), tone: "neutral" },
+      { label: "Account value", value: money(report.nav), tone: "neutral" },
       {
         label: "Period P/L",
         value: report.attribution ? money(report.attribution.net_pnl) : "-",
@@ -628,8 +628,8 @@ function OverviewView({
 
         <Panel title="Period Snapshot" subtitle={formatDateTime(report.generated_at)}>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-            <SmallMetric label="Cash" value={money(report.cash_balance)} />
-            <SmallMetric label="Invested" value={money(report.invested_value)} />
+            <SmallMetric label="Total cash" value={money(report.cash_balance)} />
+            <SmallMetric label="Holdings value" value={money(report.invested_value)} />
             <SmallMetric label="Cash flow" value={money(report.period_cash_flow)} />
             <SmallMetric label="Activity" value={`${report.period_trade_count} trades`} />
           </div>
@@ -752,12 +752,12 @@ function AttributionDetailView({
           </div>
         </Panel>
 
-        <Panel title="Capital Reconciliation" subtitle="External capital against NAV">
+        <Panel title="Capital Reconciliation" subtitle="Net contributions compared with account value">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <SmallMetric label="External flow" value={money(summary.net_external_flow)} />
-            <SmallMetric label="Cash" value={money(summary.cash_balance)} />
-            <SmallMetric label="Invested" value={money(summary.invested_value)} />
-            <SmallMetric label="NAV P/L" value={money(summary.portfolio_pnl_from_nav)} />
+            <SmallMetric label="Total cash" value={money(summary.cash_balance)} />
+            <SmallMetric label="Holdings value" value={money(summary.invested_value)} />
+            <SmallMetric label="Account profit / loss" value={money(summary.portfolio_pnl_from_nav)} />
             <SmallMetric label="Recon gap" value={money(summary.reconciliation_gap)} />
             <SmallMetric label="Profit factor" value={summary.profit_factor ?? "-"} />
             <SmallMetric label="Deposits" value={money(summary.total_deposits)} />
@@ -1096,7 +1096,7 @@ function SnapshotModal({
 
           <div className="grid gap-3 sm:grid-cols-3">
             <SmallMetric label="Saved" value={formatDateTime(snapshot.created_at)} />
-            <SmallMetric label="NAV" value={snapshot.nav ? money(snapshot.nav) : "-"} />
+            <SmallMetric label="Account value" value={snapshot.nav ? money(snapshot.nav) : "-"} />
             <SmallMetric
               label="Return"
               value={snapshot.return_pct ? pct(snapshot.return_pct) : "-"}
@@ -1323,7 +1323,7 @@ function AttributionRows({
                 {money(row.net_pnl)}
               </p>
               <p className="text-xs text-zinc-500">
-                {pct(row.contribution_pct_nav)} NAV
+                {pct(row.contribution_pct_nav)} of account value
               </p>
             </div>
           </div>
@@ -1758,9 +1758,9 @@ function buildReportLines(report: MonthlyReport) {
     report.commentary,
     "",
     "Summary",
-    `NAV: ${money(report.nav)}`,
-    `Cash: ${money(report.cash_balance)}`,
-    `Invested: ${money(report.invested_value)}`,
+    `Account value: ${money(report.nav)}`,
+    `Total cash: ${money(report.cash_balance)}`,
+    `Holdings value: ${money(report.invested_value)}`,
     `Period cash flow: ${money(report.period_cash_flow)}`,
     `Trades: ${report.period_trade_count}`,
     `Research memos: ${report.period_memo_count}`,
@@ -1850,7 +1850,7 @@ function exportRows(rows: MonthlyReportAttributionRow[]) {
   if (rows.length === 0) return ["None."];
   return rows.map(
     (row) =>
-      `${row.ticker}: ${money(row.net_pnl)} (${pct(row.contribution_pct_nav)} NAV)`,
+      `${row.ticker}: ${money(row.net_pnl)} (${pct(row.contribution_pct_nav)} of account value)`,
   );
 }
 
@@ -1880,9 +1880,9 @@ function printReport(report: MonthlyReport) {
 function buildPrintableReportHtml(report: MonthlyReport) {
   const aiOverview = report.ai_overview ?? buildClientAiOverview(report);
   const summaryRows = [
-    ["NAV", money(report.nav)],
-    ["Cash", money(report.cash_balance)],
-    ["Invested", money(report.invested_value)],
+    ["Account value", money(report.nav)],
+    ["Total cash", money(report.cash_balance)],
+    ["Holdings value", money(report.invested_value)],
     ["Period cash flow", money(report.period_cash_flow)],
     ["Trades", String(report.period_trade_count)],
     ["Research memos", String(report.period_memo_count)],

@@ -199,8 +199,8 @@ export function RiskCentre({ initialOverview, unavailable }: RiskCentreProps) {
         )}
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <Metric label="NAV" value={money(snapshot.nav)} />
-          <Metric label="Cash" value={`${pct(snapshot.cash_pct)}%`} />
+          <Metric label="Account value" value={money(snapshot.nav)} />
+          <Metric label="Cash allocation" value={`${pct(snapshot.cash_pct)}%`} />
           <Metric label="Gross" value={`${pct(snapshot.gross_exposure_pct)}%`} />
           <Metric label="Volatility" value={optionalPct(snapshot.portfolio_volatility_pct)} />
           <Metric label="VaR 95" value={optionalPct(snapshot.var_95_pct)} />
@@ -362,7 +362,7 @@ function StressPanel({
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_0.72fr]">
-      <Panel title="Stress Results" subtitle="NAV impact under standard and custom shocks">
+      <Panel title="Stress Results" subtitle="Hypothetical account value under standard and custom shocks">
         <div className="space-y-5">
           <HorizontalBarPlot
             data={allStress.map((stress) => ({
@@ -377,7 +377,7 @@ function StressPanel({
             empty="No stress tests"
           />
           <DataTable
-            headers={["Scenario", "NAV after", "Impact", "Severity", "Worst hit"]}
+            headers={["Scenario", "Hypothetical value", "Impact", "Severity", "Worst hit"]}
             rows={allStress.map((stress) => [
               stress.scenario_name,
               money(stress.nav_after),
@@ -399,7 +399,7 @@ function StressPanel({
             <Field label="Market Shock %">
               <input name="market_shock_pct" defaultValue="-8" className={inputClass} />
             </Field>
-            <Field label="Cash Shock % NAV">
+            <Field label="Cash shock (% of account value)">
               <input name="cash_shock_pct" defaultValue="0" className={inputClass} />
             </Field>
           </div>
@@ -513,7 +513,7 @@ function PreTradePanel({
               <Metric label="Decision" value={formatLabel(result.decision)} />
               <Metric label="Risk Level" value={formatLabel(result.risk_level)} />
               <Metric label="Cash Impact" value={money(result.cash_impact)} />
-              <Metric label="Pro-Forma NAV" value={money(result.pro_forma_snapshot.nav)} />
+              <Metric label="Hypothetical account value" value={money(result.pro_forma_snapshot.nav)} />
             </div>
             {result.messages.length > 0 && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950">

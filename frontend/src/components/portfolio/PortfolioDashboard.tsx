@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
+import { CapitalIcon } from "@/components/ui/CapitalIcon";
 import { ManualTradeModal } from "@/components/portfolio/ManualTradeModal";
 import { HorizontalBarPlot } from "@/components/ui/plots";
 import {
@@ -13,7 +14,6 @@ import type { OperatingCoreDashboard } from "@/lib/api";
 
 type PortfolioDashboardProps = {
   dashboard: OperatingCoreDashboard | null;
-  controls?: ReactNode;
   automatic?: boolean;
   onTradeClosed?: () => void;
 };
@@ -42,7 +42,7 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-export function PortfolioDashboard({ dashboard, controls, automatic = false, onTradeClosed }: PortfolioDashboardProps) {
+export function PortfolioDashboard({ dashboard, automatic = false, onTradeClosed }: PortfolioDashboardProps) {
   const [tradeModalOpen, setTradeModalOpen] = useState(false);
 
   if (!dashboard) {
@@ -53,68 +53,84 @@ export function PortfolioDashboard({ dashboard, controls, automatic = false, onT
     );
   }
 
-  const metrics = [
-    { label: "NAV", value: money(dashboard.nav) },
-    { label: "Cash", value: money(dashboard.cash_balance) },
-    { label: "Invested", value: money(dashboard.invested_value) },
-    { label: "Positions", value: String(dashboard.open_position_count) },
-    { label: "Trades", value: String(dashboard.trade_count) },
-  ];
   const breachedChecks = dashboard.risk_checks.filter((check) => !check.passed);
   const recentCash = dashboard.recent_cash_entries.slice(0, 10);
 
   return (
     <>
       <div className="mx-auto flex max-w-[1560px] flex-col gap-5">
-        <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-                {dashboard.portfolio.name}
-              </p>
-              <h2 className="mt-1 text-2xl font-semibold tracking-tight">Capital</h2>
-              {controls ? <div className="mt-4">{controls}</div> : null}
-              {dashboard.prices_as_of ? (
-                <p className="mt-1 text-xs text-zinc-500">
-                  Prices as of{" "}
-                  {new Intl.DateTimeFormat("en-US", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  }).format(new Date(dashboard.prices_as_of))}
-                </p>
-              ) : null}
-            </div>
-            <div
-              className={`rounded-full px-3.5 py-1.5 text-sm font-medium ${
-                breachedChecks.length === 0
-                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
-                  : "bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300"
-              }`}
-            >
-              {breachedChecks.length === 0
-                ? "Risk within limits"
-                : `${breachedChecks.length} risk breach${breachedChecks.length === 1 ? "" : "es"}`}
-            </div>
-          </div>
+        <section className="grid gap-5 xl:grid-cols-2">
+          <DataTable title="Your holdings" eyebrow="Capital">
+            <thead>
+              <tr>
+                <Th>Ticker</Th>
+                <Th>Class</Th>
+                <Th>Quantity</Th>
+                <Th>Market value</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {dashboard.positions.map((position) => (
+                <tr key={position.id}>
+                  <Td emphasis>{position.instrument.ticker}</Td>
+                  <Td>{formatLabel(position.instrument.asset_class)}</Td>
+                  <Td>{Number(position.quantity).toLocaleString()}</Td>
+                  <Td align="right">{money(position.market_value)}</Td>
+                </tr>
+              ))}
+              {dashboard.positions.length === 0 && <EmptyRow columns={4} message="No open positions" />}
+            </tbody>
+          </DataTable>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            {metrics.map((metric) => (
-              <div
-                key={metric.label}
-                className="rounded-xl border border-zinc-100 bg-zinc-50/70 px-4 py-3.5 dark:border-zinc-900 dark:bg-zinc-900/40"
-              >
-                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  {metric.label}
-                </p>
-                <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight">
-                  {metric.value}
-                </p>
+          <DataTable
+            title="Recent trades"
+            eyebrow="Recent"
+            action={
+              <div className="flex items-center gap-2">
+                <Link href="/trade-journal" className={ghostButtonClassName}>
+                  View all
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setTradeModalOpen(true)}
+                  disabled={automatic}
+                  title={automatic ? "Switch to Manual to record a trade" : undefined}
+                  className={`${ghostButtonClassName} disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  Record trade
+                </button>
               </div>
-            ))}
-          </div>
+            }
+          >
+            <thead>
+              <tr>
+                <Th>Ticker</Th>
+                <Th>Side</Th>
+                <Th>Quantity</Th>
+                <Th>Price</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {dashboard.recent_trades.map((trade) => (
+                <tr key={trade.id}>
+                  <Td emphasis>{trade.instrument.ticker}</Td>
+                  <Td>{formatLabel(trade.side)}</Td>
+                  <Td>{Number(trade.quantity).toLocaleString()}</Td>
+                  <Td align="right">
+                    {trade.executed_price ? money(trade.executed_price) : "—"}
+                  </Td>
+                </tr>
+              ))}
+              {dashboard.recent_trades.length === 0 && (
+                <EmptyRow columns={4} message="No trades recorded yet" />
+              )}
+            </tbody>
+          </DataTable>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+        <details className="border-t border-zinc-200/70 pt-4 dark:border-zinc-800" open={breachedChecks.length > 0}>
+          <summary className="cursor-pointer text-xs font-medium text-zinc-500">Risk &amp; allocation · {breachedChecks.length ? `${breachedChecks.length} limits breached` : "Within limits"}</summary>
+          <div className="mt-4 grid gap-5 xl:grid-cols-2">
           <Panel title="Risk centre" eyebrow="Controls">
             <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
               {dashboard.risk_checks.map((check) => (
@@ -138,77 +154,12 @@ export function PortfolioDashboard({ dashboard, controls, automatic = false, onT
               <ExposureList title="Sector" buckets={dashboard.sector_exposure} />
             </div>
           </Panel>
-        </section>
+          </div>
+        </details>
 
-        <section className="grid gap-5 xl:grid-cols-2">
-          <DataTable title="Position book" eyebrow="Holdings">
-            <thead>
-              <tr>
-                <Th>Ticker</Th>
-                <Th>Class</Th>
-                <Th>Qty</Th>
-                <Th>Value</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {dashboard.positions.map((position) => (
-                <tr key={position.id}>
-                  <Td emphasis>{position.instrument.ticker}</Td>
-                  <Td>{formatLabel(position.instrument.asset_class)}</Td>
-                  <Td>{Number(position.quantity).toLocaleString()}</Td>
-                  <Td align="right">{money(position.market_value)}</Td>
-                </tr>
-              ))}
-              {dashboard.positions.length === 0 && <EmptyRow columns={4} message="No open positions" />}
-            </tbody>
-          </DataTable>
-
-          <DataTable
-            title="Trade journal"
-            eyebrow="Recent"
-            action={
-              <div className="flex items-center gap-2">
-                <Link href="/trade-journal" className={ghostButtonClassName}>
-                  View all
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => setTradeModalOpen(true)}
-                  disabled={automatic}
-                  title={automatic ? "Switch to Manual to record a trade" : undefined}
-                  className={`${ghostButtonClassName} disabled:cursor-not-allowed disabled:opacity-50`}
-                >
-                  Record trade
-                </button>
-              </div>
-            }
-          >
-            <thead>
-              <tr>
-                <Th>Ticker</Th>
-                <Th>Side</Th>
-                <Th>Qty</Th>
-                <Th>Price</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {dashboard.recent_trades.map((trade) => (
-                <tr key={trade.id}>
-                  <Td emphasis>{trade.instrument.ticker}</Td>
-                  <Td>{formatLabel(trade.side)}</Td>
-                  <Td>{Number(trade.quantity).toLocaleString()}</Td>
-                  <Td align="right">
-                    {trade.executed_price ? money(trade.executed_price) : "—"}
-                  </Td>
-                </tr>
-              ))}
-              {dashboard.recent_trades.length === 0 && (
-                <EmptyRow columns={4} message="No trades recorded yet" />
-              )}
-            </tbody>
-          </DataTable>
-        </section>
-
+        <details className="border-t border-zinc-200/70 pt-4 dark:border-zinc-800">
+          <summary className="cursor-pointer text-xs font-medium text-zinc-500">Recent cash movements</summary>
+          <div className="mt-4">
         <DataTable
           title="Cash ledger"
           eyebrow="Recent movements"
@@ -251,6 +202,8 @@ export function PortfolioDashboard({ dashboard, controls, automatic = false, onT
             )}
           </tbody>
         </DataTable>
+          </div>
+        </details>
       </div>
 
       <ManualTradeModal open={tradeModalOpen} onClose={() => { setTradeModalOpen(false); onTradeClosed?.(); }} />
@@ -295,13 +248,13 @@ function DataTable({
   children: React.ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-900">
+    <div className="overflow-hidden rounded-2xl border border-zinc-200/80 bg-white dark:border-zinc-800/80 dark:bg-[#111316]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-900">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+          <p className="sr-only">
             {eyebrow}
           </p>
-          <h3 className="mt-1 text-sm font-semibold">{title}</h3>
+          <h3 className="text-sm font-semibold">{title}</h3>
         </div>
         {action}
       </div>
@@ -317,7 +270,7 @@ const ghostButtonClassName =
 
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className="border-b border-zinc-100 bg-zinc-50/80 px-5 py-3 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-900 dark:bg-zinc-900/50">
+    <th className="border-b border-zinc-100 bg-zinc-50/80 px-5 py-3 text-[11px] font-medium text-zinc-500 dark:text-zinc-400 dark:border-zinc-900 dark:bg-zinc-900/50">
       {children}
     </th>
   );
@@ -354,7 +307,8 @@ function Td({
 function EmptyRow({ columns, message }: { columns: number; message: string }) {
   return (
     <tr>
-      <td colSpan={columns} className="px-5 py-8 text-center text-sm text-zinc-500">
+      <td colSpan={columns} className="px-5 py-9 text-center text-xs text-zinc-500 dark:text-zinc-400">
+        <CapitalIcon name="journal" className="mx-auto mb-3 h-6 w-6 text-zinc-300 dark:text-zinc-700" />
         {message}
       </td>
     </tr>
@@ -371,12 +325,12 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="rounded-2xl border border-zinc-200/80 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#111316]">
       <div className="border-b border-zinc-100 pb-4 dark:border-zinc-900">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+        <p className="sr-only">
           {eyebrow}
         </p>
-        <h3 className="mt-1 text-sm font-semibold">{title}</h3>
+        <h3 className="text-sm font-semibold">{title}</h3>
       </div>
       <div className="pt-1">{children}</div>
     </div>

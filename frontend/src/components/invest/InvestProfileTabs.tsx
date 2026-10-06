@@ -68,7 +68,7 @@ function AccountTab({ profile }: { profile: InvestProfile }) {
       <h3 className="text-lg font-semibold">Account</h3>
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
         <Metric
-          label="Cash"
+          label="Total cash"
           value={money(profile.account.cash, profile.account.base_currency)}
         />
         <Metric

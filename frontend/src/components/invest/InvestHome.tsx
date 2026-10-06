@@ -63,13 +63,14 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
 
         <div className="grid divide-y divide-zinc-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-6 dark:divide-zinc-900">
           <SummaryMetric
-            label="Portfolio value"
+            label="Account value"
             value={money(home.portfolio_value, baseCurrency)}
             large
+            subValue="Total cash + holdings value"
           />
-          <SummaryMetric label="Cash" value={money(home.cash, baseCurrency)} />
+          <SummaryMetric label="Total cash" value={money(home.cash, baseCurrency)} />
           <SummaryMetric
-            label="Invested"
+            label="Holdings value"
             value={money(home.invested, baseCurrency)}
           />
           <SummaryMetric

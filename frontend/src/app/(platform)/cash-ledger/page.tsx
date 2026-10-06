@@ -1,17 +1,17 @@
 import { CashLedgerHistory } from "@/components/ledger/CashLedgerHistory";
-import { getCashLedgerHistory, type CashLedgerEntry } from "@/lib/api";
+import { getCashLedgerHistory, getPaperFund } from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
 
 export default async function CashLedgerPage() {
-  let entries: CashLedgerEntry[] = [];
-  let isUnavailable = false;
   const accessToken = await getServerAccessToken();
+  const [ledger, account] = await Promise.allSettled([
+    getCashLedgerHistory({ accessToken }),
+    getPaperFund({ accessToken }),
+  ]);
 
-  try {
-    entries = await getCashLedgerHistory({ accessToken });
-  } catch {
-    isUnavailable = true;
-  }
-
-  return <CashLedgerHistory entries={entries} isUnavailable={isUnavailable} />;
+  return <CashLedgerHistory
+    entries={ledger.status === "fulfilled" ? ledger.value : []}
+    isUnavailable={ledger.status === "rejected"}
+    overview={account.status === "fulfilled" ? account.value : null}
+  />;
 }

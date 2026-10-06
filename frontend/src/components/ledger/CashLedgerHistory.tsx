@@ -9,9 +9,12 @@ import {
   formatSignedAmount,
 } from "@/components/ledger/cash-ledger-ui";
 import { buttonPrimaryClassName } from "@/components/ui/form-styles";
-import type { CashLedgerEntry } from "@/lib/api";
+import type { CashLedgerEntry, PaperFundOverview } from "@/lib/api";
+
+import { CapitalBalanceSummary } from "@/components/portfolio/CapitalBalanceSummary";
 
 type CashLedgerHistoryProps = {
+  overview: PaperFundOverview | null;
   entries: CashLedgerEntry[];
   isUnavailable?: boolean;
 };
@@ -31,11 +34,11 @@ function formatDate(value: string) {
 
 export function CashLedgerHistory({
   entries,
+  overview,
   isUnavailable = false,
 }: CashLedgerHistoryProps) {
   const [modalOpen, setModalOpen] = useState(false);
 
-  const totalCash = entries.reduce((total, entry) => total + Number(entry.amount), 0);
   const netIn = entries
     .filter((entry) => Number(entry.amount) > 0)
     .reduce((sum, entry) => sum + Number(entry.amount), 0);
@@ -56,11 +59,10 @@ export function CashLedgerHistory({
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-6 py-5 dark:border-zinc-800">
             <div>
               <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-                Cash balance
+                Capital · Cash ledger
               </p>
-              <h2 className="mt-1 text-3xl font-semibold tabular-nums tracking-tight">
-                {currency.format(totalCash)}
-              </h2>
+              <h2 className="mt-1 text-2xl font-semibold tracking-tight">Cash movements</h2>
+              <p className="mt-1 text-sm text-zinc-500">Deposits, withdrawals, trade settlements and fees for your Capital account.</p>
             </div>
             <button
               type="button"
@@ -71,19 +73,27 @@ export function CashLedgerHistory({
             </button>
           </div>
 
+          <div className="p-6">
+            {overview?.capital ? <>
+              <CapitalBalanceSummary capital={overview.capital} run={overview.run} compact />
+              <p className="mt-4 text-xs text-zinc-500">Account snapshot: {new Date(overview.generated_at).toLocaleString()}. Reserved cash is included in total cash.</p>
+            </> : <p role="status" className="text-sm text-amber-700 dark:text-amber-400">Account balances are unavailable. Refresh to retry; movement totals below are not your available cash.</p>}
+          </div>
           <div className="grid divide-y divide-zinc-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
-            <Stat label="Total inflows" value={currency.format(netIn)} />
-            <Stat label="Total outflows" value={currency.format(Math.abs(netOut))} />
-            <Stat label="Entries" value={String(entries.length)} />
+            <Stat label="Recorded inflows" value={isUnavailable ? "—" : currency.format(netIn)} />
+            <Stat label="Recorded outflows" value={isUnavailable ? "—" : currency.format(Math.abs(netOut))} />
+            <Stat label="Entries" value={isUnavailable ? "—" : String(entries.length)} />
           </div>
         </section>
+
+        <p className="text-xs text-zinc-500">Inflows and outflows include trading activity. They measure money moving through the account, not profit or loss.</p>
 
         <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
           <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
             <div>
               <h3 className="text-sm font-semibold">Movement history</h3>
               <p className="mt-0.5 text-sm text-zinc-500">
-                {entries.length} recorded movement{entries.length === 1 ? "" : "s"}
+                {isUnavailable ? "Movement history unavailable" : `${entries.length} recorded movement${entries.length === 1 ? "" : "s"}`}
               </p>
             </div>
             <Link
@@ -124,7 +134,7 @@ export function CashLedgerHistory({
                     </Td>
                   </tr>
                 ))}
-                {entries.length === 0 && (
+                {entries.length === 0 && !isUnavailable && (
                   <tr>
                     <td colSpan={5} className="px-6 py-16 text-center">
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">

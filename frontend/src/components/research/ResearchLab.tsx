@@ -186,7 +186,7 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
 
   const summary = overview.summary;
   const metrics = [
-    { label: "NAV", value: money(summary.nav) },
+    { label: "Account value", value: money(summary.nav) },
     { label: "Memos", value: String(summary.research_memo_count) },
     { label: "Opportunities", value: String(summary.active_opportunity_count) },
     { label: "Datasets", value: String(summary.dataset_count) },

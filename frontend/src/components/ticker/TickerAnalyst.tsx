@@ -1240,7 +1240,7 @@ function EntryPlanReadonly({ plan }: { plan: NonNullable<TickerVerdict["entry_pl
         <Brief label="Invalidation" value={plan.invalidation ?? "—"} />
         <Brief
           label="Max loss"
-          value={plan.max_loss_pct_nav ? `${plan.max_loss_pct_nav}% NAV` : "—"}
+          value={plan.max_loss_pct_nav ? `${plan.max_loss_pct_nav}% of account value` : "—"}
         />
       </div>
       {plan.confirmed ? (
@@ -1338,7 +1338,7 @@ function EntryPlanEditor({
           />
         </label>
         <label className="block text-sm">
-          <span className="text-xs uppercase tracking-wide text-zinc-500">Max loss % NAV</span>
+          <span className="text-xs uppercase tracking-wide text-zinc-500">Max loss (% of account value)</span>
           <input
             name="max_loss_pct_nav"
             required

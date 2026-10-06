@@ -203,9 +203,9 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
         </div>
 
         <div className="grid divide-y divide-zinc-200 sm:grid-cols-4 sm:divide-x sm:divide-y-0 dark:divide-zinc-800">
-          <Metric label="NAV" value={money(overview.nav)} />
+          <Metric label="Account value" value={money(overview.nav)} />
           <Metric label="Alpha allocation" value={pct(overview.alpha_allocation_total_pct)} />
-          <Metric label="Cash" value={overview.cash_pct ? pct(overview.cash_pct) : "—"} />
+          <Metric label="Cash allocation" value={overview.cash_pct ? pct(overview.cash_pct) : "—"} />
           <Metric label="Treasury target" value={pct(overview.treasury_target_pct)} />
         </div>
 
