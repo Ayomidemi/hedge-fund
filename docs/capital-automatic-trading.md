@@ -8,14 +8,19 @@ broker orders.
 - **Automatic:** the engine consumes eligible radar signals, reserves existing
   Capital cash, sizes limit orders, and manages their exits. Each fill books a
   normal Capital trade and cash movement in the same locked transaction.
-- **Manual:** pending automatic buys are cancelled and all automatic buys and
-  sells stop, including stop-loss, target and timed exits. Existing holdings
-  remain in Capital. Price updates and performance monitoring continue.
+- **Manual:** pending automatic buys are cancelled and discretionary automatic
+  buys and sells stop, including stop-loss, target and timed exits. Existing
+  holdings remain in Capital. Marks and drawdown tracking continue, but Manual
+  does not latch a new risk halt (that would block resume while refusing to
+  sell). If drawdown is already above policy, the UI reports that Automatic
+  would halt and liquidate.
 - Switching back resumes the same review period when possible. Starting a new
   seven-day review uses current equity and cash; it never deposits another
   $10,000 or deletes previous history. A latched risk halt cannot be cleared by
-  switching modes. An expired period completes its scheduled liquidation when
-  automation is enabled, then returns to Manual.
+  switching modes; forced halt/end-of-review liquidation still completes even
+  if the account is switched to Manual, so open risk cannot be stranded. An
+  expired period completes its scheduled liquidation when automation is
+  enabled, then returns to Manual.
 
 Manual trade entry requires Manual mode. Manually trading an instrument
 releases that instrument's existing automatic plan; any remaining shares stay

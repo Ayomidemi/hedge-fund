@@ -124,13 +124,79 @@ class PaperFundTests(TestCase):
         self.assertEqual(order.exit_reason, "take_profit")
         self.assertGreater(order.realized_pnl, 0)
 
-    def test_paused_run_continues_protective_exits(self):
+    def test_manual_mode_stops_discretionary_exits(self):
         run, order = make_run(), make_order()
         process_orders(run, [order], {order.instrument_id: make_quote(order)}, NOW + timedelta(seconds=30))
         run.status = "paused"
         later = NOW + timedelta(minutes=1)
-        process_orders(run, [order], {order.instrument_id: make_quote(order, "95", at=later)}, later)
+        process_orders(
+            run,
+            [order],
+            {order.instrument_id: make_quote(order, "95", at=later)},
+            later,
+            automatic_execution=False,
+        )
+        self.assertEqual(order.status, "open")
+
+    def test_manual_mode_does_not_latch_drawdown_halt(self):
+        run, order = make_run(), make_order()
+        process_orders(run, [order], {order.instrument_id: make_quote(order)}, NOW + timedelta(seconds=30))
+        run.status = "paused"
+        run.high_water_equity = D("11000")
+        later = NOW + timedelta(minutes=1)
+        blockers = process_orders(
+            run,
+            [order],
+            {order.instrument_id: make_quote(order, "100", at=later)},
+            later,
+            automatic_execution=False,
+        )
+        self.assertEqual(run.status, "paused")
+        self.assertIsNone(run.halt_reason)
+        self.assertEqual(order.status, "open")
+        self.assertTrue(any("Automatic mode would halt" in reason for reason in blockers))
+
+    def test_latched_halt_still_liquidates_in_manual_mode(self):
+        run, order = make_run(), make_order()
+        process_orders(run, [order], {order.instrument_id: make_quote(order)}, NOW + timedelta(seconds=30))
+        run.status = "halted"
+        run.halt_reason = "5% peak-to-trough drawdown limit reached; automatic liquidation."
+        later = NOW + timedelta(minutes=1)
+        process_orders(
+            run,
+            [order],
+            {order.instrument_id: make_quote(order, "100", at=later)},
+            later,
+            automatic_execution=False,
+        )
         self.assertEqual(order.status, "closed")
+        self.assertEqual(order.exit_reason, "drawdown_halt")
+
+    def test_automatic_mode_latches_halt_after_manual_drawdown(self):
+        run, order = make_run(), make_order()
+        process_orders(run, [order], {order.instrument_id: make_quote(order)}, NOW + timedelta(seconds=30))
+        run.status = "paused"
+        run.high_water_equity = D("11000")
+        later = NOW + timedelta(minutes=1)
+        process_orders(
+            run,
+            [order],
+            {order.instrument_id: make_quote(order, "100", at=later)},
+            later,
+            automatic_execution=False,
+        )
+        self.assertIsNone(run.halt_reason)
+        run.status = "running"
+        process_orders(
+            run,
+            [order],
+            {order.instrument_id: make_quote(order, "100", at=later + timedelta(seconds=30))},
+            later + timedelta(seconds=30),
+            automatic_execution=True,
+        )
+        self.assertEqual(run.status, "halted")
+        self.assertTrue(run.halt_reason)
+        self.assertEqual(order.exit_reason, "drawdown_halt")
 
     def test_stale_future_or_unverifiable_quotes_never_fill(self):
         for quote_at, raw, stale in ((NOW - timedelta(minutes=5), None, False),

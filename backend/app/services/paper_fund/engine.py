@@ -157,18 +157,42 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
             order.mark_price = quote.price
             order.mark_as_of = quote.as_of
     drawdown = _update_drawdown(run, orders)
-    if drawdown >= Decimal(str(policy["max_drawdown_pct"])) and not run.halt_reason:
-        run.halt_reason = f"{policy['max_drawdown_pct']}% peak-to-trough drawdown limit reached; automatic liquidation."
+    # Manual mode still marks and tracks drawdown, but must not latch a halt
+    # that blocks resume while also refusing to sell.
+    if (
+        automatic_execution
+        and drawdown >= Decimal(str(policy["max_drawdown_pct"]))
+        and not run.halt_reason
+    ):
+        run.halt_reason = (
+            f"{policy['max_drawdown_pct']}% peak-to-trough drawdown limit "
+            "reached; automatic liquidation."
+        )
         run.status = "halted"
         _cancel_pending(orders, run.halt_reason)
+    elif (
+        not automatic_execution
+        and not run.halt_reason
+        and drawdown >= Decimal(str(policy["max_drawdown_pct"]))
+    ):
+        blockers.append(
+            f"Drawdown is {drawdown.quantize(Decimal('0.01'))}% against the "
+            f"{policy['max_drawdown_pct']}% policy. Automatic mode would halt "
+            "and liquidate."
+        )
     for order in orders:
-        if order.status != "open" or session_error or not automatic_execution:
+        if order.status != "open" or session_error:
+            continue
+        # Forced risk exits complete even in Manual so a latched halt cannot
+        # strand open positions. Discretionary stops/targets stay Automatic-only.
+        forced_exit = run.status in {"liquidating", "halted"}
+        if not automatic_execution and not forced_exit:
             continue
         quote = quotes.get(order.instrument_id)
         if _position_quote_rejection(order, quote, now) or utc(quote.as_of) <= utc(order.entry_quote_at):
             continue
         reason = None
-        if run.status in {"liquidating", "halted"}:
+        if forced_exit:
             reason = "drawdown_halt" if run.halt_reason else "review_period_ended"
         elif quote.price <= order.stop_price:
             reason = "stop_loss"
@@ -231,10 +255,19 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         order.entry_quote_at = quote.as_of
         order.mark_price = quote.price
         order.mark_as_of = quote.as_of
-    if _update_drawdown(run, orders) >= Decimal(str(policy["max_drawdown_pct"])) and not run.halt_reason:
-        run.halt_reason = f"{policy['max_drawdown_pct']}% drawdown limit reached after execution costs; automatic liquidation."
+    if (
+        automatic_execution
+        and _update_drawdown(run, orders) >= Decimal(str(policy["max_drawdown_pct"]))
+        and not run.halt_reason
+    ):
+        run.halt_reason = (
+            f"{policy['max_drawdown_pct']}% drawdown limit reached after "
+            "execution costs; automatic liquidation."
+        )
         run.status = "halted"
         _cancel_pending(orders, run.halt_reason)
+    elif not automatic_execution:
+        _update_drawdown(run, orders)
     if run.status in {"liquidating", "halted"} and not any(o.status == "open" for o in orders):
         # Keep a risk halt latched until the experiment ends, even when flat.
         if run.status == "liquidating" or now >= utc(run.ends_at):
