@@ -2,7 +2,8 @@ export function money(
   value: string | number | null | undefined,
   currency = "USD",
 ) {
-  const amount = Number(value ?? 0);
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+  const amount = Number(value);
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -10,9 +11,10 @@ export function money(
   }).format(amount);
 }
 
-export function signedMoney(value: string | number | null | undefined) {
-  const amount = Number(value ?? 0);
-  const formatted = money(Math.abs(amount));
+export function signedMoney(value: string | number | null | undefined, currency = "USD") {
+  if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+  const amount = Number(value);
+  const formatted = money(Math.abs(amount), currency);
   if (amount > 0) return `+${formatted}`;
   if (amount < 0) return `-${formatted}`;
   return formatted;

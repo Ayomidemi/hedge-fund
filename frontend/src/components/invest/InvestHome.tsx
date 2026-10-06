@@ -3,19 +3,19 @@
 import Link from "next/link";
 import {
   buttonPrimaryClassName,
-  buttonSecondaryClassName,
 } from "@/components/ui/form-styles";
 import type {
   InvestAllocationBucket,
   InvestHolding,
   InvestHome as InvestHomeData,
 } from "@/lib/api";
-import { money, signedPercent } from "@/components/invest/format";
+import { InvestAccountSummary } from "@/components/invest/InvestAccountSummary";
+import { money, signedMoney, signedPercent } from "@/components/invest/format";
 
 export function InvestHome({ home }: { home: InvestHomeData | null }) {
   if (!home) {
     return (
-      <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="rounded-sm border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Pease Invest could not load your paper account yet. Sign in again or
         refresh.
       </div>
@@ -23,163 +23,26 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
   }
 
   const baseCurrency = home.account.base_currency;
-  const todayTone =
-    Number(home.today_change ?? 0) > 0
-      ? "text-emerald-700 dark:text-emerald-300"
-      : Number(home.today_change ?? 0) < 0
-        ? "text-red-700 dark:text-red-300"
-        : "text-zinc-600 dark:text-zinc-400";
-  const returnTone =
-    Number(home.total_return) > 0
-      ? "text-emerald-700 dark:text-emerald-300"
-      : Number(home.total_return) < 0
-        ? "text-red-700 dark:text-red-300"
-        : "text-zinc-600 dark:text-zinc-400";
-
-  return (
-    <div className="w-full space-y-4">
-      <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-100 p-5 dark:border-zinc-900 sm:p-6">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-              Paper account {home.account.account_number}
-            </p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight">
-              Invest home
-            </h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              Fixed income first. Listed instruments stay as secondary paper trades.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/invest/markets" className={buttonPrimaryClassName}>
-              Explore fixed income
-            </Link>
-            {/* <Link href="/invest/markets" className={buttonSecondaryClassName}>
-              Search
-            </Link> */}
-          </div>
-        </div>
-
-        <div className="grid divide-y divide-zinc-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-6 dark:divide-zinc-900">
-          <SummaryMetric
-            label="Account value"
-            value={money(home.portfolio_value, baseCurrency)}
-            large
-            subValue="Total cash + holdings value"
-          />
-          <SummaryMetric label="Total cash" value={money(home.cash, baseCurrency)} />
-          <SummaryMetric
-            label="Holdings value"
-            value={money(home.invested, baseCurrency)}
-          />
-          <SummaryMetric
-            label="Today"
-            value={
-              home.today_change != null
-                ? signedMoney(home.today_change, baseCurrency)
-                : "—"
-            }
-            valueClassName={todayTone}
-            subValue={signedPercent(home.today_change_pct)}
-          />
-          <SummaryMetric
-            label="Total return"
-            value={signedMoney(home.total_return, baseCurrency)}
-            valueClassName={returnTone}
-            subValue={signedPercent(home.total_return_pct)}
-          />
-          <SummaryMetric
-            label="Buying power"
-            value={money(home.account.buying_power, baseCurrency)}
-          />
-        </div>
-      </section>
-
-      <section className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
-        <Panel title="Allocation" eyebrow="Book shape">
-          <AllocationList
-            allocation={home.allocation}
-            fallbackCurrency={baseCurrency}
-          />
-        </Panel>
-
-        <Panel title="Next actions" eyebrow="Invest workflow">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {home.quick_actions.map((action) => (
-              <Link
-                key={action.href}
-                href={action.href}
-                className="rounded-xl border border-zinc-200 p-4 transition hover:border-emerald-700 hover:bg-emerald-50/40 dark:border-zinc-800 dark:hover:border-emerald-700 dark:hover:bg-emerald-950/20"
-              >
-                <p className="font-medium">{action.title}</p>
-                <p className="mt-1 text-sm leading-5 text-zinc-500">
-                  {action.detail}
-                </p>
-              </Link>
-            ))}
-          </div>
-        </Panel>
-      </section>
-
-      <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
-        <HoldingsPanel holdings={home.holdings} />
-        <Panel title="Market context" eyebrow="Briefing">
-          <div className="space-y-3">
-            {home.headlines.map((item) => (
-              <p
-                key={item}
-                className="rounded-xl bg-zinc-50 p-3 text-sm leading-6 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
-              >
-                {item}
-              </p>
-            ))}
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link href="/invest/discover" className={buttonSecondaryClassName}>
-              Discover
-            </Link>
-            <Link href="/invest/news" className={buttonSecondaryClassName}>
-              News
-            </Link>
-            <Link href="/invest/activity" className={buttonSecondaryClassName}>
-              Activity
-            </Link>
-          </div>
-        </Panel>
-      </section>
+  return <div className="space-y-9">
+    <div className="flex flex-wrap items-end justify-between gap-5">
+      <div><p className="mb-2 text-xs text-stone-500 dark:text-stone-400">Paper account · {home.account.account_number}</p><h2 className="text-3xl sm:text-4xl">Your investments.</h2></div>
+      <Link href="/invest/markets" className="inline-flex items-center gap-8 border border-[#4b583d] bg-[#4b583d] px-5 py-3 text-sm text-white transition hover:bg-[#3a462e]">Explore investments <span aria-hidden="true">↗</span></Link>
     </div>
-  );
-}
-
-function SummaryMetric({
-  label,
-  large = false,
-  subValue,
-  value,
-  valueClassName,
-}: {
-  label: string;
-  large?: boolean;
-  subValue?: string;
-  value: string;
-  valueClassName?: string;
-}) {
-  return (
-    <div className="px-5 py-4 sm:px-6">
-      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-        {label}
-      </p>
-      <p
-        className={`mt-2 font-semibold tabular-nums tracking-tight ${
-          large ? "text-3xl" : "text-2xl"
-        } ${valueClassName ?? ""}`}
-      >
-        {value}
-      </p>
-      {subValue ? <p className="mt-1 text-sm text-zinc-500">{subValue}</p> : null}
+    <InvestAccountSummary home={home} />
+    <div className="grid items-start gap-9 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <HoldingsPanel holdings={home.holdings} />
+      <Panel title="Where your money is" eyebrow="Allocation"><AllocationList allocation={home.allocation} fallbackCurrency={baseCurrency} /></Panel>
     </div>
-  );
+    <div className="grid gap-9 border-t border-[var(--pease-rule)] pt-7 lg:grid-cols-2">
+      <Panel title="From the desk" eyebrow="Market notes">
+        <div className="divide-y divide-[var(--pease-rule)]">{home.headlines.map(item => <p key={item} className="py-3 text-sm leading-6 text-stone-600 first:pt-0 dark:text-stone-400">{item}</p>)}{home.headlines.length === 0 ? <p className="text-sm text-stone-500">Market notes will appear when available.</p> : null}</div>
+        <Link href="/invest/news" className="mt-5 inline-block text-sm underline decoration-stone-400 underline-offset-4">Read the news ↗</Link>
+      </Panel>
+      <Panel title="Your next move" eyebrow="Quick links">
+        <div className="divide-y divide-[var(--pease-rule)]">{home.quick_actions.map(action => <Link key={action.href} href={action.href} className="group flex items-start justify-between gap-4 py-4 first:pt-0"><div><p className="font-medium group-hover:underline">{action.title}</p><p className="mt-1 text-sm text-stone-500 dark:text-stone-400">{action.detail}</p></div><span className="pt-1 text-stone-500" aria-hidden="true">↗</span></Link>)}</div>
+      </Panel>
+    </div>
+  </div>;
 }
 
 function Panel({
@@ -192,11 +55,11 @@ function Panel({
   title: string;
 }) {
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+    <section className="min-w-0">
+      <p className="text-xs text-stone-500 dark:text-stone-400">
         {eyebrow}
       </p>
-      <h3 className="mt-1 text-lg font-semibold">{title}</h3>
+      <h3 className="pease-editorial mt-1 text-xl">{title}</h3>
       <div className="mt-5">{children}</div>
     </section>
   );
@@ -211,9 +74,8 @@ function AllocationList({
 }) {
   if (allocation.length === 0) {
     return (
-      <p className="rounded-xl bg-zinc-50 p-4 text-sm text-zinc-500 dark:bg-zinc-900">
-        Nothing allocated yet. Cash will appear here once the paper account is
-        ready.
+      <p className="border-t border-[var(--pease-rule)] py-5 text-sm text-stone-500">
+        No allocation data is available yet.
       </p>
     );
   }
@@ -230,9 +92,9 @@ function AllocationList({
                 {money(bucket.value, fallbackCurrency)} - {pct.toFixed(2)}%
               </p>
             </div>
-            <div className="mt-2 h-2 rounded-full bg-zinc-100 dark:bg-zinc-900">
+            <div className="mt-2 h-2 bg-stone-200 dark:bg-zinc-900">
               <div
-                className="h-2 rounded-full bg-emerald-700"
+                className="h-2 bg-[#647252]"
                 style={{ width: `${pct}%` }}
               />
             </div>
@@ -249,28 +111,28 @@ function HoldingsPanel({
   holdings: InvestHolding[];
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-900">
+    <section className="min-w-0 overflow-hidden">
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+          <p className="text-xs text-stone-500 dark:text-stone-400">
             Positions
           </p>
-          <h3 className="mt-1 text-lg font-semibold">Income and market book</h3>
+          <h3 className="pease-editorial mt-1 text-xl">Your holdings</h3>
         </div>
-        <Link href="/invest/portfolio" className={buttonSecondaryClassName}>
-          Portfolio
+        <Link href="/invest/portfolio" className="text-sm underline underline-offset-4">
+          View portfolio
         </Link>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left text-sm">
+        <table className="w-full min-w-[640px] text-left text-sm">
           <thead>
             <tr>
               <Th>Instrument</Th>
               <Th>Class</Th>
               <Th>Quantity</Th>
               <Th>Value</Th>
-              <Th>Return</Th>
+              <Th>Unrealized P/L</Th>
               <Th>Weight</Th>
             </tr>
           </thead>
@@ -313,7 +175,7 @@ function HoldingsPanel({
             {holdings.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-5 py-10 text-center text-sm text-zinc-500">
-                  No paper positions yet. Start with Markets to compare fixed-income products.
+                  No holdings yet. Explore markets to find your first investment.
                 </td>
               </tr>
             ) : null}
@@ -356,14 +218,6 @@ function Td({
       {children}
     </td>
   );
-}
-
-function signedMoney(value: string | number | null | undefined, currency: string) {
-  const amount = Number(value ?? 0);
-  const formatted = money(Math.abs(amount), currency);
-  if (amount > 0) return `+${formatted}`;
-  if (amount < 0) return `-${formatted}`;
-  return formatted;
 }
 
 function assetClassLabel(value: string | null) {

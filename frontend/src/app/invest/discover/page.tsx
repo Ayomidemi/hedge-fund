@@ -19,7 +19,7 @@ export default async function InvestDiscoverPage() {
 
   if (!discover) {
     return (
-      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-sm border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Unusual activity could not load yet. Refresh or try again shortly.
       </div>
     );
@@ -39,7 +39,7 @@ export default async function InvestDiscoverPage() {
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
         <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_360px] sm:p-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
@@ -55,7 +55,7 @@ export default async function InvestDiscoverPage() {
               <p className="mt-2 text-sm text-zinc-500">{discover.summary}</p>
             ) : null}
           </div>
-          <aside className="rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
+          <aside className="rounded-sm bg-zinc-50 p-4 dark:bg-zinc-900">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Scan status
             </p>
@@ -101,7 +101,7 @@ export default async function InvestDiscoverPage() {
             <DiscoverSectionPanel key={section.id} section={section} compact />
           ))}
           {discover.next_actions.length > 0 ? (
-            <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-5 dark:border-zinc-800 dark:bg-[#151613]">
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                 Next
               </p>
@@ -123,7 +123,7 @@ export default async function InvestDiscoverPage() {
 }
 
 const quickLinkClassName =
-  "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900";
+  "rounded-lg border border-stone-300/70 bg-[#fffefb] px-3 py-2 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300 dark:hover:bg-zinc-900";
 
 function DiscoverSectionPanel({
   compact = false,
@@ -135,7 +135,7 @@ function DiscoverSectionPanel({
   section: InvestDiscoverSection;
 }) {
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
       <div className="border-b border-zinc-100 p-5 dark:border-zinc-900">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -180,7 +180,7 @@ function DiscoverCard({
 }) {
   const content = (
     <div
-      className={`h-full rounded-xl border border-zinc-200 bg-white p-4 transition dark:border-zinc-800 dark:bg-zinc-950 ${
+      className={`h-full rounded-sm border border-stone-300/70 bg-[#fffefb] p-4 transition dark:border-zinc-800 dark:bg-[#151613] ${
         item.href ? "hover:bg-zinc-50 dark:hover:bg-zinc-900" : ""
       }`}
     >
@@ -229,7 +229,7 @@ function DiscoverCard({
 
 function SummaryMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-white p-2 dark:bg-zinc-950">
+    <div className="rounded-lg bg-[#fffefb] p-2 dark:bg-[#151613]">
       <p className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-1 font-semibold tabular-nums">{value}</p>
     </div>

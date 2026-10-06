@@ -1,15 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Source_Sans_3, Libre_Baskerville } from "next/font/google";
 import { ToastProvider } from "@/components/ui/ToastProvider";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const sourceSans = Source_Sans_3({
+  variable: "--font-source-sans",
+  display: "swap",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const baskerville = Libre_Baskerville({
+  variable: "--font-baskerville",
+  weight: ["400", "700"],
+  display: "swap",
   subsets: ["latin"],
 });
 
@@ -26,7 +29,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${sourceSans.variable} ${baskerville.variable} h-full antialiased`}
     >
       <body className="min-h-full font-sans">
         <ToastProvider position="top-right">{children}</ToastProvider>

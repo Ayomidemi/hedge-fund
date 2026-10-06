@@ -18,8 +18,8 @@ export function InvestProfileTabs({ profile }: { profile: InvestProfile }) {
 
   return (
     <div className="w-full">
-      <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 p-5 dark:border-zinc-800">
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-stone-300/70 p-5 dark:border-zinc-800">
           <div>
             <p className="text-xs uppercase tracking-wide text-zinc-500">
               Pease Invest
@@ -36,7 +36,7 @@ export function InvestProfileTabs({ profile }: { profile: InvestProfile }) {
           </Link>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-b border-zinc-200 p-4 dark:border-zinc-800">
+        <div className="flex flex-wrap gap-2 border-b border-stone-300/70 p-4 dark:border-zinc-800">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -45,7 +45,7 @@ export function InvestProfileTabs({ profile }: { profile: InvestProfile }) {
               className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
                 activeTab === tab.key
                   ? "bg-emerald-800 font-medium text-white"
-                  : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+                  : "border border-stone-300/70 bg-[#fffefb] text-zinc-600 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-400"
               }`}
             >
               {tab.label}
@@ -105,7 +105,7 @@ function AccessTab({ profile }: { profile: InvestProfile }) {
   return (
     <div>
       <h3 className="text-lg font-semibold">Access</h3>
-      <div className="mt-5 divide-y divide-zinc-100 rounded-xl border border-zinc-200 dark:divide-zinc-900 dark:border-zinc-800">
+      <div className="mt-5 divide-y divide-zinc-100 rounded-sm border border-stone-300/70 dark:divide-zinc-900 dark:border-zinc-800">
         {profile.permissions.map((permission) => (
           <PermissionRow key={permission.code} permission={permission} />
         ))}
@@ -129,7 +129,7 @@ function AccessTab({ profile }: { profile: InvestProfile }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
+    <div className="rounded-sm bg-zinc-50 p-4 dark:bg-zinc-900">
       <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-1 font-semibold capitalize tabular-nums">{value}</p>
     </div>

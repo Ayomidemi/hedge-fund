@@ -94,7 +94,7 @@ export function InvestFixedIncomeShelf({
           options={riskOptions}
           onChange={setRisk}
         />
-        <div className="rounded-xl bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
+        <div className="rounded-sm bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
           <p className="text-xs uppercase tracking-wide text-zinc-500">Shelf</p>
           <p className="mt-1 font-semibold tabular-nums">
             {filtered.length} / {products.length}
@@ -126,7 +126,7 @@ export function InvestFixedIncomeShelf({
 
       {filtered.length ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <div className="overflow-hidden rounded-sm border border-stone-300/70 dark:border-zinc-800">
             {filtered.map((product) => (
               <button
                 key={product.ticker}
@@ -167,7 +167,7 @@ export function InvestFixedIncomeShelf({
           </div>
 
           {selected ? (
-            <aside className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800 lg:sticky lg:top-4">
+            <aside className="rounded-sm border border-stone-300/70 p-4 dark:border-zinc-800 lg:sticky lg:top-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-wide text-zinc-500">
@@ -279,7 +279,7 @@ export function InvestFixedIncomeShelf({
           ) : null}
         </div>
       ) : (
-        <div className="rounded-xl border border-dashed border-zinc-300 p-6 text-sm text-zinc-500 dark:border-zinc-700">
+        <div className="rounded-sm border border-dashed border-zinc-300 p-6 text-sm text-zinc-500 dark:border-zinc-700">
           No fixed-income products match these filters.
         </div>
       )}
@@ -327,7 +327,7 @@ function ShelfStat({
   sublabel: string;
 }) {
   return (
-    <div className="rounded-xl bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
+    <div className="rounded-sm bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
       <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-1 font-semibold tabular-nums">{value}</p>
       <p className="mt-1 text-xs text-zinc-500">{sublabel}</p>

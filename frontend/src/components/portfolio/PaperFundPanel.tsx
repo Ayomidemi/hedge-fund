@@ -17,7 +17,7 @@ import { toast } from "@/components/ui/ToastProvider";
 const timestamps = new Intl.DateTimeFormat("en-US", {
   month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
 });
-const panel = "rounded-2xl border border-zinc-200/80 bg-white dark:border-zinc-800/80 dark:bg-[#111316]";
+const panel = "rounded-sm border border-zinc-200/80 bg-[var(--pease-paper)] dark:border-zinc-800/80 dark:bg-[var(--pease-paper)]";
 
 const money = capitalMoney;
 
@@ -122,12 +122,12 @@ export function PaperFundPanel({
       {(["manual", "automatic"] as const).map((value) => <button key={value} type="button"
         aria-pressed={overview?.trading_mode === value} disabled={pending || !overview || overview.trading_mode === value}
         onClick={() => void act(value)}
-        className={`rounded-md px-3.5 py-2 text-xs font-medium capitalize transition focus-visible:outline-2 focus-visible:outline-emerald-600 ${pending || !overview ? "opacity-50" : ""} ${overview?.trading_mode === value ? "bg-white text-emerald-800 shadow-sm dark:bg-zinc-700 dark:text-emerald-200" : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white"}`}>
+        className={`rounded-md px-3.5 py-2 text-xs font-medium capitalize transition focus-visible:outline-2 focus-visible:outline-emerald-600 ${pending || !overview ? "opacity-50" : ""} ${overview?.trading_mode === value ? "bg-[var(--pease-paper)] text-emerald-800 shadow-sm dark:bg-zinc-700 dark:text-emerald-200" : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white"}`}>
         {value === "automatic" ? <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" /> : null}{value}
       </button>)}
     </div>
     <button type="button" disabled={pending} onClick={() => void act("refresh")} aria-label="Refresh Capital" title={error ? "Retry loading Capital" : "Refresh Capital"}
-      className="rounded-lg border border-zinc-200 bg-white p-2.5 text-zinc-500 transition hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"><CapitalIcon name="refresh" className={`h-4 w-4 ${pending ? "animate-spin" : ""}`} /></button>
+      className="rounded-lg border border-zinc-200 bg-[var(--pease-paper)] p-2.5 text-zinc-500 transition hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"><CapitalIcon name="refresh" className={`h-4 w-4 ${pending ? "animate-spin" : ""}`} /></button>
   </div>;
 
   return <div className="mx-auto max-w-[1440px] space-y-6">
@@ -139,10 +139,10 @@ export function PaperFundPanel({
       {controls}
     </div>
     {!overview ? <p role="status" className="text-sm text-zinc-500">{loading ? "Loading your trading settings…" : "Balances unavailable"}</p> : null}
-    {error ? <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
+    {error ? <p role="alert" className="rounded-sm bg-red-50 p-4 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
     {overview && !automatic ? <p role="status" className="border-l-2 border-amber-400 pl-3 text-xs leading-5 text-zinc-500">Manual mode stops all automatic buys and sells, including stop and target exits. Existing holdings remain in Capital.</p> : null}
-    {staleCycle ? <p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">The engine has not reported a cycle for over 90 seconds. Automatic execution may be delayed.</p> : null}
-    {run?.halt_reason ? <p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{run.halt_reason}</p> : null}
+    {staleCycle ? <p role="status" className="rounded-sm bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">The engine has not reported a cycle for over 90 seconds. Automatic execution may be delayed.</p> : null}
+    {run?.halt_reason ? <p role="status" className="rounded-sm bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{run.halt_reason}</p> : null}
     {run?.status === "liquidating" ? <p className="text-sm text-zinc-500">Positions will close when eligible quotes are available. Profit or loss remains provisional until every position closes.</p> : null}
 
     <section className={`${panel} p-5 sm:p-7`} aria-label="Capital account overview">
@@ -181,7 +181,7 @@ export function PaperFundPanel({
             <div><dt className="text-[11px] text-zinc-500">Queued orders</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{queued.length}</dd></div>
             <div><dt className="text-[11px] text-zinc-500">Auto exit plans</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{positions.length}</dd></div>
           </dl>
-          <Link href="/opportunity-queue" className="mt-auto flex items-center justify-between rounded-lg bg-zinc-900 px-3.5 py-3 text-xs font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white">View opportunity queue<CapitalIcon name="arrow" /></Link>
+          <Link href="/opportunity-queue" className="mt-auto flex items-center justify-between rounded-lg bg-zinc-900 px-3.5 py-3 text-xs font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-[var(--pease-paper)]">View opportunity queue<CapitalIcon name="arrow" /></Link>
           <p className="mt-3 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">{run ? `Last check ${when(run.last_cycle_at)}` : "Waiting for execution to start"}</p>
         </section>
       </div>
@@ -228,7 +228,7 @@ function EquityChart({ history, startingCash }: { history: PaperFundOverview["eq
   const points = history.filter((point) => Number.isFinite(Number(point.equity)) && Number.isFinite(Date.parse(point.recorded_at)));
   if (points.length < 2) return <div className="relative my-5 flex h-44 items-center justify-center overflow-hidden rounded-lg">
     <div aria-hidden="true" className="absolute inset-0 flex flex-col justify-between py-3">{[0, 1, 2, 3].map(row => <div key={row} className="border-t border-dashed border-zinc-100 dark:border-zinc-800" />)}</div>
-    <div className="relative bg-white px-5 py-3 text-center dark:bg-[#111316]"><CapitalIcon name="activity" className="mx-auto mb-3 h-6 w-6 text-zinc-300 dark:text-zinc-600" /><p className="text-xs font-medium text-zinc-500">Waiting for performance data</p><p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Your first two snapshots will appear here.</p></div>
+    <div className="relative bg-[var(--pease-paper)] px-5 py-3 text-center dark:bg-[var(--pease-paper)]"><CapitalIcon name="activity" className="mx-auto mb-3 h-6 w-6 text-zinc-300 dark:text-zinc-600" /><p className="text-xs font-medium text-zinc-500">Waiting for performance data</p><p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Your first two snapshots will appear here.</p></div>
   </div>;
   const start = Number(startingCash);
   const values = points.map((point) => Number(point.equity));

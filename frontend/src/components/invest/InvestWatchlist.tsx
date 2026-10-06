@@ -28,7 +28,7 @@ export function InvestWatchlist({
 
   if (error) {
     return (
-      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-sm border border-red-200 bg-red-50 p-6 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         {error}
       </div>
     );
@@ -36,7 +36,7 @@ export function InvestWatchlist({
 
   if (items.length === 0) {
     return (
-      <div className="w-full rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="w-full rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-[#151613]">
         Nothing saved yet.{" "}
         <Link href="/invest/markets" className="font-medium underline">
           Search
@@ -47,7 +47,7 @@ export function InvestWatchlist({
   }
 
   return (
-    <ul className="w-full divide-y divide-zinc-100 rounded-2xl border border-zinc-200 bg-white dark:divide-zinc-900 dark:border-zinc-800 dark:bg-zinc-950">
+    <ul className="w-full divide-y divide-zinc-100 rounded-sm border border-stone-300/70 bg-[#fffefb] dark:divide-zinc-900 dark:border-zinc-800 dark:bg-[#151613]">
       {items.map((item) => (
         <li
           key={item.id}

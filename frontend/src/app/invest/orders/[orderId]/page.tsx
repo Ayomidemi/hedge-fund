@@ -21,7 +21,7 @@ export default async function InvestOrderDetailPage({
 
   if (!order) {
     return (
-      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-sm border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Order could not be loaded.
       </div>
     );
@@ -29,7 +29,7 @@ export default async function InvestOrderDetailPage({
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
         <p className="text-sm text-zinc-500">{order.name}</p>
         <h2 className="mt-1 text-2xl font-semibold">
           {order.side} {order.ticker}
@@ -69,14 +69,14 @@ export default async function InvestOrderDetailPage({
         <div className="mt-5 flex flex-wrap gap-2">
           <Link
             href="/invest/portfolio"
-            className="inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="inline-flex items-center justify-center rounded-sm border border-stone-300/70 bg-[#fffefb] px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             Back to portfolio
           </Link>
           <InvestOrderActions orderId={order.id} status={order.status} />
           <Link
             href={hrefForOrder(order)}
-            className="inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="inline-flex items-center justify-center rounded-sm border border-stone-300/70 bg-[#fffefb] px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             Open asset
           </Link>
@@ -95,7 +95,7 @@ function hrefForOrder(order: InvestOrder) {
 
 function Detail({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
+    <div className="rounded-sm bg-zinc-50 p-4 dark:bg-zinc-900">
       <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-1 font-semibold tabular-nums">{value}</p>
     </div>

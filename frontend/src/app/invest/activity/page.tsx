@@ -19,7 +19,7 @@ export default async function InvestActivityPage() {
 
   if (unavailable) {
     return (
-      <div className="w-full rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="w-full rounded-sm border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Invest activity could not load. Please try again later.
       </div>
     );
@@ -27,7 +27,7 @@ export default async function InvestActivityPage() {
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-zinc-500">
@@ -44,7 +44,7 @@ export default async function InvestActivityPage() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="overflow-hidden rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
         {activity.length > 0 ? (
           <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
             {activity.map((item) => (

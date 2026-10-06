@@ -41,31 +41,31 @@ export function AppShell({ children, userOrgName, canSwitchProducts = false }: {
   const navigation = navigationGroups.map(group => <div key={group.label} className="mb-6 last:mb-0">
     <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{group.label}</p>
     <div className="space-y-0.5">{group.items.map(item => <Link key={item.href} href={item.href} aria-current={isActive(item.href) ? "page" : undefined}
-      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] transition ${isActive(item.href) ? "bg-emerald-50 font-semibold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"}`}>
+      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] transition ${isActive(item.href) ? "bg-stone-100 font-semibold text-stone-900 dark:bg-stone-800 dark:text-stone-100" : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"}`}>
       <CapitalIcon name={item.icon} className="h-[17px] w-[17px] shrink-0" />{item.label}
     </Link>)}</div>
   </div>);
 
-  return <div className="flex min-h-screen bg-[#f7f8fa] text-zinc-900 dark:bg-[#0c0e11] dark:text-zinc-100">
-    <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-zinc-200/70 bg-white lg:flex dark:border-zinc-800/70 dark:bg-[#111316]">
+  return <div className="pease-workspace flex min-h-screen bg-[#f7f8fa] text-zinc-900 dark:bg-[#0c0e11] dark:text-zinc-100">
+    <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-zinc-200/70 bg-[var(--pease-paper)] lg:flex dark:border-zinc-800/70 dark:bg-[var(--pease-paper)]">
       <Link href="/" className="flex items-center gap-3 px-6 py-7">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-900 text-white"><CapitalIcon name="strategy" className="h-5 w-5" /></div>
-        <span className="text-lg font-semibold tracking-tight">pease<span className="ml-1 font-normal text-zinc-500 dark:text-zinc-400">capital</span></span>
+
+        <span className="pease-editorial text-[23px]">Pease <span className="text-zinc-500 dark:text-zinc-400">Capital</span></span>
       </Link>
       {canSwitchProducts ? <div className="px-5 pb-5"><ProductSwitcher active="capital" /></div> : null}
       <nav aria-label="Capital navigation" className="flex-1 overflow-y-auto px-3 py-2">{navigation}</nav>
-      <Link href="/settings" className="m-3 flex items-center gap-3 rounded-xl border border-zinc-200/70 px-3 py-3 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900">
+      <Link href="/settings" className="m-3 flex items-center gap-3 rounded-sm border border-zinc-200/70 px-3 py-3 text-sm hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold dark:bg-zinc-800">{(userOrgName ?? "PC").slice(0, 2).toUpperCase()}</span>
         <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{userOrgName ?? "Your organization"}</span><span className="text-[11px] text-zinc-500">Workspace settings</span></span>
         <CapitalIcon name="settings" className="h-4 w-4 text-zinc-500 dark:text-zinc-400" />
       </Link>
     </aside>
     <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-zinc-200/70 bg-white px-5 py-4 dark:border-zinc-800/70 dark:bg-[#111316] sm:px-8">
+      <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-zinc-200/70 bg-[var(--pease-paper)] px-5 py-4 dark:border-zinc-800/70 dark:bg-[var(--pease-paper)] sm:px-8">
         <div className="flex items-center gap-3 text-sm"><span className="text-zinc-500 dark:text-zinc-400">Capital</span><span className="text-zinc-300 dark:text-zinc-600">/</span><h1 className="font-medium">{title}</h1></div>
         <LiveStatusIndicator />
       </header>
-      <details className="border-b border-zinc-200 bg-white px-5 py-3 lg:hidden dark:border-zinc-800 dark:bg-[#111316]">
+      <details className="border-b border-zinc-200 bg-[var(--pease-paper)] px-5 py-3 lg:hidden dark:border-zinc-800 dark:bg-[var(--pease-paper)]">
         <summary className="cursor-pointer text-xs font-medium">Menu</summary>
         <nav aria-label="Capital mobile navigation" className="mt-5 grid grid-cols-2 gap-3">{navigation}</nav>
         <div className="mb-3 flex flex-wrap items-center gap-3"><ProductSwitcher active="capital" visible={canSwitchProducts} /><Link href="/settings" className="text-sm text-zinc-500">Workspace settings →</Link></div>

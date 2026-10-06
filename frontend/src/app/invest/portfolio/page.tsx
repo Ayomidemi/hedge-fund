@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { InvestAccountSummary } from "@/components/invest/InvestAccountSummary";
 import { connection } from "next/server";
 import { getInvestHome, getInvestOrders, type InvestHome, type InvestOrder } from "@/lib/api";
 import { getServerAccessToken } from "@/lib/supabase/server";
@@ -27,7 +28,7 @@ export default async function InvestPortfolioPage({
 
   if (!home) {
     return (
-      <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">
+      <div className="rounded-sm border border-red-200 bg-red-50 p-5 text-sm text-red-800">
         Portfolio could not be loaded.
       </div>
     );
@@ -36,30 +37,20 @@ export default async function InvestPortfolioPage({
   const rows = portfolioRows(home.holdings, orders, params.placed);
 
   return (
-    <div className="w-full space-y-4">
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <Stat label="Total" value={money(home.portfolio_value)} />
-        <Stat label="Cash" value={money(home.cash)} />
-        <Stat label="Allocated" value={money(home.invested)} />
-        <Stat
-          label="Total return"
-          value={`${signedMoney(home.total_return)} ${
-            home.total_return_pct ? `(${signedPercent(home.total_return_pct)})` : ""
-          }`}
-        />
-        <Stat label="Positions" value={String(home.holdings.length)} />
-      </section>
+    <div className="w-full space-y-8">
+      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs text-stone-500">Your account</p><h2 className="text-3xl sm:text-4xl">Portfolio.</h2></div><Link href="/invest/markets" className="text-sm underline underline-offset-4">Explore investments ↗</Link></div>
+      <InvestAccountSummary home={home} />
 
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
         <h2 className="text-lg font-semibold">Allocation</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {home.allocation.map((bucket) => (
-            <div key={bucket.name} className="rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
+            <div key={bucket.name} className="rounded-sm bg-zinc-50 p-4 dark:bg-zinc-900">
               <p className="text-xs uppercase tracking-wide text-zinc-500">
                 {bucket.name}
               </p>
               <p className="mt-1 font-semibold tabular-nums">
-                {money(bucket.value)}
+                {money(bucket.value, home.account.base_currency)}
               </p>
               <p className="mt-1 text-xs text-zinc-500">
                 {Number(bucket.allocation_pct).toFixed(2)}%
@@ -69,15 +60,15 @@ export default async function InvestPortfolioPage({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="px-4 pt-5 text-lg font-semibold">Orders</h2>
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+        <h2 className="px-4 pt-5 text-lg font-semibold">Holdings &amp; orders</h2>
         {rows.length === 0 ? (
           <p className="p-6 pt-3 text-sm text-zinc-500">
-            No paper orders yet. <Link href="/invest/markets" className="underline">Review fixed income</Link>{" "}
-            before using the listed-instrument paper loop.
+            No orders yet. <Link href="/invest/markets" className="underline">Review fixed income</Link>{" "}
+            to compare available investments.
           </p>
         ) : (
-          <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="px-4 py-3">Asset</th>
@@ -126,7 +117,7 @@ export default async function InvestPortfolioPage({
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </section>
     </div>
@@ -159,7 +150,7 @@ function portfolioRows(
         ? `${Number(holding.allocation_pct).toFixed(2)}%`
         : "—",
       value: money(holding.market_value, holding.currency),
-      pnl: `${signedMoney(holding.unrealized_pnl)}${
+      pnl: `${signedMoney(holding.unrealized_pnl, holding.currency)}${
         holding.unrealized_pnl_pct
           ? ` (${signedPercent(holding.unrealized_pnl_pct)})`
           : ""
@@ -187,13 +178,4 @@ function portfolioRows(
   }
 
   return rows;
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
-      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
-    </div>
-  );
 }

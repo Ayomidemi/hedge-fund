@@ -22,15 +22,15 @@ export function InvestMarketsBoard({
   );
 
   return (
-    <div className="w-full space-y-4">
-      <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_420px] sm:p-6">
+    <div className="w-full space-y-8">
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_360px] sm:p-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               Markets
             </p>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight">
-              Fixed income and listed market context
+            <h2 className="mt-1 text-3xl sm:text-4xl">
+              Find your next investment.
             </h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
               {markets.summary}
@@ -42,7 +42,7 @@ export function InvestMarketsBoard({
                 detail={
                   openSessions.length
                     ? openSessions.map((session) => session.market).join(", ")
-                    : "Cash markets shut"
+                    : "Markets closed"
                 }
               />
               <HeaderMetric
@@ -51,13 +51,13 @@ export function InvestMarketsBoard({
                 detail="Bills and bonds"
               />
               <HeaderMetric
-                label="Listed tape"
+                label="Listed instruments"
                 value={String(listedCount)}
                 detail="ETFs and market pulses"
               />
             </div>
           </div>
-          <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+          <div className="rounded-sm border border-stone-300/70 p-4 dark:border-zinc-800">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Search
             </p>
@@ -88,20 +88,19 @@ export function InvestMarketsBoard({
         </div>
       </section>
 
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.75fr)]">
-        <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="space-y-8">
+        <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
           <div className="border-b border-zinc-100 p-5 dark:border-zinc-900 sm:p-6">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                   Fixed income
                 </p>
-                <h2 className="mt-1 text-lg font-semibold">Yield shelf</h2>
+                <h2 className="mt-1 text-lg font-semibold">Bills & bonds</h2>
               </div>
             </div>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-500">
-              Bills and bonds show yield, clean price, accrued interest, dirty
-              price, settlement, and projected payout before order entry.
+              Compare yields, maturity dates and minimum investments. Select a product for pricing and settlement details.
             </p>
           </div>
           <div className="p-5 sm:p-6">
@@ -125,7 +124,7 @@ function HeaderMetric({
   value: string;
 }) {
   return (
-    <div className="rounded-xl bg-zinc-50 p-3 dark:bg-zinc-900">
+    <div className="border-l border-[var(--pease-rule)] pl-3">
       <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </p>
@@ -141,7 +140,7 @@ function ListedTapePanel({
   boards: InvestMarkets["boards"];
 }) {
   return (
-    <aside className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <aside className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
       <div className="border-b border-zinc-100 p-5 dark:border-zinc-900">
         <div className="flex items-end justify-between gap-3">
           <div>

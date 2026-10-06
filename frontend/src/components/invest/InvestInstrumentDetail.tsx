@@ -148,7 +148,7 @@ export function InvestInstrumentDetail({
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-sm text-zinc-500">{instrument.name}</p>
@@ -196,7 +196,7 @@ export function InvestInstrumentDetail({
         </div>
       </section>
 
-      <div className="flex gap-2 overflow-x-auto rounded-2xl border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex gap-2 overflow-x-auto rounded-sm border border-stone-300/70 bg-[#fffefb] p-2 dark:border-zinc-800 dark:bg-[#151613]">
         {([
           ["overview", "Overview"],
           ["chart", "Chart"],
@@ -209,7 +209,7 @@ export function InvestInstrumentDetail({
             key={value}
             type="button"
             onClick={() => setTab(value)}
-            className={`shrink-0 rounded-xl px-4 py-2 text-sm font-medium ${
+            className={`shrink-0 rounded-sm px-4 py-2 text-sm font-medium ${
               tab === value
                 ? "bg-emerald-800 text-white"
                 : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
@@ -235,7 +235,7 @@ export function InvestInstrumentDetail({
       {tab === "chart" ? <InvestPriceChart ticker={instrument.ticker} /> : null}
 
       {tab === "news" ? (
-        <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+        <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
           <h3 className="text-lg font-semibold">News</h3>
           {headlines === null ? (
             <p className="mt-3 text-sm text-zinc-500">Loading headlines…</p>
@@ -275,7 +275,7 @@ export function InvestInstrumentDetail({
               <ResearchSectionCard key={section.id} section={section} />
             ))
           ) : (
-            <section className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+            <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-[#151613]">
               {researchLoading
                 ? "Loading financials…"
                 : "Financials are not available for this name yet."}
@@ -293,7 +293,7 @@ export function InvestInstrumentDetail({
                 <ResearchSectionCard key={section.id} section={section} />
               ))
             ) : peaseView ? null : (
-              <section className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+              <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-[#151613]">
                 {researchLoading
                   ? "Loading analysis…"
                   : "Live factor scores have not been generated for this instrument yet."}
@@ -301,7 +301,7 @@ export function InvestInstrumentDetail({
             )}
           </div>
           {research?.withheld_capital_signals.length ? (
-            <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+            <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
               <h3 className="text-lg font-semibold">Not shown on Invest</h3>
               <p className="mt-2 text-sm text-zinc-500">
                 Fund-desk fields stay inside Pease Capital. This page is a factor
@@ -325,7 +325,7 @@ export function InvestInstrumentDetail({
       {tab === "order" ? (
         <form
           onSubmit={(event) => void handleOrder(event)}
-          className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950"
+          className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]"
         >
           <h3 className="text-lg font-semibold">Listed-instrument paper order</h3>
           <p className="mt-2 text-sm text-zinc-500">
@@ -341,10 +341,10 @@ export function InvestInstrumentDetail({
                   setSide(value);
                   setReviewing(false);
                 }}
-                className={`rounded-xl border px-4 py-2 text-sm font-medium ${
+                className={`rounded-sm border px-4 py-2 text-sm font-medium ${
                   side === value
                     ? "border-emerald-800 bg-emerald-800 text-white"
-                    : "border-zinc-200 bg-white text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300"
+                    : "border-stone-300/70 bg-[#fffefb] text-zinc-700 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300"
                 }`}
               >
                 {value === "BUY" ? "Buy" : "Sell"}
@@ -367,7 +367,7 @@ export function InvestInstrumentDetail({
           </label>
           <p className="mt-2 text-sm text-zinc-500">Estimated units: {estimatedUnits}</p>
           {reviewing ? (
-            <div className="mt-4 rounded-xl bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
+            <div className="mt-4 rounded-sm bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
               <p className="font-medium">Review paper order</p>
               <p className="mt-1 text-zinc-500">
                 {side} about {estimatedUnits} units of {instrument.ticker} for{" "}
@@ -407,7 +407,7 @@ export function InvestInstrumentDetail({
 
 function PeaseViewCard({ view }: { view: InvestPeaseView }) {
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-wide text-zinc-500">Pease View</p>
@@ -487,7 +487,7 @@ function PeaseViewCard({ view }: { view: InvestPeaseView }) {
 
 function ResearchSectionCard({ section }: { section: InvestResearchSection }) {
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
       <h3 className="text-lg font-semibold">{section.title}</h3>
       <p className="mt-2 text-sm text-zinc-500">{section.summary}</p>
       {section.metrics.length > 0 ? (
@@ -495,7 +495,7 @@ function ResearchSectionCard({ section }: { section: InvestResearchSection }) {
           {section.metrics.map((metric) => (
             <div
               key={`${section.id}-${metric.label}`}
-              className="rounded-xl bg-zinc-50 p-3 dark:bg-zinc-900"
+              className="rounded-sm bg-zinc-50 p-3 dark:bg-zinc-900"
             >
               <p className="text-xs uppercase tracking-wide text-zinc-500">
                 {metric.label}
@@ -520,7 +520,7 @@ function ResearchSectionCard({ section }: { section: InvestResearchSection }) {
 
 function FallbackOverview({ instrument }: { instrument: InvestInstrument }) {
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
       <h3 className="text-lg font-semibold">Instrument profile</h3>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <ProfileDetail label="Asset class" value={instrument.asset_class} />
@@ -534,7 +534,7 @@ function FallbackOverview({ instrument }: { instrument: InvestInstrument }) {
 
 function ProfileDetail({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-zinc-50 p-3 dark:bg-zinc-900">
+    <div className="rounded-sm bg-zinc-50 p-3 dark:bg-zinc-900">
       <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-1 font-semibold capitalize">{value.replaceAll("_", " ")}</p>
     </div>

@@ -35,7 +35,7 @@ export function InvestPriceChart({ ticker }: { ticker: string }) {
   }, [ticker, range, requestKey]);
 
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-5 dark:border-zinc-800 dark:bg-[#151613]">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold">Price</h3>

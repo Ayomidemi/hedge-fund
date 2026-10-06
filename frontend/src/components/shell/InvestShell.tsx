@@ -5,122 +5,44 @@ import { usePathname } from "next/navigation";
 import { ProductSwitcher } from "@/components/shell/ProductSwitcher";
 
 const navigationItems = [
-  { label: "Home", href: "/invest" },
-  { label: "Discover", href: "/invest/discover" },
-  { label: "Markets", href: "/invest/markets" },
-  { label: "News", href: "/invest/news" },
-  { label: "Watchlist", href: "/invest/watchlist" },
+  { label: "Overview", href: "/invest" },
   { label: "Portfolio", href: "/invest/portfolio" },
+  { label: "Markets", href: "/invest/markets" },
+  { label: "Discover", href: "/invest/discover" },
+  { label: "Watchlist", href: "/invest/watchlist" },
+  { label: "News", href: "/invest/news" },
   { label: "Cash", href: "/invest/cash" },
   { label: "Activity", href: "/invest/activity" },
-  { label: "Profile", href: "/invest/profile" },
 ];
 
-const pageTitles: Record<string, string> = {
-  Home: "Your investing",
-  Discover: "What's happening",
-  Markets: "Markets",
-  News: "News",
-  Watchlist: "Watchlist",
-  Portfolio: "Portfolio",
-  Cash: "Cash",
-  Activity: "Activity",
-  Profile: "Profile",
-};
-
-type InvestShellProps = {
+export function InvestShell({ children, canSwitchProducts = false }: {
   children: React.ReactNode;
   canSwitchProducts?: boolean;
-};
-
-export function InvestShell({
-  children,
-  canSwitchProducts = false,
-}: InvestShellProps) {
+}) {
   const pathname = usePathname();
-  const instrumentMatch = pathname.match(/^\/invest\/instruments\/([^/]+)/i);
-  const onOrderDetail = pathname.startsWith("/invest/orders/");
-  const activeLabel =
-    onOrderDetail
-      ? "Portfolio"
-      : (navigationItems.find((item) =>
-          item.href === "/invest"
-            ? pathname === "/invest"
-            : pathname === item.href || pathname.startsWith(`${item.href}/`),
-        )?.label ?? "Home");
-  const headerTitle = instrumentMatch
-    ? decodeURIComponent(instrumentMatch[1]).toUpperCase()
-    : (pageTitles[activeLabel] ?? "Pease Invest");
-  const headerEyebrow = instrumentMatch ? "Invest" : activeLabel;
+  const activeHref = pathname.startsWith("/invest/orders") ? "/invest/portfolio"
+    : pathname.startsWith("/invest/instruments/") || pathname.startsWith("/invest/fixed-income/") || pathname === "/invest/search" ? "/invest/markets"
+    : navigationItems.find(item => item.href === "/invest" ? pathname === item.href : pathname.startsWith(item.href))?.href;
 
-  return (
-    <div className="flex min-h-screen bg-[#f7f8f5] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
-      <aside className="hidden w-64 shrink-0 border-r border-zinc-200 bg-white lg:block dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-emerald-800 text-sm font-semibold text-white">
-              PI
-            </div>
-            <div>
-              <p className="text-sm font-semibold">Pease Invest</p>
-              <p className="text-xs text-zinc-500">Operating System</p>
-            </div>
-          </div>
-          <div className="mt-4">
+  return <div className="pease-workspace min-h-screen">
+    <header className="border-b border-[var(--pease-rule)] bg-[var(--pease-paper)]">
+      <div className="mx-auto max-w-[1440px] px-5 sm:px-10">
+        <div className="flex flex-wrap items-center justify-between gap-4 py-6 sm:py-7">
+          <Link href="/invest" className="pease-editorial text-2xl sm:text-3xl">Pease <span className="text-stone-500 dark:text-stone-400">Invest</span></Link>
+          <div className="flex items-center gap-5">
             <ProductSwitcher active="invest" visible={canSwitchProducts} />
+            <Link href="/invest/profile" aria-current={pathname === "/invest/profile" ? "page" : undefined} className="text-sm underline-offset-4 hover:underline">Your account ↗</Link>
           </div>
         </div>
-        <nav className="space-y-1 px-3 py-4">
-          {navigationItems.map((item) => {
-            const isActive = item.label === activeLabel;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`block rounded-md px-3 py-2 text-sm ${
-                  isActive
-                    ? "bg-emerald-800 font-medium text-white"
-                    : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
-                }`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
+        <nav aria-label="Invest navigation" className="-mb-px flex gap-6 overflow-x-auto sm:gap-8">
+          {navigationItems.map(item => <Link key={item.href} href={item.href} aria-current={item.href === activeHref ? "page" : undefined}
+            className={`shrink-0 border-b-2 pb-3.5 pt-1 text-sm transition ${item.href === activeHref ? "border-[#526044] font-semibold text-[#39462f] dark:border-stone-300 dark:text-stone-100" : "border-transparent text-stone-500 hover:border-stone-300 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"}`}>{item.label}</Link>)}
         </nav>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-zinc-950 sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                {headerEyebrow}
-              </p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-normal">{headerTitle}</h1>
-            </div>
-            <div className="lg:hidden">
-              <ProductSwitcher active="invest" visible={canSwitchProducts} />
-            </div>
-          </div>
-          <nav className="mt-4 flex gap-2 overflow-x-auto pb-1 lg:hidden">
-            {navigationItems.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${
-                  item.label === activeLabel
-                    ? "bg-emerald-800 text-white"
-                    : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        </header>
-        <main className="flex-1 px-2 py-3 sm:px-4 xl:px-5">{children}</main>
       </div>
-    </div>
-  );
+    </header>
+    <main className="mx-auto max-w-[1440px] px-5 py-8 sm:px-10 sm:py-10">{children}</main>
+    <footer className="mx-auto mt-10 flex max-w-[1440px] flex-wrap justify-between gap-3 border-t border-[var(--pease-rule)] px-5 py-6 text-xs text-stone-500 sm:px-10">
+      <span>Pease Invest</span><span>Paper account · Simulated execution</span>
+    </footer>
+  </div>;
 }

@@ -47,7 +47,7 @@ export function PortfolioDashboard({ dashboard, automatic = false, onTradeClosed
 
   if (!dashboard) {
     return (
-      <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+      <div className="rounded-sm border border-red-200 bg-red-50 p-5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
         Your workspace could not be loaded yet. Sign in again or refresh this page.
       </div>
     );
@@ -248,7 +248,7 @@ function DataTable({
   children: React.ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-zinc-200/80 bg-white dark:border-zinc-800/80 dark:bg-[#111316]">
+    <div className="overflow-hidden rounded-sm border border-zinc-200/80 bg-[var(--pease-paper)] dark:border-zinc-800/80 dark:bg-[var(--pease-paper)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-900">
         <div>
           <p className="sr-only">
@@ -325,7 +325,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-200/80 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#111316]">
+    <div className="rounded-sm border border-zinc-200/80 bg-[var(--pease-paper)] p-5 dark:border-zinc-800/80 dark:bg-[var(--pease-paper)]">
       <div className="border-b border-zinc-100 pb-4 dark:border-zinc-900">
         <p className="sr-only">
           {eyebrow}

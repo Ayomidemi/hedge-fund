@@ -19,7 +19,7 @@ export function CapitalBalanceSummary({ capital, run, compact = false }: {
     <dl className={`grid grid-cols-2 gap-6 ${compact ? "sm:grid-cols-[1.2fr_1fr_1fr]" : "lg:grid-cols-[1.4fr_1fr_1fr]"}`}>
       <div className={compact ? "col-span-2 sm:col-span-1" : "col-span-2 lg:col-span-1"}>
         <dt className="text-xs font-medium text-zinc-500">Account value</dt>
-        <dd className={`mt-2 font-medium tracking-[-0.055em] tabular-nums ${compact ? "text-3xl" : "text-[42px] leading-tight sm:text-[56px]"}`}>{capitalMoney(capital.nav)}</dd>
+        <dd className={`mt-2 font-medium tracking-[-0.025em] tabular-nums ${compact ? "text-3xl" : "text-[42px] leading-tight sm:text-[56px]"}`}>{capitalMoney(capital.nav)}</dd>
         <dd className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Total cash + holdings · USD</dd>
       </div>
       <div className={compact ? "" : "lg:border-l lg:border-zinc-100 lg:pl-7 lg:dark:border-zinc-800"}>

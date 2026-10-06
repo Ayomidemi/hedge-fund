@@ -74,7 +74,7 @@ export function InvestSearch({
     <div className="w-full">
       <form
         onSubmit={(event) => void handleSearch(event)}
-        className="grid gap-2 sm:grid-cols-[1fr_auto_auto]"
+        className={isEmbedded ? "grid grid-cols-[minmax(0,1fr)_auto] gap-2" : "grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]"}
       >
         <label className="sr-only" htmlFor="invest-instrument-search">
           Search instruments
@@ -83,12 +83,12 @@ export function InvestSearch({
           id="invest-instrument-search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          className={inputControlClassName}
+          className={`${inputControlClassName} min-w-0 ${isEmbedded ? "col-span-2" : ""}`}
           placeholder="Search bills, bonds, funds, or listed names"
         />
         <div
           aria-label="Market"
-          className="inline-flex rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900"
+          className="inline-flex flex-wrap rounded-sm border border-stone-300/70 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900"
         >
           {marketOptions.map((option) => (
             <button
@@ -98,7 +98,7 @@ export function InvestSearch({
               aria-pressed={market === option.code}
               className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
                 market === option.code
-                  ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-950 dark:text-zinc-50"
+                  ? "bg-[#fffefb] text-zinc-950 dark:bg-[#151613] dark:text-zinc-50"
                   : "text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
               }`}
             >
@@ -119,7 +119,7 @@ export function InvestSearch({
         className={
           isEmbedded
             ? "mt-4 divide-y divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-900 dark:border-zinc-900"
-            : "mt-5 divide-y divide-zinc-100 rounded-2xl border border-zinc-200 bg-white dark:divide-zinc-900 dark:border-zinc-800 dark:bg-zinc-950"
+            : "mt-5 divide-y divide-zinc-100 rounded-sm border border-stone-300/70 bg-[#fffefb] dark:divide-zinc-900 dark:border-zinc-800 dark:bg-[#151613]"
         }
       >
         {results.length === 0 ? (
