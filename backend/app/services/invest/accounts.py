@@ -1114,6 +1114,18 @@ async def _cash_notional_for_order(
 async def _holdings(
     session: AsyncSession, positions, base_currency: str = "USD"
 ) -> list[InvestHolding]:
+    if not positions:
+        return []
+    if all(getattr(item, "instrument_name", None) is not None and getattr(item, "currency", None) == base_currency for item in positions):
+        # Reuse the exact broker valuation instead of reading every quote twice.
+        return [InvestHolding(
+            ticker=item.symbol, name=item.instrument_name, asset_class=item.asset_class,
+            currency=base_currency, quantity=item.quantity, average_cost=item.average_cost,
+            current_price=item.current_price, market_value=item.market_value,
+            allocation_pct=None, unrealized_pnl=item.unrealized_pnl,
+            unrealized_pnl_pct=item.unrealized_pnl_pct,
+            href=_instrument_href(item.symbol, item.asset_class),
+        ) for item in positions]
     symbols = [item.symbol for item in positions]
     instruments = {
         row.ticker: (row.id, row.name, row.asset_class, row.currency)

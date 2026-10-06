@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
@@ -126,21 +127,39 @@ async def _ensure_trade_risk_approval(
     return risk_check
 
 
-async def get_dashboard(
-    session: AsyncSession,
-    user: AuthenticatedUser,
-) -> PortfolioDashboardResponse:
-    # Cash and inventory must not straddle a concurrently committed trade/reset.
+@dataclass
+class DashboardReadState:
+    portfolio: Portfolio
+    cash_entries: list[CashLedgerEntry]
+    positions: list[Position]
+    trades: list[Trade]
+    risk_limits: list[RiskLimit]
+    cash_balance: Decimal
+
+
+async def load_dashboard_state(session: AsyncSession, user: AuthenticatedUser) -> DashboardReadState:
+    # Keep a single locked book for all panels in the response.
     portfolio = await lock_portfolio(
         session, await get_or_create_default_portfolio(session, user), read=True
     )
-
     cash_entries = await _list_cash_entries(session, portfolio.id)
     positions = await _list_positions(session, portfolio.id)
     trades = await _list_trades(session, portfolio.id)
     risk_limits = await _list_risk_limits(session, portfolio.id)
-
     cash_balance = await cash_balance_in_base(session, portfolio, cash_entries)
+    return DashboardReadState(portfolio, cash_entries, positions, trades, risk_limits, cash_balance)
+
+
+async def get_dashboard(
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    *,
+    state: DashboardReadState | None = None,
+) -> PortfolioDashboardResponse:
+    state = state if state is not None else await load_dashboard_state(session, user)
+    portfolio, cash_entries, positions, trades, risk_limits, cash_balance = (
+        state.portfolio, state.cash_entries, state.positions, state.trades, state.risk_limits, state.cash_balance
+    )
     position_snapshots = [
         PositionSnapshot(
             ticker=position.instrument.ticker,

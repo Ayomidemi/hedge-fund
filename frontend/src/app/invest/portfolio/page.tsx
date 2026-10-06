@@ -15,16 +15,11 @@ export default async function InvestPortfolioPage({
   const accessToken = await getServerAccessToken();
   let home: InvestHome | null = null;
   let orders: InvestOrder[] = [];
-  try {
-    home = await getInvestHome({ accessToken });
-  } catch {
-    home = null;
-  }
-  try {
-    orders = await getInvestOrders({ accessToken });
-  } catch {
-    orders = [];
-  }
+  const [homeResult, ordersResult] = await Promise.allSettled([
+    getInvestHome({ accessToken }), getInvestOrders({ accessToken }),
+  ]);
+  home = homeResult.status === "fulfilled" ? homeResult.value : null;
+  orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
 
   if (!home) {
     return (

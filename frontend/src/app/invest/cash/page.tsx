@@ -12,8 +12,9 @@ export default async function InvestCashPage() {
   let account: InvestAccount | null = null;
   let transactions: InvestTransaction[] = [];
   try {
-    account = await getInvestAccount({ accessToken });
-    transactions = await getInvestTransactions({ accessToken });
+    [account, transactions] = await Promise.all([
+      getInvestAccount({ accessToken }), getInvestTransactions({ accessToken }),
+    ]);
   } catch {
     account = null;
     transactions = [];

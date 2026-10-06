@@ -9,6 +9,8 @@ import logging
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from starlette.concurrency import run_in_threadpool
+
 from app.core.auth import authenticate_token
 from app.services.realtime.connection_manager import connection_manager
 
@@ -21,7 +23,7 @@ router = APIRouter()
 async def platform_events_websocket(websocket: WebSocket) -> None:
     token = websocket.query_params.get("token", "")
     try:
-        user = authenticate_token(token)
+        user = await run_in_threadpool(authenticate_token, token)
     except HTTPException:
         await websocket.close(code=4401, reason="Unauthorized")
         return

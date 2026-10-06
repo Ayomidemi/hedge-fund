@@ -47,10 +47,13 @@ const getServerAuth = cache(async () => {
   };
 });
 
-export async function getServerAccessToken(): Promise<string | undefined> {
-  const auth = await getServerAuth();
-  return auth.accessToken;
-}
+export const getServerAccessToken = cache(async (): Promise<string | undefined> => {
+  // This token is only forwarded to the API, which verifies its signature and
+  // permissions. Layouts still verify the user before rendering account UI.
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token;
+});
 
 export async function getServerUserEmail(): Promise<string | null> {
   const auth = await getServerAuth();

@@ -19,16 +19,11 @@ export default async function TickerPage({ params }: TickerPageProps) {
   let chart: RadarWatchlistChart | null = null;
 
   if (accessToken) {
-    try {
-      desk = await getTickerDesk(ticker, { accessToken });
-    } catch {
-      desk = null;
-    }
-    try {
-      chart = await getTickerChart(ticker, "1d", { accessToken });
-    } catch {
-      chart = null;
-    }
+    const [deskResult, chartResult] = await Promise.allSettled([
+      getTickerDesk(ticker, { accessToken }), getTickerChart(ticker, "1d", { accessToken }),
+    ]);
+    desk = deskResult.status === "fulfilled" ? deskResult.value : null;
+    chart = chartResult.status === "fulfilled" ? chartResult.value : null;
   }
 
   return (

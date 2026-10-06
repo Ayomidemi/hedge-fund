@@ -16,7 +16,7 @@ from app.api.schemas.paper_fund import (
 from app.core.auth import AuthenticatedUser
 from app.db.locks import lock_idempotency_scope, lock_portfolio
 from app.models import Instrument, InstrumentQuote, PaperEquitySnapshot, PaperFundRun, PaperOrder, Position, RadarRun, RadarSnapshot
-from app.services.portfolio.operating_core import get_or_create_default_portfolio, get_dashboard
+from app.services.portfolio.operating_core import get_or_create_default_portfolio, get_dashboard, load_dashboard_state
 from app.services.paper_fund.capital import bind_book, book_fills, capital_policy, load_book
 from app.services.market_radar.execution import MAX_SIGNAL_AGE_SECONDS, execution_rejection, quote_rejection
 from app.services.paper_fund.calendar import market_blocker
@@ -479,15 +479,17 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
     now = utc(now or datetime.now(timezone.utc))
     # Keep cash, orders and history on the same committed state while a worker
     # fills orders. The request's session releases this read lock on close.
-    portfolio = await _portfolio(session, owner, read=True)
+    user = AuthenticatedUser(id=owner, email=None)
+    dashboard_state = await load_dashboard_state(session, user)
+    portfolio = dashboard_state.portfolio
     run = await _latest(session, owner, run_id=run_id, read_lock=True)
-    capital = await get_dashboard(session, AuthenticatedUser(id=owner, email=None))
+    capital = await get_dashboard(session, user, state=dashboard_state)
     if run is None:
         return PaperFundResponse(generated_at=now, trading_mode=portfolio.trading_mode, capital=capital, run=None, orders=[], equity_history=[],
                                  blockers=["Choose Automatic to enable execution using this Capital account."],
                                  policy=POLICY, simulation_notice=SIMULATION_NOTICE)
     orders = await _orders(session, run)
-    book = await load_book(session, portfolio)
+    book = await load_book(session, portfolio, dashboard_state=dashboard_state)
     reserved = money(sum((reservation(o, run.policy) for o in orders if o.status == "pending"), ZERO))
     state = {**book.state, "reserved_cash": reserved, "available_cash": money(book.cash - reserved)}
     history = list(await session.scalars(select(PaperEquitySnapshot).where(PaperEquitySnapshot.run_id == run.id)

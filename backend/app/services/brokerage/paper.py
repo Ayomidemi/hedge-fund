@@ -82,6 +82,8 @@ class PaperBrokerProvider:
                 row.quantity,
                 row.average_cost,
                 row.cost_basis,
+                row.instrument.name,
+                row.instrument.asset_class,
             )
             for row in rows
         ]
@@ -90,7 +92,7 @@ class PaperBrokerProvider:
         )
         fx_rates = await load_fx_rates(self.session)
         positions: list[BrokerPosition] = []
-        for ticker, native_currency, quantity, average_cost, cost_basis in saved:
+        for ticker, native_currency, quantity, average_cost, cost_basis, name, asset_class in saved:
             fixed_income_product = products.get(ticker.upper())
             native_mark = (
                 await fixed_income_price_per_face_db(self.session, fixed_income_product)
@@ -119,6 +121,10 @@ class PaperBrokerProvider:
                     market_value=market_value,
                     unrealized_pnl=unrealized,
                     unrealized_pnl_pct=pct,
+                    instrument_name=name,
+                    asset_class=asset_class,
+                    currency=base_currency,
+                    current_price=price if native_mark is not None else None,
                 )
             )
         return positions

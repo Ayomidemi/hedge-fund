@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
 } from "react";
 import type {
   FxRateUpdatedPayload,
@@ -19,8 +20,7 @@ import type {
 } from "@/lib/live-events";
 import { PlatformSocket } from "@/lib/websocket-client";
 
-/** Server components re-render at most this often after live events. */
-const ROUTER_REFRESH_DEBOUNCE_MS = 2_000;
+import { createLiveRefreshScheduler, shouldRefreshRoute } from "@/lib/live-refresh";
 
 type LiveDataContextValue = {
   connected: boolean;
@@ -54,6 +54,12 @@ export function useLiveQuote(ticker: string | null | undefined): LiveQuote | nul
 
 export function LiveDataProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const [refreshPending, startRefresh] = useTransition();
+  const currentRoute = useRef(pathname);
+  const refreshBusy = useRef(false);
+  useEffect(() => { currentRoute.current = pathname; }, [pathname]);
+  useEffect(() => { refreshBusy.current = refreshPending; }, [refreshPending]);
   const [connected, setConnected] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, LiveQuote>>({});
   const [pricesAsOf, setPricesAsOf] = useState<string | null>(null);
@@ -65,15 +71,24 @@ export function LiveDataProvider({ children }: { children: React.ReactNode }) {
   const [fxRate, setFxRate] = useState<FxRateUpdatedPayload | null>(null);
   const [lastNewsPoll, setLastNewsPoll] =
     useState<NewsPollCompletedPayload | null>(null);
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshScheduler = useRef<ReturnType<typeof createLiveRefreshScheduler> | null>(null);
+  useEffect(() => {
+    const scheduler = createLiveRefreshScheduler({
+      refresh: () => { refreshBusy.current = true; startRefresh(() => router.refresh()); },
+      visible: () => document.visibilityState === "visible",
+      busy: () => refreshBusy.current,
+      schedule: (callback, delay) => setTimeout(callback, delay),
+      cancel: clearTimeout,
+    });
+    refreshScheduler.current = scheduler;
+    const resume = () => scheduler.resume();
+    document.addEventListener("visibilitychange", resume);
+    return () => { scheduler.dispose(); refreshScheduler.current = null; document.removeEventListener("visibilitychange", resume); };
+  }, [router, startRefresh]);
 
-  const scheduleRouterRefresh = useCallback(() => {
-    if (refreshTimer.current) return;
-    refreshTimer.current = setTimeout(() => {
-      refreshTimer.current = null;
-      router.refresh();
-    }, ROUTER_REFRESH_DEBOUNCE_MS);
-  }, [router]);
+  const scheduleRouterRefresh = useCallback((eventType: string) => {
+    if (shouldRefreshRoute(currentRoute.current, eventType)) refreshScheduler.current?.notify();
+  }, []);
 
   const handleEvent = useCallback(
     (event: PlatformEvent) => {
@@ -96,18 +111,18 @@ export function LiveDataProvider({ children }: { children: React.ReactNode }) {
 
       if (event.type === "price_refresh.completed") {
         setLastRefresh(event.payload);
-        scheduleRouterRefresh();
+        scheduleRouterRefresh(event.type);
         return;
       }
 
       if (event.type === "portfolio.marked") {
         setLastPortfolioMarkedAt(event.emitted_at);
-        scheduleRouterRefresh();
+        scheduleRouterRefresh(event.type);
         return;
       }
 
       if (event.type === "system_log.entry") {
-        scheduleRouterRefresh();
+        scheduleRouterRefresh(event.type);
         return;
       }
 
@@ -135,7 +150,6 @@ export function LiveDataProvider({ children }: { children: React.ReactNode }) {
     socket.start();
     return () => {
       socket.stop();
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
   }, [handleEvent]);
 

@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.read_cache import table_exists
 from app.models import InvestSetting
 
 logger = logging.getLogger(__name__)
@@ -256,14 +256,13 @@ async def get_invest_setting(session: AsyncSession, key: str) -> Any:
     fallback = default_invest_setting(key)
     if fallback is None:
         return None
-    settings_available = await ensure_invest_settings(session, [key])
+    settings_available = await _invest_settings_table_exists(session)
     if not settings_available:
         return fallback
     try:
         record = await session.scalar(
             select(InvestSetting)
             .where(InvestSetting.key == key)
-            .where(InvestSetting.is_active.is_(True))
         )
     except (OperationalError, ProgrammingError) as exc:
         if not _is_missing_invest_settings_table(exc):
@@ -275,6 +274,10 @@ async def get_invest_setting(session: AsyncSession, key: str) -> Any:
         )
         return fallback
     if record is None:
+        # Seed only a missing setting; configured reads need one lookup.
+        await ensure_invest_settings(session, [key])
+        return fallback
+    if not record.is_active:
         return fallback
     return _merge_default(fallback, record.payload)
 
@@ -562,9 +565,4 @@ async def _rollback_after_settings_fallback(session: AsyncSession) -> None:
 
 
 async def _invest_settings_table_exists(session: AsyncSession) -> bool:
-    connection = await session.connection()
-    return await connection.run_sync(
-        lambda sync_connection: sqlalchemy_inspect(sync_connection).has_table(
-            "invest_settings"
-        )
-    )
+    return await table_exists(session, "invest_settings")

@@ -20,17 +20,13 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const params = (await searchParams) ?? {};
   const initialView = isReportCenterView(params.view) ? params.view : "overview";
 
-  try {
-    report = await getReportOverview({ kind: "monthly" }, { accessToken });
-  } catch {
-    unavailable = true;
-  }
-
-  try {
-    snapshots = await getReportSnapshots(12, { accessToken });
-  } catch {
-    snapshots = [];
-  }
+  const [reportResult, snapshotsResult] = await Promise.allSettled([
+    getReportOverview({ kind: "monthly" }, { accessToken }),
+    getReportSnapshots(12, { accessToken }),
+  ]);
+  report = reportResult.status === "fulfilled" ? reportResult.value : null;
+  unavailable = reportResult.status === "rejected";
+  snapshots = snapshotsResult.status === "fulfilled" ? snapshotsResult.value : [];
 
   return (
     <ReportsCenter

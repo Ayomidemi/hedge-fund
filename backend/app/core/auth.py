@@ -6,6 +6,7 @@ import certifi
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.concurrency import run_in_threadpool
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError
 
@@ -190,7 +191,7 @@ async def get_optional_user(
     if credentials is None or not credentials.credentials:
         return None
 
-    payload = _decode_supabase_token(credentials.credentials)
+    payload = await run_in_threadpool(_decode_supabase_token, credentials.credentials)
     return _user_from_payload(payload)
 
 
@@ -207,7 +208,7 @@ async def require_authenticated_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = _decode_supabase_token(credentials.credentials)
+    payload = await run_in_threadpool(_decode_supabase_token, credentials.credentials)
     return _user_from_payload(payload)
 
 

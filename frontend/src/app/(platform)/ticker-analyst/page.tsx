@@ -31,20 +31,14 @@ export default async function TickerAnalystPage({ searchParams }: TickerAnalystP
   }
 
   const initialTicker = analyzeTicker || ticker || null;
-  let desk: TickerDesk | null = null;
-  if (initialTicker && accessToken && startInWorkflow) {
-    try {
-      desk = await getTickerDesk(initialTicker, { accessToken });
-    } catch {
-      desk = null;
-    }
-  }
-
-  try {
-    recentMemos = await getRecentTickerMemos({ accessToken });
-  } catch {
-    isUnavailable = true;
-  }
+  const [deskResult, memosResult] = await Promise.allSettled([
+    initialTicker && accessToken && startInWorkflow
+      ? getTickerDesk(initialTicker, { accessToken }) : Promise.resolve(null),
+    getRecentTickerMemos({ accessToken }),
+  ]);
+  const desk: TickerDesk | null = deskResult.status === "fulfilled" ? deskResult.value : null;
+  recentMemos = memosResult.status === "fulfilled" ? memosResult.value : [];
+  isUnavailable = memosResult.status === "rejected";
 
   return (
     <TickerAnalyst

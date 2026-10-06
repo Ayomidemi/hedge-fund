@@ -43,6 +43,10 @@ class BrokerPosition:
     market_value: Decimal
     unrealized_pnl: Decimal
     unrealized_pnl_pct: Decimal | None = None
+    instrument_name: str | None = None
+    asset_class: str | None = None
+    currency: str | None = None
+    current_price: Decimal | None = None
 
 
 @dataclass(frozen=True)

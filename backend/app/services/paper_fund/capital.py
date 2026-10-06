@@ -12,7 +12,7 @@ from app.services.attribution.performance import _accumulate_trade_attribution
 from app.services.market_data.fx_convert import amount_in_base
 from app.services.market_data.fx_refresh import load_fx_rates
 from app.services.portfolio.operating_core import (
-    CapitalValidationError, _rebuild_positions_from_filled_trades,
+    CapitalValidationError, DashboardReadState, _rebuild_positions_from_filled_trades,
     _trade_cash_ledger_values, cash_balance_in_base,
 )
 from app.services.portfolio.calculations import money
@@ -42,13 +42,27 @@ class CapitalBook:
     state: dict
 
 
-async def load_book(session, portfolio) -> CapitalBook:
-    positions = list(await session.scalars(select(Position).options(selectinload(Position.instrument))
-        .where(Position.portfolio_id == portfolio.id, Position.quantity > 0)
-        .execution_options(populate_existing=True)))
-    entries = list(await session.scalars(select(CashLedgerEntry).where(CashLedgerEntry.portfolio_id == portfolio.id)))
-    cash = await cash_balance_in_base(session, portfolio, entries)
-    rates = await load_fx_rates(session)
+async def load_book(session, portfolio, *, dashboard_state: DashboardReadState | None = None) -> CapitalBook:
+    if dashboard_state is not None:
+        if dashboard_state.portfolio.id != portfolio.id:
+            raise CapitalValidationError("Capital snapshot belongs to a different portfolio.")
+        positions = [position for position in dashboard_state.positions if position.quantity > 0]
+        entries = dashboard_state.cash_entries
+        cash = dashboard_state.cash_balance
+        trades = sorted((trade for trade in dashboard_state.trades if trade.status == "filled"),
+                        key=lambda trade: (trade.trade_date, trade.created_at))
+    else:
+        positions = list(await session.scalars(select(Position).options(selectinload(Position.instrument))
+            .where(Position.portfolio_id == portfolio.id, Position.quantity > 0)
+            .execution_options(populate_existing=True)))
+        entries = list(await session.scalars(select(CashLedgerEntry).where(CashLedgerEntry.portfolio_id == portfolio.id)))
+        cash = await cash_balance_in_base(session, portfolio, entries)
+        trades = list(await session.scalars(select(Trade).options(selectinload(Trade.instrument))
+            .where(Trade.portfolio_id == portfolio.id, Trade.status == "filled")
+            .order_by(Trade.trade_date, Trade.created_at)))
+    needs_fx = any(entry.currency != portfolio.base_currency for entry in entries) or any(
+        trade.instrument.currency != portfolio.base_currency for trade in trades)
+    rates = await load_fx_rates(session) if needs_fx else {}
     net_contributions = ZERO
     for entry in entries:
         if entry.entry_type in {"trade_buy", "trade_sell"} or entry.entry_date > date.today():
@@ -57,9 +71,6 @@ async def load_book(session, portfolio) -> CapitalBook:
         if converted is None:
             raise CapitalValidationError("Capital cash cannot be valued without its FX rate.")
         net_contributions += converted
-    trades = list(await session.scalars(select(Trade).options(selectinload(Trade.instrument))
-        .where(Trade.portfolio_id == portfolio.id, Trade.status == "filled")
-        .order_by(Trade.trade_date, Trade.created_at)))
     lots, _, _ = _accumulate_trade_attribution(trades, portfolio=portfolio, fx_rates=rates)
     invested = money(sum((position.market_value for position in positions), ZERO))
     equity = money(cash + invested)

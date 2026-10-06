@@ -13,7 +13,6 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +25,7 @@ from app.api.schemas.invest import (
 from app.core.config import settings
 from app.core.market_constants import QUOTE_HTTP_TIMEOUT_SECONDS
 from app.api.schemas.operating_core import InstrumentCreate
+from app.db.read_cache import table_exists, transaction_read_cache
 from app.models import (
     Instrument,
     InvestFixedIncomeProduct as InvestFixedIncomeProductRecord,
@@ -971,6 +971,8 @@ async def search_fixed_income_products_db(
 
 
 async def ensure_fixed_income_seed_products(session: AsyncSession) -> bool:
+    if transaction_read_cache(session).get("fixed_income_seeded"):
+        return True
     default_tickers = [product.ticker for product in FIXED_INCOME_PRODUCTS]
     if not await _fixed_income_table_exists(session, "invest_fixed_income_products"):
         return False
@@ -992,6 +994,7 @@ async def ensure_fixed_income_seed_products(session: AsyncSession) -> bool:
         product for product in FIXED_INCOME_PRODUCTS if product.ticker not in existing
     ]
     if not missing:
+        transaction_read_cache(session)["fixed_income_seeded"] = True
         return True
     try:
         for product in missing:
@@ -1016,6 +1019,7 @@ async def ensure_fixed_income_seed_products(session: AsyncSession) -> bool:
             raise
         await _rollback_after_fixed_income_fallback(session)
         return False
+    transaction_read_cache(session)["fixed_income_seeded"] = True
     return True
 
 
@@ -2657,9 +2661,4 @@ async def _rollback_after_fixed_income_fallback(session: AsyncSession) -> None:
 
 
 async def _fixed_income_table_exists(session: AsyncSession, table_name: str) -> bool:
-    connection = await session.connection()
-    return await connection.run_sync(
-        lambda sync_connection: sqlalchemy_inspect(sync_connection).has_table(
-            table_name
-        )
-    )
+    return await table_exists(session, table_name)
