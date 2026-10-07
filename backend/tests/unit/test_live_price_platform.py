@@ -367,3 +367,34 @@ class CelerySchedulingTests(TestCase):
         schedule = celery_app.conf.beat_schedule["market-radar"]
         self.assertEqual(schedule["task"], "radar.scan")
         self.assertEqual(schedule["schedule"], float(RADAR_SCAN_INTERVAL_SECONDS))
+
+
+class UnusableTiingoFallbackTests(IsolatedAsyncioTestCase):
+    async def test_indicative_response_without_trade_timestamps_uses_backup(self):
+        # Tiingo can return 200 with tngoLast and a daily timestamp, but no
+        # lastSaleTimestamp. That must neither become a fill nor hide FMP.
+        _clear_provider_backoff()
+        response = httpx.Response(200, request=httpx.Request('GET', 'https://example.test/iex'), json=[{
+            'ticker': 'SPY', 'tngoLast': 100, 'timestamp': '2026-10-06T20:00:00Z',
+            'lastSaleTimestamp': None, 'last': None,
+        }])
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.get.return_value = response
+        backup = _sample_quote('SPY', source='fmp')
+        with patch('app.services.market_data.quote_provider.httpx.AsyncClient', return_value=client), patch('app.services.market_data.quote_provider.settings.hf_tiingo_api_key', 'test'), patch('app.services.market_data.quote_provider.settings.hf_fmp_api_key', 'test'), patch('app.services.market_data.quote_provider._fetch_fmp_quotes', AsyncMock(return_value={'SPY': backup})) as fallback:
+            quotes = await fetch_quotes(['SPY'])
+        fallback.assert_awaited_once_with(['SPY'])
+        self.assertIs(quotes['SPY'], backup)
+
+    async def test_empty_success_response_uses_backup(self):
+        from app.services.market_data.quote_provider import _fetch_tiingo_iex
+        _clear_provider_backoff()
+        response = httpx.Response(200, request=httpx.Request('GET', 'https://example.test/iex'), json=[])
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.get.return_value = response
+        with patch('app.services.market_data.quote_provider.httpx.AsyncClient', return_value=client):
+            quotes, available = await _fetch_tiingo_iex(['SPY'])
+        self.assertEqual(quotes, {})
+        self.assertFalse(available)

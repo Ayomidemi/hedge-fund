@@ -555,3 +555,36 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             self.assertEqual(report.summary.net_pnl, D("100"))
             self.assertEqual(report.summary.reconciliation_gap, 0)
             self.assertEqual(report.summary.total_return_pct, D("0.99"))
+
+    async def test_unquoted_radar_name_is_reported_instead_of_silently_disappearing(self):
+        await self.seed_signal()
+        async with self.factory() as session:
+            radar = await session.scalar(select(RadarRun).order_by(RadarRun.started_at.desc()).limit(1))
+            session.add(RadarSnapshot(run_id=radar.id, ticker='NOQUOTE', name='Unquoted discovery',
+                jurisdiction='US', currency='USD', asset_class='equity', source='fmp',
+                price=D('20'), change_pct=D('8'), as_of=NOW, source_as_of=NOW,
+                radar_priority='P0', priority_score=D('99'), evidence={}))
+            await session.commit()
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        result = await self.call_cycle()
+        self.assertTrue(any('NOQUOTE: No verified instrument' in blocker for blocker in result.blockers))
+        self.assertFalse(any(order.ticker == 'NOQUOTE' for order in result.orders))
+
+    async def test_worker_refreshes_order_quotes_and_cycles_without_rendering_dashboard(self):
+        from app.services.paper_fund.quotes import refresh_order_quotes
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        async with self.factory() as session:
+            with patch('app.services.paper_fund.engine.overview', AsyncMock(side_effect=AssertionError('Worker should not render UI'))):
+                self.assertIsNone(await cycle(session, self.owner, now=NOW, include_overview=False))
+        async with self.factory() as session:
+            with patch('app.services.paper_fund.quotes.ingest_quotes', AsyncMock(return_value=SimpleNamespace(success_count=1))) as ingest:
+                self.assertEqual(await refresh_order_quotes(session, now=NOW), 1)
+                self.assertEqual(len(ingest.await_args.args[1]), 1)
+            result = await overview(session, self.owner, now=NOW)
+            self.assertEqual(len(result.orders), 1)
+            self.assertEqual(result.orders[0].status, 'pending')
+            self.assertEqual(result.run.last_cycle_at, NOW)

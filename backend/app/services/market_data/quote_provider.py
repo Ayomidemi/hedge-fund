@@ -6,8 +6,8 @@ prices. Everything else reads from the instrument_quotes table.
 Chain:
 1. Tiingo IEX is the primary US quote source (one batch request).
 2. FMP, then Polygon, run only when Tiingo is unavailable: no key,
-   backoff, or the request itself failed. A successful Tiingo response
-   that omits a symbol is coverage, not a reason to call FMP.
+   backoff, the request failed, or no timestamped trades were returned.
+   Partial symbol coverage alone does not trigger per-symbol fallbacks.
 
 Nigerian tickers (SYMBOL.NG) are fetched from NGN Market's free search
 endpoint individually.
@@ -202,8 +202,9 @@ async def _fetch_tiingo_iex(
 ) -> tuple[dict[str, LiveQuote], bool]:
     """Return quotes and whether Tiingo itself answered.
 
-    The second value is False when Tiingo is backing off or the request
-    failed. A list response is available even if some symbols are omitted.
+    The second value is False when Tiingo is backing off, the request
+    failed, or the response contains no verifiable trades. An HTTP 200 with
+    only closing/indicative prices must not suppress the backup provider.
     """
     now = datetime.now(timezone.utc)
     if _provider_is_backing_off("tiingo", now):
@@ -253,7 +254,9 @@ async def _fetch_tiingo_iex(
             volume=_int(item.get("volume")),
             raw_payload=item,
         )
-    return quotes, True
+    if not quotes:
+        logger.warning("tiingo_no_timestamped_trades", extra={"requested_count": len(tickers)})
+    return quotes, bool(quotes)
 
 
 async def _fetch_ngn_quotes(tickers: list[str]) -> dict[str, LiveQuote]:

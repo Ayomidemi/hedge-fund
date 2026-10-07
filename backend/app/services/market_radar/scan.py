@@ -833,6 +833,9 @@ async def _apply_historical_evidence(
         for candidate in candidates
         if candidate.ticker in instruments
     }
+    for candidate in candidates:
+        if candidate.ticker not in instruments:
+            candidate.evidence["history_gap"] = "no_instrument"
     if not candidate_by_instrument:
         return
 

@@ -10,6 +10,7 @@ from app.db.locks import hold_job_lock
 from app.db.session import engine_options
 from app.models import PaperFundRun
 from app.services.paper_fund.engine import cycle
+from app.services.paper_fund.quotes import refresh_order_quotes
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -28,13 +29,21 @@ async def _run() -> None:
         async with hold_job_lock(engine, PAPER_FUND_LOCK_KEY) as locked:
             if not locked:
                 return
+            # Fetch outside account locks. A ten-minute market-data cadence
+            # cannot support the engine's two-minute quote freshness rule.
+            async with factory() as session:
+                try:
+                    await refresh_order_quotes(session)
+                except Exception:
+                    await session.rollback()
+                    logger.exception("paper_fund_quote_refresh_failed")
             async with factory() as session:
                 owners = list(await session.scalars(select(PaperFundRun.owner_user_id)
                                                     .where(PaperFundRun.status != "completed")))
             for owner in owners:
                 async with factory() as session:
                     try:
-                        await cycle(session, owner)
+                        await cycle(session, owner, include_overview=False)
                     except Exception:
                         # Roll back the entire cycle; the heartbeat then exposes
                         # the fault and one user's fault cannot stop others.

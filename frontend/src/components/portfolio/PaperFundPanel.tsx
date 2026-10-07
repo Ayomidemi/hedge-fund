@@ -210,8 +210,8 @@ export function PaperFundPanel({
         </dl>
         <p className="mt-4 text-xs leading-5 text-zinc-500">Stops trigger simulated exits; gaps can exceed the planned loss. Fees: {overview.policy.fee_bps} bps; slippage assumption: {overview.policy.slippage_bps} bps.</p>
       </details> : null}
-      {overview.blockers.length ? <details className="py-4">
-        <summary className="cursor-pointer text-xs font-medium text-zinc-500">Execution checks <span className="ml-1 text-zinc-500 dark:text-zinc-400">({overview.blockers.length})</span></summary>
+      {overview.blockers.length ? <details open={automatic && queued.length === 0 && positions.length === 0} className="py-4">
+        <summary className="cursor-pointer text-xs font-medium text-zinc-500">{automatic && queued.length === 0 ? "Why no new trades" : "Execution checks"} <span className="ml-1 text-zinc-500 dark:text-zinc-400">({overview.blockers.length})</span></summary>
         <ul className="mt-3 list-disc space-y-2 pl-4 text-xs leading-5 text-zinc-500">{overview.blockers.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>
       </details> : null}
       <details className="py-4 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400"><summary className="cursor-pointer">About simulated execution</summary><p className="mt-2">{overview.simulation_notice}</p></details>

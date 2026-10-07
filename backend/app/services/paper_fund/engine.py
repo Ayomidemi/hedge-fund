@@ -398,7 +398,8 @@ async def control_run(session: AsyncSession, owner: str, action: str) -> PaperFu
     return await set_trading_mode(session, owner, "manual" if action == "pause" else "automatic")
 
 
-async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = None) -> PaperFundResponse:
+async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = None,
+                include_overview: bool = True) -> PaperFundResponse | None:
     # All Capital mutations use this same lock before touching execution state.
     portfolio = await _portfolio(session, owner)
     run = await _latest(session, owner, lock=True)
@@ -408,7 +409,7 @@ async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = Non
     if run.portfolio_id is None:
         raise PaperFundError("Existing execution history must be attached to Capital before trading.")
     if run.status == "completed" or (run.last_cycle_at is not None and now < utc(run.last_cycle_at)):
-        return await overview(session, owner, now=now)
+        return await overview(session, owner, now=now) if include_overview else None
     orders = await _orders(session, run)
     run.policy = await capital_policy(session, portfolio.id, run.policy)
     book = await load_book(session, portfolio)
@@ -455,7 +456,7 @@ async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = Non
     await _snapshot(session, run, orders, now, book=book,
                     force=before != [(o.id, o.status) for o in orders] or run.status == "completed")
     await session.commit()
-    return await overview(session, owner, now=now)
+    return await overview(session, owner, now=now) if include_overview else None
 
 
 async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, blockers: list[str]) -> None:
@@ -465,7 +466,7 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
         blockers.append("Waiting for a completed market radar scan.")
         return
     rows = list((await session.execute(select(RadarSnapshot, Instrument, InstrumentQuote)
-        .join(Instrument, Instrument.ticker == RadarSnapshot.ticker)
+        .outerjoin(Instrument, Instrument.ticker == RadarSnapshot.ticker)
         .outerjoin(InstrumentQuote, InstrumentQuote.instrument_id == Instrument.id)
         .where(RadarSnapshot.run_id == radar_run.id)
         .where(RadarSnapshot.radar_priority.in_(["P0", "P1"]))
@@ -473,6 +474,10 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
     seen = {o.instrument_id for o in orders} | {p.instrument_id for p in getattr(run, "_external_holdings", [])}
     added = 0
     for snapshot, instrument, quote in rows:
+        if instrument is None:
+            if len(blockers) < 25:
+                blockers.append(f"{snapshot.ticker}: No verified instrument and executable quote have been loaded from the data provider.")
+            continue
         if instrument.id in seen:
             continue
         error = execution_rejection(snapshot, quote, now)
