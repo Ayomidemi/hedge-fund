@@ -177,11 +177,18 @@ async def get_dashboard(
             Decimal("0"),
         )
     )
+    from dataclasses import replace
+    from app.services.risk.policy import apply_account_limits, profile_policy
+    effective = apply_account_limits(profile_policy(portfolio.risk_profile or "medium"), risk_limits)
+    keys = {"max_single_equity_position_pct": "max_position_pct", "max_etf_position_pct": "max_etf_position_pct",
+            "max_sector_exposure_pct": "max_sector_pct", "min_cash_allocation_pct": "cash_reserve_pct"}
+    snapshots = [replace(_risk_limit_snapshot(limit), threshold_value=Decimal(str(effective[keys[limit.limit_type]])))
+                 if limit.limit_type in keys else _risk_limit_snapshot(limit) for limit in risk_limits]
     risk_checks = evaluate_risk_limits(
         cash_balance=cash_balance,
         positions=position_snapshots,
         nav=nav,
-        risk_limits=[_risk_limit_snapshot(limit) for limit in risk_limits],
+        risk_limits=snapshots,
     )
     breached_checks = [check.limit_type for check in risk_checks if not check.passed]
 
@@ -217,7 +224,7 @@ async def get_dashboard(
             CashLedgerEntryResponse.model_validate(entry) for entry in cash_entries[:10]
         ],
         recent_trades=[_trade_response(trade) for trade in trades[:10]],
-        risk_limits=[RiskLimitResponse.model_validate(limit) for limit in risk_limits],
+        risk_limits=[RiskLimitResponse.model_validate(limit).model_copy(update={"threshold_value": snapshot.threshold_value}) for limit, snapshot in zip(risk_limits, snapshots)],
         risk_checks=[
             RiskCheckResponse(
                 name=check.name,

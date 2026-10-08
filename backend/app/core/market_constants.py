@@ -116,7 +116,7 @@ def _sector_benchmarks() -> dict[str, str]:
 RADAR_SECTOR_BENCHMARKS = _sector_benchmarks()
 
 RADAR_VENDOR_QUOTE_SOURCES = frozenset(
-    {"fmp", "tiingo", "tiingo_stream", "polygon", "ngnmarket"}
+    {"fmp", "tiingo", "tiingo_reference", "tiingo_stream", "polygon", "ngnmarket"}
 )
 
 # Opportunity Queue promotion. Flagged names stay on Radar; only P0/P1

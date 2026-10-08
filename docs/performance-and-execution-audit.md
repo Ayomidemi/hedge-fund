@@ -42,3 +42,17 @@ No trades were manufactured, no entry thresholds were relaxed, and no account re
 - Frontend lint, TypeScript checks and production build passed.
 
 Both local Celery workers were warm-restarted to load the fixes. Post-restart verification found both ready with no startup exceptions, a successful execution cycle, and a heartbeat 27 seconds old. The account remained in Automatic mode with $10,000 cash and zero orders; the current blocker was the closed US regular session.
+
+## Open-session follow-up — 7 October 2026
+
+At 14:51 UTC the execution heartbeat was current and Automatic mode was enabled, but no orders existed. The market was open; yesterday's closed-session explanation was no longer sufficient.
+
+A live Tiingo response contained current `tngoLast` and `timestamp` fields, while `last` and `lastSaleTimestamp` were null. [Tiingo's IEX documentation](https://www.tiingo.com/documentation/iex) confirms this is its derived reference-price feed; the exchange trade fields require TOPS entitlement. Yesterday's parser correction handled empty results but did not support this valid reference feed. REST now records it as `tiingo_reference`, using its original provider timestamp and matching reference price. This is consistent with the reference-price websocket feed already supported by the simulator. It does not claim an executable exchange bid or offer. Stale, future-dated, missing-timestamp and mismatched-price observations remain blocked. The simulation notice now explicitly discloses reference-price fills.
+
+A second bug grouped 101 names without industry metadata into an artificial industry and labeled them a market-wide event. Unknown classifications now remain unknown and cannot manufacture industry/market breadth. Stale/carried-forward flags no longer contribute to breadth. Known-industry breadth tests continue to pass; no signal, liquidity, price, capital or risk thresholds were lowered.
+
+Quote selection now prioritizes new positive US discoveries meeting the existing price floor ahead of pinned historical names, while preserving watched/held-name priority and the existing provider-call cap. Previously the older working set could continually consume the quote budget.
+
+The new disposable-database test completes a reference-price entry and profit-target exit and reconciles both with the Capital ledger. Current validation: 318 unit tests and 29 PostgreSQL integration tests, including that new round trip.
+
+After the updated workers were loaded, the actual paper account generated an automatic DFNS limit order at 15:00:36 UTC: 78 shares with a $6.33 limit ($493.74 maximum share notional, before fees). At the 15:02 UTC read it was still pending; cash was $10,000 and the trade journal had no fills. A later timestamped reference observation was present. The $6.325 reference plus modeled adverse slippage rounds to $6.34, above the limit, so leaving the order pending was correct. The limit was not raised to manufacture a fill. Both workers reported healthy cycles without exceptions.

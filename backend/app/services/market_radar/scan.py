@@ -458,6 +458,11 @@ def _quote_targets(
         key=lambda item: (
             not item.on_watchlist,
             not item.always_watched,
+            # Today's potential long entries must not sit behind the entire
+            # pinned historical working set indefinitely under the quote cap.
+            not (jurisdiction == JURISDICTION_US and item.source == "fmp"
+                 and (item.change_pct or Decimal("0")) >= 4
+                 and (item.price or Decimal("0")) >= 5),
             not item.pinned_prior,
             -abs(item.change_pct or Decimal("0")),
             _evidence_int(item, "liquidity_rank") or 9999,

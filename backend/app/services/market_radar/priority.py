@@ -313,7 +313,9 @@ def build_industry_contexts(
                     reverse=True,
                 )
             ),
-            status=_industry_status_without_market(len(flagged), len(group), ratio),
+            # Missing classifications do not make unrelated names an industry.
+            status=("isolated_names" if flagged else "quiet") if key.endswith(":unclassified")
+            else _industry_status_without_market(len(flagged), len(group), ratio),
         )
 
     market_jurisdictions = _market_event_jurisdictions(draft, members)
@@ -632,6 +634,8 @@ def _industry_key(member: Any) -> str:
 
 
 def _member_is_flagged(member: Any) -> bool:
+    if getattr(member, "carried_forward", False) or getattr(member, "stale_reason", None):
+        return False
     ticker = str(getattr(member, "ticker", "") or "").upper()
     if ticker in RADAR_PULSE_TICKERS:
         return False
@@ -681,13 +685,15 @@ def _market_event_jurisdictions(
 ) -> set[str]:
     by_jurisdiction: dict[str, list[IndustryContext]] = defaultdict(list)
     for context in contexts.values():
-        if context.jurisdiction in {"", "mixed"}:
+        if context.jurisdiction in {"", "mixed"} or context.key.endswith(":unclassified"):
             continue
         by_jurisdiction[context.jurisdiction].append(context)
 
     flagged_by_jurisdiction: dict[str, list[Any]] = defaultdict(list)
     names_by_jurisdiction: dict[str, list[Any]] = defaultdict(list)
     for member in members:
+        if _industry_key(member).endswith(":unclassified"):
+            continue
         jurisdiction = str(getattr(member, "jurisdiction", "") or "")
         if not jurisdiction:
             continue
@@ -725,6 +731,8 @@ def _market_event_jurisdictions(
 def _move_scope(candidate: RadarCandidate, context: IndustryContext) -> str:
     if not is_flagged(candidate) or _is_pulse_instrument(candidate):
         return "none"
+    if context.key.endswith(":unclassified"):
+        return "unknown"
     if context.status == "market_event":
         return "market"
     if context.status == "industry_event":

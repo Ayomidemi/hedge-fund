@@ -93,7 +93,7 @@ export function PaperFundPanel({
         setOverview(data);
       }
       if (action !== "refresh") {
-        toast.success(action === "automatic" ? "Automatic mode enabled." : "Manual mode: automatic buys and sells stopped.");
+        toast.success(action === "automatic" ? "Automatic mode enabled." : "Manual mode: ordinary trading paused. Already-triggered liquidation continues.");
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Capital request failed.");
@@ -106,12 +106,16 @@ export function PaperFundPanel({
   const run = overview?.run;
   const queued = overview?.orders.filter((order) => order.status === "pending") ?? [];
   const positions = overview?.orders.filter((order) => order.status === "open") ?? [];
+  const heldCount = overview?.capital?.open_position_count ?? positions.length;
+  const positionLimit = overview?.policy.max_positions ?? 0;
+  const usedSlots = heldCount + queued.length;
   const history = overview?.orders.filter((order) => !["pending", "open"].includes(order.status)) ?? [];
   const loading = overview === null && error === null;
   const automatic = overview?.trading_mode === "automatic";
-  const staleCycle = Boolean(automatic && run && run.status !== "completed" && overview
+  const forcedLiquidation = positions.length > 0 && (run?.status === "halted" || run?.status === "liquidating");
+  const staleCycle = Boolean((automatic || forcedLiquidation) && run && run.status !== "completed" && overview
     && Date.parse(overview.generated_at) - Date.parse(run.last_cycle_at ?? run.started_at) > 90_000);
-  const executionStatus = !overview ? "Connecting" : !automatic ? "Automatic trading off"
+  const executionStatus = !overview ? "Connecting" : !automatic && forcedLiquidation ? (staleCycle ? "Required exits delayed" : "Required liquidation active") : !automatic ? "Automatic trading off"
     : !run ? "Awaiting engine" : run.status === "halted" ? "Trading halted"
     : run.status === "completed" ? "Review complete" : run.status === "liquidating" ? "Closing positions"
     : run.status === "paused" ? "Execution paused" : staleCycle ? "Engine delayed"
@@ -140,7 +144,7 @@ export function PaperFundPanel({
     </div>
     {!overview ? <p role="status" className="text-sm text-zinc-500">{loading ? "Loading your trading settings…" : "Balances unavailable"}</p> : null}
     {error ? <p role="alert" className="rounded-sm bg-red-50 p-4 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
-    {overview && !automatic ? <p role="status" className="border-l-2 border-amber-400 pl-3 text-xs leading-5 text-zinc-500">Manual mode stops all automatic buys and sells, including stop and target exits. Existing holdings remain in Capital.</p> : null}
+    {overview && !automatic ? <p role="status" className="border-l-2 border-amber-400 pl-3 text-xs leading-5 text-zinc-500">Manual mode pauses ordinary automatic trading, including stop and target exits. Already-triggered risk or end-of-review liquidation continues until managed positions close.</p> : null}
     {staleCycle ? <p role="status" className="rounded-sm bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">The engine has not reported a cycle for over 90 seconds. Automatic execution may be delayed.</p> : null}
     {run?.halt_reason ? <p role="status" className="rounded-sm bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{run.halt_reason}</p> : null}
     {run?.status === "liquidating" ? <p className="text-sm text-zinc-500">Positions will close when eligible quotes are available. Profit or loss remains provisional until every position closes.</p> : null}
@@ -176,11 +180,12 @@ export function PaperFundPanel({
         <section className={`${panel} flex flex-col p-5 sm:p-6`}>
           <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">Execution</h3><CapitalIcon name="activity" className="h-4 w-4 text-zinc-500 dark:text-zinc-400" /></div>
           <p role="status" className="mt-5 flex items-center gap-2 text-xs font-medium"><span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${automatic && !staleCycle && run?.status === "running" ? "bg-emerald-500" : "bg-amber-500"}`} />{executionStatus}</p>
-          <p className="mt-2 text-xs leading-5 text-zinc-500">{automatic ? "Orders are sized and executed automatically when all checks pass." : "You’re in control. Automatic entries and exits are paused."}</p>
+          <p className="mt-2 text-xs leading-5 text-zinc-500">{automatic ? "Multiple orders can fill in the same check. Each position has its own stop and target; new entries do not wait for it to close." : forcedLiquidation ? "New entries are stopped. Required liquidation of managed positions continues when execution checks pass." : "Automatic entries and ordinary exits are paused."}</p>
           <dl className="my-6 grid grid-cols-2 gap-4 border-y border-zinc-100 py-4 dark:border-zinc-800">
             <div><dt className="text-[11px] text-zinc-500">Queued orders</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{queued.length}</dd></div>
             <div><dt className="text-[11px] text-zinc-500">Auto exit plans</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{positions.length}</dd></div>
           </dl>
+          <p className="mb-4 text-xs leading-5 text-zinc-500">{usedSlots} of {positionLimit} position slots used · {heldCount} held, {queued.length} reserved for entries. Cash and risk checks can limit additional trades.</p>
           <Link href="/opportunity-queue" className="mt-auto flex items-center justify-between rounded-lg bg-zinc-900 px-3.5 py-3 text-xs font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-[var(--pease-paper)]">View opportunity queue<CapitalIcon name="arrow" /></Link>
           <p className="mt-3 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">{run ? `Last check ${when(run.last_cycle_at)}` : "Waiting for execution to start"}</p>
         </section>
@@ -190,27 +195,32 @@ export function PaperFundPanel({
 
     {overview && mode !== "dashboard" ? <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-zinc-500"><CapitalIcon name="activity" />{executionStatus} · {queued.length} queued orders</p> : null}
     {overview && mode === "queue" ? <>
+      <p className="text-xs leading-5 text-zinc-500">{usedSlots} of {positionLimit} position slots used. Eligible orders can fill in the same check, while existing positions remain open. Each entry must pass cash and risk checks.</p>
       <OrderTable title="Ready for automatic execution" orders={queued} kind="queue" empty={automatic ? "No executable opportunities right now. Waiting for qualifying signals, fresh quotes and risk capacity." : "Automatic trading is off. Switch to Automatic to queue and execute orders."} />
       <OrderTable title="Positions with automatic exit plans" orders={positions} kind="positions" empty="No automatic exit plans. All holdings are shown on the Capital overview." />
-      {!automatic && positions.length > 0 ? <p className="text-xs text-amber-700 dark:text-amber-400">Exit plans are paused in Manual mode. Stops and targets will not execute automatically.</p> : null}
+      {!automatic && positions.length > 0 ? <p className="text-xs text-amber-700 dark:text-amber-400">{forcedLiquidation ? "Required liquidation remains active in Manual mode." : "Ordinary exit plans are paused in Manual mode. Stops and targets will not execute automatically."}</p> : null}
       {history.length > 0 ? <OrderTable title="Execution history" orders={history} kind="history" empty="No executions yet." /> : null}
     </> : null}
     {mode === "radar" ? <Link href="/opportunity-queue" className="inline-flex items-center gap-3 text-xs font-medium hover:underline">View execution queue<CapitalIcon name="arrow" /></Link> : null}
 
     {overview ? <div className="divide-y divide-zinc-200/70 border-y border-zinc-200/70 dark:divide-zinc-800 dark:border-zinc-800">
       {mode !== "radar" ? <details className="py-4">
-        <summary className="cursor-pointer text-xs font-medium text-zinc-500">Automatic trading rules</summary>
+        <summary className="cursor-pointer text-xs font-medium text-zinc-500">Automatic trading rules · <span className="capitalize">{overview.policy.profile ?? "medium"} risk</span></summary>
         <dl className="mt-5 grid grid-cols-2 gap-x-5 gap-y-4 text-sm md:grid-cols-3">
-          <Rule label="Maximum position" value={`${overview.policy.max_position_pct}% of account value`} />
+          <Rule label="Maximum stock position" value={`${overview.policy.max_position_pct}% of account value`} />
+          <Rule label="Maximum ETF position" value={`${overview.policy.max_etf_position_pct ?? overview.policy.max_position_pct}% of account value`} />
+          <Rule label="Combined planned loss" value={`${overview.policy.max_aggregate_risk_pct ?? "—"}%`} />
+          <Rule label="Daily entry pause" value={`${overview.policy.max_daily_loss_pct ?? "—"}%`} />
           <Rule label="Planned risk per trade" value={`${overview.policy.risk_per_trade_pct}% of account value`} />
           <Rule label="Maximum positions" value={String(overview.policy.max_positions)} />
           <Rule label="Minimum cash reserve" value={`${overview.policy.cash_reserve_pct}%`} />
           <Rule label="Drawdown halt" value={`${overview.policy.max_drawdown_pct}%`} />
           <Rule label="Stop / profit target" value={`${overview.policy.stop_loss_pct}% / ${overview.policy.take_profit_pct}%`} />
         </dl>
+        <Link href="/settings" className="mt-4 inline-block text-xs underline">Change risk profile in Settings</Link>
         <p className="mt-4 text-xs leading-5 text-zinc-500">Stops trigger simulated exits; gaps can exceed the planned loss. Fees: {overview.policy.fee_bps} bps; slippage assumption: {overview.policy.slippage_bps} bps.</p>
       </details> : null}
-      {overview.blockers.length ? <details open={automatic && queued.length === 0 && positions.length === 0} className="py-4">
+      {overview.blockers.length ? <details open={automatic && queued.length === 0} className="py-4">
         <summary className="cursor-pointer text-xs font-medium text-zinc-500">{automatic && queued.length === 0 ? "Why no new trades" : "Execution checks"} <span className="ml-1 text-zinc-500 dark:text-zinc-400">({overview.blockers.length})</span></summary>
         <ul className="mt-3 list-disc space-y-2 pl-4 text-xs leading-5 text-zinc-500">{overview.blockers.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>
       </details> : null}

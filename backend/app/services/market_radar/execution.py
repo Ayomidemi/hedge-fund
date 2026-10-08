@@ -34,6 +34,11 @@ def quote_rejection(quote: InstrumentQuote | None, now: datetime) -> str | None:
         provider_time = _epoch_datetime(payload.get("timestamp"))
     elif quote.source == "tiingo":
         provider_time = _iso_datetime(payload.get("lastSaleTimestamp"))
+    elif quote.source == "tiingo_reference":
+        provider_time = _iso_datetime(payload.get("timestamp"))
+        reference = _number(payload.get("tngoLast"))
+        if reference is None or abs(reference - price) > Decimal("0.000001"):
+            return "The reference price does not match its provider observation."
     elif quote.source == "tiingo_stream":
         message = payload.get("message")
         data = message.get("data") if isinstance(message, dict) else None

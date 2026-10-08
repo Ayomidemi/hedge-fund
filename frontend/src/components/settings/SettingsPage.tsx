@@ -9,6 +9,8 @@ import {
 } from "@/components/ui/form-styles";
 import { toast } from "@/components/ui/ToastProvider";
 import { createClient } from "@/lib/supabase/client";
+import { CapitalRiskSettings } from "@/components/settings/CapitalRiskSettings";
+import { canAccessCapital, resolvePeaseRole } from "@/lib/pease-role";
 
 type UserProfile = {
   email: string;
@@ -17,10 +19,11 @@ type UserProfile = {
   startingCapital: string | null;
 };
 
-type SettingsTab = "profile" | "password" | "session";
+type SettingsTab = "profile" | "password" | "session" | "risk";
 
 const tabs: { key: SettingsTab; label: string }[] = [
   { key: "profile", label: "Profile" },
+  { key: "risk", label: "Capital risk" },
   { key: "password", label: "Password" },
   { key: "session", label: "Session" },
 ];
@@ -29,6 +32,7 @@ export function SettingsPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
   const [loading, setLoading] = useState(true);
+  const [capitalAccess, setCapitalAccess] = useState(false);
   const [profilePending, setProfilePending] = useState(false);
   const [passwordPending, setPasswordPending] = useState(false);
   const [logoutPending, setLogoutPending] = useState(false);
@@ -52,6 +56,7 @@ export function SettingsPage() {
       }
 
       const metadata = data.user.user_metadata ?? {};
+      setCapitalAccess(canAccessCapital(resolvePeaseRole(data.user)));
       const metadataStartingCapital = metadata.starting_capital;
       setProfile({
         email: data.user.email ?? "",
@@ -200,7 +205,7 @@ export function SettingsPage() {
 
         <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           <div className="flex flex-wrap gap-2 border-b border-zinc-200 p-4 dark:border-zinc-800">
-            {tabs.map((tab) => (
+            {tabs.filter((tab) => tab.key !== "risk" || capitalAccess).map((tab) => (
               <button
                 key={tab.key}
                 type="button"
@@ -217,6 +222,7 @@ export function SettingsPage() {
           </div>
 
           <div className="p-6">
+            {activeTab === "risk" && <CapitalRiskSettings />}
             {activeTab === "profile" && (
               <div>
                 <h2 className="text-lg font-semibold">Profile</h2>

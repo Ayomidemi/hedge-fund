@@ -7,7 +7,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest import IsolatedAsyncioTestCase, skipUnless
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -47,7 +47,7 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             await connection.execute(DropSchema(self.schema, cascade=True))
         await self.engine.dispose()
 
-    async def seed_signal(self):
+    async def seed_signal(self, *, radar_id=None, stock_cap="10"):
         ticker = "TEST" + uuid4().hex[:10].upper()
         async with self.factory() as session:
             from app.models import RiskLimit
@@ -56,11 +56,19 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             # default-account limits are tested separately below.
             limit = await session.scalar(select(RiskLimit).where(RiskLimit.portfolio_id == portfolio.id,
                 RiskLimit.limit_type == "max_single_equity_position_pct"))
-            limit.threshold_value = D("10")
+            limit.threshold_value = D(stock_cap)
             instrument = Instrument(ticker=ticker, name="Paper test", currency="USD", asset_class="equity", sector="Technology")
-            run = RadarRun(started_at=NOW, finished_at=NOW, status="completed")
+            run = await session.get(RadarRun, radar_id) if radar_id else RadarRun(started_at=NOW, finished_at=NOW, status="completed")
             session.add_all([instrument, run])
             await session.flush()
+            history_date = NOW.date() - timedelta(days=1)
+            for index in range(260):
+                while history_date.weekday() >= 5:
+                    history_date -= timedelta(days=1)
+                close = D("100") + D(index % 3) / 100
+                session.add(MarketPriceBar(instrument_id=instrument.id, bar_date=history_date, source="tiingo",
+                    close_price=close, adjusted_close_price=close, volume=1000000, currency="USD"))
+                history_date -= timedelta(days=1)
             session.add(InstrumentQuote(instrument_id=instrument.id, price=D("100"), previous_close=D("95"),
                                         currency="USD", source="fmp", as_of=NOW, is_stale=False,
                                         raw_payload={"timestamp": int(NOW.timestamp())}))
@@ -83,6 +91,243 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
     async def call_cycle(self, at=NOW):
         async with self.factory() as session:
             return await cycle(session, self.owner, now=at)
+
+    async def test_multiple_entries_fill_together_and_existing_positions_do_not_block_new_entries(self):
+        first, radar_id = await self.seed_signal(stock_cap="5")
+        second, _ = await self.seed_signal(radar_id=radar_id, stock_cap="5")
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        queued = await self.call_cycle()
+        self.assertEqual([o.status for o in queued.orders], ["pending", "pending"])
+        self.assertGreater(queued.run.reserved_cash, 0)
+        at = NOW + timedelta(seconds=30)
+        for instrument_id in (first, second):
+            await self.quote(instrument_id, "100", at)
+        await asyncio.gather(self.call_cycle(at), self.call_cycle(at))
+        opened = await self.call_cycle(at)
+        self.assertEqual([o.status for o in opened.orders], ["open", "open"])
+        self.assertEqual({o.opened_at for o in opened.orders}, {at})
+        third, _ = await self.seed_signal(radar_id=radar_id, stock_cap="5")
+        queued = await self.call_cycle(at)
+        self.assertEqual(sum(o.status == "open" for o in queued.orders), 2)
+        self.assertEqual(sum(o.status == "pending" for o in queued.orders), 1)
+        at += timedelta(seconds=30)
+        for instrument_id in (first, second, third):
+            await self.quote(instrument_id, "100", at)
+        opened = await self.call_cycle(at)
+        self.assertEqual(sum(o.status == "open" for o in opened.orders), 3)
+        self.assertEqual(opened.capital.open_position_count, 3)
+        self.assertEqual(opened.run.reserved_cash, 0)
+        self.assertEqual(opened.capital.trade_count, 3)
+        expected_cash = D("10000") - sum(o.entry_price * o.quantity + o.fees_paid for o in opened.orders)
+        self.assertEqual(opened.run.cash_balance, expected_cash)
+        # One target exit leaves the other two positions independently active.
+        at += timedelta(seconds=30)
+        await self.quote(first, "107", at)
+        closed = await self.call_cycle(at)
+        self.assertEqual(sum(o.status == "closed" for o in closed.orders), 1)
+        self.assertEqual(sum(o.status == "open" for o in closed.orders), 2)
+        self.assertEqual(closed.capital.trade_count, 4)
+
+    async def test_latest_radar_history_matches_queue_when_scan_start_times_tie(self):
+        await self.seed_signal()
+        newest, _ = await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        result = await self.call_cycle()
+        self.assertEqual(len(result.orders), 1, result.blockers)
+        async with self.factory() as session:
+            order = await session.get(PaperOrder, result.orders[0].id)
+            self.assertEqual(order.instrument_id, newest)
+
+    async def test_stalled_history_read_rolls_back_and_releases_account_lock(self):
+        await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        async def stalled(*args, **kwargs):
+            await asyncio.sleep(10)
+        with patch('app.services.paper_fund.engine.CYCLE_TIMEOUT_SECONDS', 0.2), \
+             patch('app.services.risk.risk_centre._load_price_histories', new=stalled):
+            async with self.factory() as session:
+                with self.assertRaises(TimeoutError):
+                    await cycle(session, self.owner, now=NOW)
+                self.assertFalse(session.in_transaction())
+                # Keep the timed-out session alive while a second session trades.
+                with patch('app.services.paper_fund.engine.CYCLE_TIMEOUT_SECONDS', 5), \
+                     patch('app.services.risk.risk_centre._load_price_histories', return_value={}):
+                    result = await asyncio.wait_for(self.call_cycle(), timeout=3)
+                self.assertEqual(result.run.cash_balance, D('10000'))
+                self.assertEqual(result.orders, [])
+
+    async def test_risk_history_loads_only_required_provider_fields(self):
+        from app.services.risk.risk_centre import _load_price_histories
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            instrument = await session.get(Instrument, instrument_id)
+            bar = await session.scalar(select(MarketPriceBar).where(
+                MarketPriceBar.instrument_id == instrument_id).order_by(MarketPriceBar.bar_date.desc()))
+            bar.raw_payload = {"close": 101, "unused_provider_data": "x" * 10000}
+            await session.commit()
+            histories = await _load_price_histories(session, [instrument], as_of=NOW.date())
+            newest = histories[instrument.ticker][-1]
+            self.assertEqual(newest.raw_payload, {"close": 101})
+            self.assertEqual(newest.adjusted_close_price, bar.adjusted_close_price)
+            self.assertEqual(newest.volume, 1000000)
+
+    async def test_history_refresh_survives_rollback_after_timeout(self):
+        from types import SimpleNamespace
+        from app.services.paper_fund.history import refresh_risk_history
+        _, radar_id = await self.seed_signal()
+        async with self.factory() as session:
+            for index in range(4):
+                ticker = f'RETRY{index}'
+                instrument = Instrument(ticker=ticker, name=ticker, currency='USD', asset_class='equity')
+                session.add(instrument)
+                session.add(RadarSnapshot(run_id=radar_id, ticker=ticker, name=ticker, jurisdiction='US',
+                    currency='USD', asset_class='equity', source='fmp', price=D('100'), change_pct=D('5'),
+                    as_of=NOW, source_as_of=NOW, radar_priority='P1', priority_score=D('90')))
+            await session.commit()
+        fetched = []
+        async def fetch(session, instrument, start):
+            fetched.append(instrument.ticker)
+            if len(fetched) == 1:
+                raise TimeoutError('simulated provider timeout')
+            if len(fetched) == 2:
+                raise ValueError('simulated malformed provider volume')
+            return 5
+        with patch('app.services.paper_fund.history.settings', SimpleNamespace(hf_tiingo_api_key='fixture')), \
+             patch('app.services.paper_fund.history._fill_tiingo_daily', new=fetch):
+            async with self.factory() as session:
+                saved = await refresh_risk_history(session, now=NOW)
+        self.assertEqual(len(fetched), 4)
+        self.assertEqual(saved, 10)
+
+    async def test_concurrent_risk_policy_creation_has_one_shared_version(self):
+        from app.services.risk.risk_centre import _get_or_create_policy_version
+        from app.services.risk.policy import profile_policy
+        from app.models import RiskPolicyVersion
+        barrier = asyncio.Barrier(2)
+        async def capture():
+            async with self.factory() as session:
+                original_scalar = session.scalar
+                calls = 0
+                async def scalar(statement, *args, **kwargs):
+                    nonlocal calls
+                    calls += 1
+                    result = await original_scalar(statement, *args, **kwargs)
+                    if calls == 1:
+                        await barrier.wait()
+                    return result
+                with patch.object(session, 'scalar', new=scalar):
+                    policy = await _get_or_create_policy_version(session, profile_policy())
+                    await session.commit()
+                    return policy.id
+        first, second = await asyncio.wait_for(asyncio.gather(capture(), capture()), timeout=10)
+        self.assertEqual(first, second)
+        async with self.factory() as session:
+            self.assertEqual(await session.scalar(select(func.count()).select_from(RiskPolicyVersion)), 1)
+
+    async def test_profile_change_persists_cancels_and_reassesses_pending(self):
+        from app.services.paper_fund.settings import risk_settings
+        from app.models import Portfolio
+        await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        before = await self.call_cycle()
+        pending = next(o for o in before.orders if o.status == 'pending')
+        with patch('app.services.administration.system_log.publish_event', new=AsyncMock()):
+            async with self.factory() as session:
+                saved = await risk_settings(session, self.owner, update='low', expected='medium')
+                self.assertEqual(saved['profile'], 'low')
+        async with self.factory() as session:
+            portfolio = await session.scalar(select(Portfolio).where(Portfolio.owner_user_id == self.owner))
+            self.assertEqual(portfolio.risk_profile, 'low')
+            self.assertEqual(portfolio.trading_mode, 'automatic')
+            cancelled = await session.get(PaperOrder, pending.id)
+            self.assertEqual(cancelled.status, 'cancelled')
+        after = await self.call_cycle(NOW+timedelta(seconds=30))
+        queued = next(o for o in after.orders if o.status == 'pending')
+        self.assertEqual(queued.id, pending.id)
+        self.assertLess(queued.quantity, pending.quantity)
+        self.assertEqual(after.run.cash_balance, before.run.cash_balance)
+        self.assertEqual(after.run.started_at, before.run.started_at)
+
+    async def test_profile_change_cannot_clear_halt_or_widen_stop(self):
+        from app.services.paper_fund.settings import risk_settings
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        await self.call_cycle()
+        await self.quote(instrument_id, '100', NOW+timedelta(seconds=30))
+        before = await self.call_cycle(NOW+timedelta(seconds=30))
+        opened = next(o for o in before.orders if o.status == 'open')
+        async with self.factory() as session:
+            fund = await session.get(PaperFundRun, before.run.id)
+            fund.status, fund.halt_reason = 'halted', 'Test halt'
+            await session.commit()
+        with patch('app.services.administration.system_log.publish_event', new=AsyncMock()):
+            async with self.factory() as session:
+                await risk_settings(session, self.owner, update='high', expected='medium')
+        async with self.factory() as session:
+            fund, held = await session.get(PaperFundRun, before.run.id), await session.get(PaperOrder, opened.id)
+            self.assertEqual(fund.halt_reason, 'Test halt')
+            self.assertEqual(fund.status, 'halted')
+            self.assertEqual(fund.cash_balance, before.run.cash_balance)
+            self.assertEqual(held.stop_price, opened.stop_price)
+
+    async def test_competing_profile_update_detects_stale_selection(self):
+        from app.services.paper_fund.settings import risk_settings
+        from fastapi import HTTPException
+        async with self.factory() as session:
+            await get_or_create_default_portfolio(session, self.user)
+            await session.commit()
+        async def save(profile):
+            async with self.factory() as session:
+                try:
+                    return await risk_settings(session, self.owner, update=profile, expected='medium')
+                except HTTPException as error:
+                    await session.rollback()
+                    return error.status_code
+        with patch('app.services.administration.system_log.publish_event', new=AsyncMock()):
+            results = await asyncio.gather(save('low'), save('high'))
+        self.assertEqual(sum(result == 409 for result in results), 1)
+
+    async def test_missing_history_cannot_queue_or_fill(self):
+        from sqlalchemy import delete
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        queued = await self.call_cycle()
+        self.assertTrue(any(o.status == 'pending' for o in queued.orders))
+        async with self.factory() as session:
+            await session.execute(delete(MarketPriceBar).where(MarketPriceBar.instrument_id == instrument_id))
+            await session.commit()
+        await self.quote(instrument_id, '100', NOW+timedelta(seconds=30))
+        blocked = await self.call_cycle(NOW+timedelta(seconds=30))
+        self.assertFalse(any(o.status in {'pending','open'} for o in blocked.orders))
+        self.assertEqual(blocked.run.cash_balance, D('10000'))
+        self.assertTrue(any('history' in reason for reason in blocked.blockers))
+
+    async def test_risk_settings_api_validates_and_persists_selection(self):
+        async def dependency_session():
+            async with self.factory() as session:
+                yield session
+        app.dependency_overrides[get_session] = dependency_session
+        app.dependency_overrides[require_capital_user] = lambda: self.user
+        with patch('app.services.administration.system_log.publish_event', new=AsyncMock()):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+                response = await client.get('/api/paper-fund/risk-settings')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()['profile'], 'medium')
+                invalid = await client.post('/api/paper-fund/risk-settings', json={'profile':'extreme', 'expected_profile':'medium'})
+                self.assertEqual(invalid.status_code, 422)
+                changed = await client.post('/api/paper-fund/risk-settings', json={'profile':'low','expected_profile':'medium'})
+                self.assertEqual(changed.status_code, 200)
+                reread = await client.get('/api/paper-fund/risk-settings')
+                self.assertEqual(reread.json()['profile'], 'low')
+                self.assertEqual(reread.json()['options']['low']['max_position_pct'], 3)
+                stale = await client.post('/api/paper-fund/risk-settings', json={'profile':'high','expected_profile':'medium'})
+                self.assertEqual(stale.status_code, 409)
 
     async def test_concurrent_start_and_cycle_produce_one_order_and_one_fill(self):
         instrument_id, _ = await self.seed_signal()
@@ -588,3 +833,30 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             self.assertEqual(len(result.orders), 1)
             self.assertEqual(result.orders[0].status, 'pending')
             self.assertEqual(result.run.last_cycle_at, NOW)
+
+    async def test_reference_price_entry_and_exit_reconcile_to_capital(self):
+        instrument_id, _ = await self.seed_signal()
+        async def reference(price, at):
+            async with self.factory() as session:
+                quote = await session.scalar(select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument_id))
+                quote.source = 'tiingo_reference'
+                quote.price = D(price)
+                quote.as_of = at
+                quote.raw_payload = {'ticker':'TEST', 'timestamp':at.isoformat(), 'tngoLast':price}
+                await session.commit()
+        await reference('100', NOW)
+        async with self.factory() as session:
+            await start_run(session, self.owner, PaperStart(), now=NOW)
+        queued = await self.call_cycle(NOW)
+        self.assertEqual(queued.orders[0].status, 'pending')
+        await reference('100', NOW + timedelta(seconds=30))
+        opened = await self.call_cycle(NOW + timedelta(seconds=30))
+        self.assertEqual(opened.orders[0].status, 'open')
+        self.assertLess(opened.capital.cash_balance, D('10000'))
+        await reference('108', NOW + timedelta(seconds=60))
+        closed = await self.call_cycle(NOW + timedelta(seconds=60))
+        self.assertEqual(closed.orders[0].status, 'closed')
+        self.assertEqual(closed.orders[0].exit_reason, 'take_profit')
+        self.assertEqual(closed.run.cash_balance, closed.capital.cash_balance)
+        self.assertGreater(closed.run.cash_balance, D('10000'))
+        self.assertEqual(closed.capital.open_position_count, 0)

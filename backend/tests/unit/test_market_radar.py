@@ -990,3 +990,28 @@ class MoveScopeTests(TestCase):
         self.assertEqual(context.flagged_count, 0)
         self.assertEqual(context.status, "quiet")
         self.assertEqual(names[0].evidence["move_scope"], "none")
+
+
+class RadarClassificationRegressionTests(TestCase):
+    def test_unclassified_movers_do_not_manufacture_market_breadth(self):
+        names = [_tape_name(f'U{i}', None, flagged=True) for i in range(20)]
+        names += [_tape_name(f'B{i}', 'Banks', flagged=False) for i in range(4)]
+        assign_priorities(names)
+        contexts = build_industry_contexts(names)
+        self.assertNotIn('market_event', {item.status for item in contexts.values()})
+        self.assertEqual(names[0].evidence['move_scope'], 'unknown')
+
+    def test_stale_flags_do_not_manufacture_industry_breadth(self):
+        names = [_tape_name(f'B{i}', 'Banks', flagged=True) for i in range(8)]
+        for name in names:
+            name.stale_reason = 'old quote'
+        self.assertEqual(next(iter(build_industry_contexts(names).values())).flagged_count, 0)
+
+    def test_new_positive_discovery_is_not_starved_by_pinned_names(self):
+        pinned = [RadarCandidate(ticker=f'OLD{i}', name='Old', jurisdiction='US', pinned_prior=True,
+                                 source='book', change_pct=Decimal('20')) for i in range(80)]
+        new = RadarCandidate(ticker='NEW', name='New', jurisdiction='US', source='fmp',
+                             price=Decimal('20'), change_pct=Decimal('5'))
+        targets = _quote_targets([*pinned, new], 'US')
+        self.assertEqual(targets[0], 'NEW')
+        self.assertLessEqual(len(targets), 60)

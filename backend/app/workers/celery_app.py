@@ -68,6 +68,7 @@ def _prime_celery_fast_trace(**_kwargs) -> None:
 
 
 celery_app.conf.beat_schedule = {
+    "capital-risk-history": {"task": "paper_fund.refresh_risk_history", "schedule": 300.0, "options": {"expires": 300}},
     "paper-fund": {"task": "paper_fund.cycle", "schedule": 30.0,
                    "options": {"expires": 30}},
     "price-refresh": {

@@ -6,7 +6,7 @@ prices. Everything else reads from the instrument_quotes table.
 Chain:
 1. Tiingo IEX is the primary US quote source (one batch request).
 2. FMP, then Polygon, run only when Tiingo is unavailable: no key,
-   backoff, the request failed, or no timestamped trades were returned.
+   backoff, the request failed, or no timestamped prices were returned.
    Partial symbol coverage alone does not trigger per-symbol fallbacks.
 
 Nigerian tickers (SYMBOL.NG) are fetched from NGN Market's free search
@@ -203,8 +203,8 @@ async def _fetch_tiingo_iex(
     """Return quotes and whether Tiingo itself answered.
 
     The second value is False when Tiingo is backing off, the request
-    failed, or the response contains no verifiable trades. An HTTP 200 with
-    only closing/indicative prices must not suppress the backup provider.
+    failed, or the response contains no timestamped prices. Derived reference
+    prices have their own source and provider timestamp; they are not trades.
     """
     now = datetime.now(timezone.utc)
     if _provider_is_backing_off("tiingo", now):
@@ -234,20 +234,25 @@ async def _fetch_tiingo_iex(
         if not isinstance(item, dict):
             continue
         ticker = str(item.get("ticker") or "").upper()
-        price = (
-            _decimal(item.get("last"))
-            or _decimal(item.get("tngoLast"))
-            or _decimal(item.get("mid"))
-        )
+        price = _decimal(item.get("last"))
         as_of = _iso_datetime(item.get("lastSaleTimestamp"))
+        source = "tiingo"
+        if price is None or as_of is None:
+            # Tiingo's documented derived feed omits entitled TOPS fields.
+            # Match the reference-price stream already used by paper execution.
+            price = _decimal(item.get("tngoLast"))
+            as_of = _iso_datetime(item.get("timestamp"))
+            source = "tiingo_reference"
         if not ticker or price is None or price <= 0 or as_of is None:
             continue
+        previous_close = _decimal(item.get("prevClose"))
         quotes[ticker] = LiveQuote(
             ticker=ticker,
             price=price,
-            source="tiingo",
+            source=source,
             as_of=as_of,
-            previous_close=_decimal(item.get("prevClose")),
+            previous_close=previous_close,
+            change_pct=((price / previous_close - 1) * 100) if previous_close and previous_close > 0 else None,
             day_open=_decimal(item.get("open")),
             day_high=_decimal(item.get("high")),
             day_low=_decimal(item.get("low")),
@@ -255,7 +260,7 @@ async def _fetch_tiingo_iex(
             raw_payload=item,
         )
     if not quotes:
-        logger.warning("tiingo_no_timestamped_trades", extra={"requested_count": len(tickers)})
+        logger.warning("tiingo_no_timestamped_prices", extra={"requested_count": len(tickers)})
     return quotes, bool(quotes)
 
 

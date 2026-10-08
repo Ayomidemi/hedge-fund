@@ -3,11 +3,13 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
+import json
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.models import CashLedgerEntry, Instrument, PaperFundRun, PaperOrder, Position, RiskLimit, Trade
+from app.models import CashLedgerEntry, Instrument, PaperFundRun, PaperOrder, Position, RiskLimit, Trade, Portfolio
+from app.services.risk.policy import apply_account_limits, profile_policy
 from app.services.attribution.performance import _accumulate_trade_attribution
 from app.services.market_data.fx_convert import amount_in_base
 from app.services.market_data.fx_refresh import load_fx_rates
@@ -20,18 +22,13 @@ from app.services.portfolio.calculations import money
 ZERO = Decimal("0")
 
 
-async def capital_policy(session, portfolio_id, policy):
+async def capital_policy(session, portfolio_id, policy=None, *, profile=None):
     """Automation respects the stricter of its own policy and Capital limits."""
-    result = dict(policy)
-    for limit in await session.scalars(select(RiskLimit).where(
-        RiskLimit.portfolio_id == portfolio_id, RiskLimit.is_active.is_(True))):
-        if limit.limit_type in {"max_single_equity_position_pct", "max_etf_position_pct"}:
-            result["max_position_pct"] = min(result["max_position_pct"], float(limit.threshold_value))
-        elif limit.limit_type == "max_sector_exposure_pct":
-            result["max_sector_pct"] = min(result["max_sector_pct"], float(limit.threshold_value))
-        elif limit.limit_type == "min_cash_allocation_pct":
-            result["cash_reserve_pct"] = max(result["cash_reserve_pct"], float(limit.threshold_value))
-    return result
+    if profile is None:
+        profile = await session.scalar(select(Portfolio.risk_profile).where(Portfolio.id == portfolio_id)) or "medium"
+    limits = list(await session.scalars(select(RiskLimit).where(
+        RiskLimit.portfolio_id == portfolio_id, RiskLimit.is_active.is_(True))))
+    return apply_account_limits(profile_policy(profile), limits)
 
 
 @dataclass
@@ -127,7 +124,7 @@ async def book_fills(session, portfolio, orders):
             limit_price=order.limit_price if side == "buy" else None,
             executed_price=price, executed_price_base=price, fees=fees, fees_base=fees,
             rationale=order.thesis if side == "buy" else order.exit_reason or "Automatic exit",
-            risk_decision="approve", risk_notes="Automatic execution policy and Capital capacity checks passed.",
+            risk_decision="approve", risk_notes=(json.dumps(order.evidence["fill_risk"]) if side == "buy" and (order.evidence or {}).get("fill_risk") else "Capital execution checks passed; risk-reducing exit or legacy execution."),
             broker_reference="automatic_paper", idempotency_key=key)
         session.add(trade)
         await session.flush()

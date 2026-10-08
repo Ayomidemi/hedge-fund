@@ -13,6 +13,12 @@ class PaperStart(BaseModel):
     duration_days: int = Field(default=7, ge=7, le=7)
 
 
+class RiskProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile: Literal["low", "medium", "high"]
+    expected_profile: Literal["low", "medium", "high"]
+
+
 class PaperRunResponse(BaseModel):
     id: UUID
     status: Literal["running", "paused", "liquidating", "completed", "halted"]

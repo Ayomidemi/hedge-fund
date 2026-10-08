@@ -4,12 +4,24 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.idempotency import optional_idempotency_key
-from app.api.schemas.paper_fund import PaperFundResponse, PaperStart
+from app.api.schemas.paper_fund import PaperFundResponse, PaperStart, RiskProfileUpdate
 from app.core.auth import AuthenticatedUser, require_capital_user
 from app.db.session import get_session
 from app.services.paper_fund import engine
 
 router = APIRouter(prefix="/paper-fund")
+
+
+@router.get("/risk-settings")
+async def read_risk_settings(user: AuthenticatedUser = Depends(require_capital_user), session: AsyncSession = Depends(get_session)):
+    from app.services.paper_fund.settings import risk_settings
+    return await risk_settings(session, user.id)
+
+
+@router.post("/risk-settings")
+async def update_risk_settings(payload: RiskProfileUpdate, user: AuthenticatedUser = Depends(require_capital_user), session: AsyncSession = Depends(get_session)):
+    from app.services.paper_fund.settings import risk_settings
+    return await risk_settings(session, user.id, update=payload.profile, expected=payload.expected_profile)
 
 
 @router.get("", response_model=PaperFundResponse)

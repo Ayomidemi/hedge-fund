@@ -1,11 +1,12 @@
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from math import sqrt
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -49,7 +50,9 @@ from app.services.portfolio.operating_core import cash_balance_in_base, get_or_c
 logger = logging.getLogger(__name__)
 
 RISK_POLICY_NAME = "Pease Capital Phase One Risk Policy"
-RISK_POLICY_VERSION = "2026.08"
+RISK_POLICY_VERSION = "2026.10.3"
+MIN_HISTORY_RETURNS = 60
+ReturnPeriod = tuple[date, date]
 BENCHMARK_TICKER = "SPY"
 
 RISK_HIERARCHY = [
@@ -200,6 +203,7 @@ class PortfolioRiskState:
     invested_value: Decimal
     positions: list[RiskPosition]
     base_currency: str = "USD"
+    effective_policy: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -236,7 +240,7 @@ async def capture_risk_snapshot(
 ) -> RiskSnapshotCaptureResponse:
     state, price_histories = await _load_current_state(session, user)
     overview = build_risk_overview_from_state(state, price_histories)
-    policy_version = await _get_or_create_policy_version(session)
+    policy_version = await _get_or_create_policy_version(session, state.effective_policy)
 
     snapshot_record = PortfolioRiskSnapshot(
         portfolio_id=state.portfolio_id,
@@ -449,6 +453,8 @@ async def create_pre_trade_risk_check_record(
         payload,
         fx_rates=fx_rates,
     )
+    if payload.side == "buy" and payload.instrument.ticker not in price_histories:
+        price_histories.update(await _load_price_histories(session, pro_forma_state.positions, as_of=pro_forma_state.as_of_date))
     overview = build_risk_overview_from_state(pro_forma_state, price_histories)
     failed_checks = [check for check in overview.measurements if not check.passed]
     decision = _pre_trade_decision(
@@ -551,7 +557,7 @@ def build_risk_overview_from_state(
     price_histories: dict[str, list[MarketPriceBar]] | None = None,
 ) -> RiskCentreOverviewResponse:
     histories = price_histories or {}
-    policy = default_policy_response()
+    policy = default_policy_response(state.effective_policy)
     market_stats = compute_portfolio_market_stats(state, histories)
     position_responses = _position_responses(state, market_stats)
     asset_class_exposure = _exposure_buckets(
@@ -602,9 +608,24 @@ def compute_portfolio_market_stats(
     price_histories: dict[str, list[MarketPriceBar]],
 ) -> PortfolioMarketStats:
     notes: list[str] = []
+    price_histories = {
+        ticker: sorted([bar for bar in bars if state.as_of_date - timedelta(days=550) <= bar.bar_date < state.as_of_date], key=lambda bar: bar.bar_date)[-253:]
+        for ticker, bars in price_histories.items()
+    }
+    required = (state.effective_policy or {}).get("min_history_returns", MIN_HISTORY_RETURNS)
+    valid_histories = {}
+    for ticker, bars in price_histories.items():
+        bars = sorted(bars, key=lambda bar: bar.bar_date)
+        if (len(bars) >= required + 1 and bars[-1].bar_date >= state.as_of_date - timedelta(days=5)
+                and all(bar.adjusted_close_price is not None and _decimal(bar.adjusted_close_price).is_finite()
+                        and bar.adjusted_close_price > 0 for bar in bars)):
+            valid_histories[ticker] = bars
+    missing = [p.ticker for p in state.positions if p.ticker not in valid_histories]
+    if missing:
+        notes.append("Insufficient current adjusted history: " + ", ".join(missing) + f". At least {required} completed daily returns are required.")
     returns_by_ticker = {
         ticker: _returns_by_date(bars)
-        for ticker, bars in price_histories.items()
+        for ticker, bars in valid_histories.items()
         if len(bars) >= 3
     }
     weights = {
@@ -613,6 +634,12 @@ def compute_portfolio_market_stats(
         if state.nav > 0 and position.market_value != 0
     }
     portfolio_returns = _portfolio_returns(weights, returns_by_ticker)
+    if len(portfolio_returns) < required:
+        portfolio_returns = {}
+    if state.positions:
+        covered = sum((p.market_value for p in state.positions if p.ticker in valid_histories), Decimal("0"))
+        notes.append(f"History coverage: {covered} of {state.invested_value} invested; aligned returns: {len(portfolio_returns)}; target: 252.")
+        notes.append("Historical drawdown models today's weights; actual account drawdown is tracked separately in Capital performance.")
     benchmark_returns = returns_by_ticker.get(BENCHMARK_TICKER, {})
     aligned_portfolio, aligned_benchmark = _align_series(
         portfolio_returns, benchmark_returns
@@ -632,7 +659,8 @@ def compute_portfolio_market_stats(
             volatility_pct=_volatility_pct(ticker_returns),
             beta_to_benchmark=_beta_pct(ticker_series, ticker_benchmark),
             liquidity_days=_liquidity_days(
-                position, price_histories.get(position.ticker, [])
+                position, valid_histories.get(position.ticker, []),
+                participation_pct=Decimal(str((state.effective_policy or {}).get("max_participation_pct", 10)))
             ),
         )
 
@@ -641,7 +669,7 @@ def compute_portfolio_market_stats(
         for stats in position_stats.values()
         if stats.liquidity_days is not None
     ]
-    liquidity_days = max(liquidity_values) if liquidity_values else None
+    liquidity_days = max(liquidity_values) if liquidity_values and len(liquidity_values) == len(state.positions) else None
     if liquidity_days is None and state.positions:
         notes.append("Liquidity days need recent volume data.")
 
@@ -687,7 +715,7 @@ def evaluate_risk_policy(
                 message="NAV must be positive and cash cannot be negative.",
             )
         )
-    for limit in DEFAULT_POLICY_LIMITS:
+    for limit in policy_limits(state.effective_policy):
         value = metrics.get(limit["key"])
         threshold = Decimal(limit["threshold_value"])
         missing_required = (
@@ -849,7 +877,7 @@ def run_stress_scenario(
         nav_after=nav_after,
         nav_impact=nav_impact,
         nav_impact_pct=nav_impact_pct,
-        severity=_stress_severity(nav_impact_pct),
+        severity=("reduce" if stressed_cash < 0 else "info") if scenario.get("scenario_type") == "cash" else _stress_severity(nav_impact_pct),
         worst_positions=worst_positions,
         notes=[str(note) for note in scenario.get("notes", [])],
     )
@@ -899,7 +927,10 @@ async def _load_current_state(
         positions=risk_positions,
         base_currency=portfolio.base_currency,
     )
-    histories = await _load_price_histories(session, risk_positions)
+    from dataclasses import replace
+    from app.services.paper_fund.capital import capital_policy
+    state = replace(state, effective_policy=await capital_policy(session, portfolio.id, profile=portfolio.risk_profile))
+    histories = await _load_price_histories(session, risk_positions, as_of=state.as_of_date)
     return state, histories
 
 
@@ -910,7 +941,9 @@ async def _cash_balance(session: AsyncSession, portfolio: Portfolio) -> Decimal:
 async def _load_price_histories(
     session: AsyncSession,
     positions: list[RiskPosition],
+    *, as_of: date | None = None,
 ) -> dict[str, list[MarketPriceBar]]:
+    as_of = as_of or date.today()
     tickers = {position.ticker for position in positions}
     tickers.add(BENCHMARK_TICKER)
     instruments = list(
@@ -919,21 +952,30 @@ async def _load_price_histories(
     instrument_by_id = {instrument.id: instrument for instrument in instruments}
     if not instrument_by_id:
         return {}
-    bars = list(
-        await session.scalars(
-            select(MarketPriceBar)
+    # Risk calculations need prices and volume, not full vendor payloads or
+    # OHLC metadata. Large batches otherwise hold execution's account lock
+    # while unnecessary JSON travels through the remote database pooler.
+    rows = await session.execute(
+            select(MarketPriceBar.instrument_id, MarketPriceBar.bar_date,
+                   MarketPriceBar.source, MarketPriceBar.close_price,
+                   MarketPriceBar.adjusted_close_price, MarketPriceBar.volume,
+                   MarketPriceBar.raw_payload["close"].label("raw_close"))
             .where(MarketPriceBar.instrument_id.in_(instrument_by_id))
-            .where(MarketPriceBar.source.in_(("yahoo", "live")))
+            .where(MarketPriceBar.source.in_(("yahoo", "tiingo")))
+            .where(MarketPriceBar.bar_date < as_of, MarketPriceBar.bar_date >= as_of - timedelta(days=550))
             .order_by(MarketPriceBar.instrument_id, MarketPriceBar.bar_date)
-        )
     )
-    # One bar per (instrument, date). Yahoo backfill wins where both exist;
-    # "live" bars (written by the price refresh job) fill in today.
+    bars = [MarketPriceBar(instrument_id=row.instrument_id, bar_date=row.bar_date,
+                          source=row.source, close_price=row.close_price,
+                          adjusted_close_price=row.adjusted_close_price, volume=row.volume,
+                          raw_payload={"close": row.raw_close}) for row in rows]
+    # One completed bar per instrument/date. Tiingo wins over Yahoo; intraday
+    # live bars are intentionally excluded from adjusted daily risk history.
     deduped: dict[tuple, MarketPriceBar] = {}
     for bar in bars:
         key = (bar.instrument_id, bar.bar_date)
         existing = deduped.get(key)
-        if existing is None or (existing.source == "live" and bar.source == "yahoo"):
+        if existing is None or (existing.source != "tiingo" and bar.source == "tiingo"):
             deduped[key] = bar
 
     histories: dict[str, list[MarketPriceBar]] = {}
@@ -943,33 +985,51 @@ async def _load_price_histories(
     return histories
 
 
-async def _get_or_create_policy_version(session: AsyncSession) -> RiskPolicyVersion:
+def _policy_version(effective=None):
+    if effective is None:
+        return RISK_POLICY_VERSION
+    import hashlib
+    import json
+    digest = hashlib.sha256(json.dumps(effective, sort_keys=True).encode()).hexdigest()[:12]
+    return f"{RISK_POLICY_VERSION}:{effective.get('profile', 'custom')}:{digest}"
+
+
+async def _get_or_create_policy_version(session: AsyncSession, effective=None) -> RiskPolicyVersion:
     policy = await session.scalar(
         select(RiskPolicyVersion).where(
             RiskPolicyVersion.name == RISK_POLICY_NAME,
-            RiskPolicyVersion.version == RISK_POLICY_VERSION,
+            RiskPolicyVersion.version == _policy_version(effective),
         )
     )
     if policy is not None:
         return policy
-    policy = RiskPolicyVersion(
+    statement = pg_insert(RiskPolicyVersion).values(
         name=RISK_POLICY_NAME,
-        version=RISK_POLICY_VERSION,
+        version=_policy_version(effective),
         status="active",
         effective_at=datetime.now(timezone.utc),
-        limits={"limits": DEFAULT_POLICY_LIMITS},
+        limits={"limits": policy_limits(effective), "execution_policy": effective},
         hierarchy={"levels": RISK_HIERARCHY},
         notes="Phase-one policy seeded from the fund scope.",
-    )
-    session.add(policy)
-    await session.flush()
-    return policy
+    ).on_conflict_do_nothing(index_elements=["name", "version"])
+    await session.execute(statement)
+    return await session.scalar(select(RiskPolicyVersion).where(
+        RiskPolicyVersion.name == RISK_POLICY_NAME,
+        RiskPolicyVersion.version == _policy_version(effective)))
 
 
-def default_policy_response() -> RiskPolicyResponse:
+def policy_limits(effective=None):
+    mapping = {"max_single_equity_position_pct": "max_position_pct", "max_sector_exposure_pct": "max_sector_pct",
+               "min_cash_allocation_pct": "cash_reserve_pct"}
+    return [{**limit, "threshold_value": str((effective or {}).get(mapping.get(limit["key"], limit["key"]), limit["threshold_value"])),
+             "description": f"Enforced Capital {effective['profile']} profile limit." if effective and 'profile' in effective else limit['description']}
+            for limit in DEFAULT_POLICY_LIMITS]
+
+
+def default_policy_response(effective=None) -> RiskPolicyResponse:
     return RiskPolicyResponse(
         name=RISK_POLICY_NAME,
-        version=RISK_POLICY_VERSION,
+        version=_policy_version(effective),
         status="active",
         hierarchy=RISK_HIERARCHY,
         limits=[
@@ -983,7 +1043,7 @@ def default_policy_response() -> RiskPolicyResponse:
                 direction=str(limit["direction"]),
                 description=str(limit["description"]),
             )
-            for limit in DEFAULT_POLICY_LIMITS
+            for limit in policy_limits(effective)
         ],
     )
 
@@ -1163,7 +1223,7 @@ def _limit_message(
     return f"{limit['label']} is {comparator} policy: {value} vs {threshold} {limit['unit']}."
 
 
-def _returns_by_date(bars: list[MarketPriceBar]) -> dict[date, float]:
+def _returns_by_date(bars: list[MarketPriceBar]) -> dict[ReturnPeriod, float]:
     sorted_bars = sorted(bars, key=lambda bar: bar.bar_date)
     returns = {}
     for previous, current in zip(sorted_bars, sorted_bars[1:]):
@@ -1171,21 +1231,23 @@ def _returns_by_date(bars: list[MarketPriceBar]) -> dict[date, float]:
         end = current.adjusted_close_price or current.close_price
         if start == 0:
             continue
-        returns[current.bar_date] = float((end - start) / start)
+        # A two-session return must not align with another holding's one-session
+        # return merely because both end on the same day.
+        returns[(previous.bar_date, current.bar_date)] = float((end - start) / start)
     return returns
 
 
 def _portfolio_returns(
     weights: dict[str, float],
-    returns_by_ticker: dict[str, dict[date, float]],
-) -> dict[date, float]:
+    returns_by_ticker: dict[str, dict[ReturnPeriod, float]],
+) -> dict[ReturnPeriod, float]:
     if not weights:
         return {}
     common_dates = None
     for ticker in weights:
         ticker_dates = set(returns_by_ticker.get(ticker, {}))
         if not ticker_dates:
-            continue
+            return {}
         common_dates = (
             ticker_dates if common_dates is None else common_dates & ticker_dates
         )
@@ -1201,8 +1263,8 @@ def _portfolio_returns(
 
 
 def _align_series(
-    first: dict[date, float],
-    second: dict[date, float],
+    first: dict[ReturnPeriod, float],
+    second: dict[ReturnPeriod, float],
 ) -> tuple[list[float], list[float]]:
     common_dates = sorted(set(first) & set(second))
     return [first[item] for item in common_dates], [
@@ -1211,7 +1273,7 @@ def _align_series(
 
 
 def _volatility_pct(returns: list[float]) -> Decimal | None:
-    if len(returns) < 2:
+    if len(returns) < MIN_HISTORY_RETURNS:
         return None
     mean = sum(returns) / len(returns)
     variance = sum((item - mean) ** 2 for item in returns) / (len(returns) - 1)
@@ -1219,7 +1281,7 @@ def _volatility_pct(returns: list[float]) -> Decimal | None:
 
 
 def _beta_pct(series: list[float], benchmark: list[float]) -> Decimal | None:
-    if len(series) < 3 or len(series) != len(benchmark):
+    if len(series) < MIN_HISTORY_RETURNS or len(series) != len(benchmark):
         return None
     benchmark_mean = sum(benchmark) / len(benchmark)
     series_mean = sum(series) / len(series)
@@ -1248,48 +1310,52 @@ def _max_drawdown_from_fraction_returns(returns: list[float]) -> Decimal | None:
 
 
 def _var_pct(returns: list[float], percentile: int) -> Decimal | None:
-    if len(returns) < 20:
+    if len(returns) < MIN_HISTORY_RETURNS:
         return None
     sorted_returns = sorted(returns)
     index = max(int(len(sorted_returns) * percentile / 100) - 1, 0)
-    return _decimal4(sorted_returns[index] * 100)
+    return _decimal4(max(0, -sorted_returns[index] * 100))
 
 
 def _expected_shortfall_pct(returns: list[float], percentile: int) -> Decimal | None:
     value_at_risk = _var_pct(returns, percentile)
     if value_at_risk is None:
         return None
-    threshold = float(value_at_risk) / 100
+    sorted_returns = sorted(returns)
+    threshold = sorted_returns[max(int(len(returns) * percentile / 100) - 1, 0)]
     tail = [item for item in returns if item <= threshold]
     if not tail:
         return value_at_risk
-    return _decimal4((sum(tail) / len(tail)) * 100)
+    return _decimal4(max(0, -(sum(tail) / len(tail)) * 100))
 
 
 def _liquidity_days(
     position: RiskPosition,
     bars: list[MarketPriceBar],
+    *, participation_pct: Decimal = Decimal("10"),
 ) -> Decimal | None:
     recent = [
-        bar for bar in sorted(bars, key=lambda item: item.bar_date)[-20:] if bar.volume
+        bar for bar in sorted(bars, key=lambda item: item.bar_date)[-20:] if bar.volume is not None and bar.volume >= 0
     ]
-    if not recent:
+    if len(recent) < 15 or participation_pct <= 0:
         return None
     dollar_volumes = []
     for bar in recent:
-        price = bar.adjusted_close_price or bar.close_price
+        price = _decimal((getattr(bar, "raw_payload", None) or {}).get("close") or bar.close_price)
+        if not price.is_finite() or price <= 0:
+            return None
         dollar_volumes.append(price * Decimal(bar.volume or 0))
     average_dollar_volume = sum(dollar_volumes, Decimal("0")) / Decimal(
         len(dollar_volumes)
     )
     if average_dollar_volume <= 0:
         return None
-    daily_capacity = average_dollar_volume * Decimal("0.10")
+    daily_capacity = average_dollar_volume * participation_pct / 100
     return _decimal4(float(abs(position.market_value) / daily_capacity))
 
 
 def _correlation_pairs(
-    returns_by_ticker: dict[str, dict[date, float]],
+    returns_by_ticker: dict[str, dict[ReturnPeriod, float]],
     positions: list[RiskPosition],
 ) -> list[CorrelationPairResponse]:
     tickers = [position.ticker for position in positions]
@@ -1310,11 +1376,11 @@ def _correlation_pairs(
                     correlation=correlation,
                 )
             )
-    return sorted(pairs, key=lambda item: abs(item.correlation), reverse=True)[:10]
+    return sorted(pairs, key=lambda item: abs(item.correlation), reverse=True)
 
 
 def _correlation(first: list[float], second: list[float]) -> Decimal | None:
-    if len(first) < 3 or len(first) != len(second):
+    if len(first) < MIN_HISTORY_RETURNS or len(first) != len(second):
         return None
     first_mean = sum(first) / len(first)
     second_mean = sum(second) / len(second)
@@ -1504,6 +1570,7 @@ def _apply_trade_to_state(
             invested_value=invested_value,
             positions=positions,
             base_currency=state.base_currency,
+            effective_policy=state.effective_policy,
         ),
         cash_impact,
         messages,

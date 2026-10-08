@@ -30,7 +30,7 @@ from app.models import PaperEquitySnapshot, PaperFundRun, PaperOrder
 
 TEST_URL = os.environ.get("HF_TEST_DATABASE_URL")
 PRE_REPAIR_HEAD = "202610020002"
-REPAIR_HEAD = "202610050002"
+REPAIR_HEAD = "202610070001"
 BACKEND = Path(__file__).resolve().parents[2]
 
 

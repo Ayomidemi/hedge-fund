@@ -148,6 +148,7 @@ class Portfolio(Base, TimestampMixin):
     mandate: Mapped[str | None] = mapped_column(Text)
     initial_capital: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     trading_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
+    risk_profile: Mapped[str] = mapped_column(String(16), nullable=False, default="medium", server_default="medium")
 
     cash_entries: Mapped[list["CashLedgerEntry"]] = relationship(
         back_populates="portfolio"
@@ -164,6 +165,7 @@ class Portfolio(Base, TimestampMixin):
 
     __table_args__ = (
         CheckConstraint("trading_mode IN ('manual','automatic')", name="ck_portfolio_trading_mode"),
+        CheckConstraint("risk_profile IN ('low','medium','high')", name="ck_portfolio_risk_profile"),
         Index("ix_portfolios_owner_user_id_unique", "owner_user_id", unique=True),
         Index("ix_portfolios_owner_name", "owner_user_id", "name", unique=True),
     )

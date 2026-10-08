@@ -202,8 +202,8 @@ export function RiskCentre({ initialOverview, unavailable }: RiskCentreProps) {
           <Metric label="Account value" value={money(snapshot.nav)} />
           <Metric label="Cash allocation" value={`${pct(snapshot.cash_pct)}%`} />
           <Metric label="Gross" value={`${pct(snapshot.gross_exposure_pct)}%`} />
-          <Metric label="Volatility" value={optionalPct(snapshot.portfolio_volatility_pct)} />
-          <Metric label="VaR 95" value={optionalPct(snapshot.var_95_pct)} />
+          <Metric label="Annualized volatility" value={optionalPct(snapshot.portfolio_volatility_pct)} />
+          <Metric label="Daily loss VaR · 95%" value={optionalPct(snapshot.var_95_pct)} />
           <Metric label="Warnings" value={String(failedChecks.length)} tone={failedChecks.length ? "warn" : "ok"} />
         </div>
       </section>

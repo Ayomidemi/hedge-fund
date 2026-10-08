@@ -30,6 +30,7 @@ class PaperFundRun(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     halt_reason: Mapped[str | None] = mapped_column(Text)
     policy: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    risk_state: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     blockers: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
     __table_args__ = (

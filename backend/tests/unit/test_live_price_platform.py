@@ -370,12 +370,11 @@ class CelerySchedulingTests(TestCase):
 
 
 class UnusableTiingoFallbackTests(IsolatedAsyncioTestCase):
-    async def test_indicative_response_without_trade_timestamps_uses_backup(self):
-        # Tiingo can return 200 with tngoLast and a daily timestamp, but no
-        # lastSaleTimestamp. That must neither become a fill nor hide FMP.
+    async def test_reference_response_without_any_provider_timestamp_uses_backup(self):
+        # A reference price without a provider timestamp cannot be used.
         _clear_provider_backoff()
         response = httpx.Response(200, request=httpx.Request('GET', 'https://example.test/iex'), json=[{
-            'ticker': 'SPY', 'tngoLast': 100, 'timestamp': '2026-10-06T20:00:00Z',
+            'ticker': 'SPY', 'tngoLast': 100, 'timestamp': None,
             'lastSaleTimestamp': None, 'last': None,
         }])
         client = AsyncMock()

@@ -17,6 +17,24 @@ logger = logging.getLogger(__name__)
 PAPER_FUND_LOCK_KEY = 4_100_004
 
 
+@celery_app.task(name="paper_fund.refresh_risk_history")
+def refresh_history():
+    asyncio.run(_refresh_history())
+
+
+async def _refresh_history():
+    from app.services.paper_fund.history import refresh_risk_history
+    engine = create_async_engine(settings.sqlalchemy_database_url, **engine_options)
+    factory = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    try:
+        async with hold_job_lock(engine, 4_100_005) as locked:
+            if locked:
+                async with factory() as session:
+                    await refresh_risk_history(session)
+    finally:
+        await engine.dispose()
+
+
 @celery_app.task(name="paper_fund.cycle")
 def run() -> None:
     asyncio.run(_run())

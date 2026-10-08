@@ -219,6 +219,10 @@ export type PaperFundOverview = {
   }>;
   blockers: string[];
   policy: {
+    profile?: CapitalRiskProfile;
+    max_etf_position_pct?: number;
+    max_aggregate_risk_pct?: number;
+    max_daily_loss_pct?: number;
     max_position_pct: number;
     risk_per_trade_pct: number;
     max_positions: number;
@@ -235,6 +239,23 @@ export type PaperFundOverview = {
 
 export function getPaperFund(options?: ApiRequestOptions) {
   return fetchApi<PaperFundOverview>("/api/paper-fund", options);
+}
+
+export type CapitalRiskProfile = "low" | "medium" | "high";
+export type CapitalRiskSettings = {
+  profile: CapitalRiskProfile;
+  options: Record<CapitalRiskProfile, Record<string, number | string>>;
+  notice: string;
+};
+
+export function getCapitalRiskSettings() {
+  return fetchApi<CapitalRiskSettings>("/api/paper-fund/risk-settings");
+}
+
+export function saveCapitalRiskSettings(profile: CapitalRiskProfile, expected_profile: CapitalRiskProfile) {
+  return postApi<CapitalRiskSettings, { profile: CapitalRiskProfile; expected_profile: CapitalRiskProfile }>(
+    "/api/paper-fund/risk-settings", { profile, expected_profile },
+  );
 }
 
 export function setCapitalTradingMode(mode: "manual" | "automatic", options?: ApiRequestOptions) {

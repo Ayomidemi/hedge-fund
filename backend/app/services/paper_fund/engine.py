@@ -20,21 +20,17 @@ from app.services.portfolio.operating_core import get_or_create_default_portfoli
 from app.services.paper_fund.capital import bind_book, book_fills, capital_policy, load_book
 from app.services.market_radar.execution import MAX_SIGNAL_AGE_SECONDS, execution_rejection, quote_rejection
 from app.services.paper_fund.calendar import market_blocker
+from app.services.risk.policy import profile_policy, position_cap
 
 ZERO = Decimal("0")
 CENT = Decimal("0.01")
-POLICY = {
-    "version": 1, "max_position_pct": 10, "risk_per_trade_pct": 0.5,
-    "max_positions": 5, "cash_reserve_pct": 20, "max_drawdown_pct": 5,
-    "max_sector_pct": 20, "stop_loss_pct": 3, "take_profit_pct": 6,
-    "slippage_bps": 10, "fee_bps": 5, "quote_max_age_seconds": 120,
-    "order_ttl_minutes": 30,
-}
+POLICY = profile_policy("medium")
 SIMULATION_NOTICE = (
     "Capital trades currently use simulated execution; no live broker orders. Whole-share, long-only momentum strategy, "
     "not a validated profit forecast. Fills use later observed prices with 10 bps adverse slippage "
-    "and 5 bps fees per side. Order-book depth, queue priority, partial fills, dividends and corporate "
-    "actions are not simulated. Moves between observations can be missed. Stops can fill below their "
+    "and 5 bps fees per side. Tiingo derived reference prices may be used for paper fills; they are not executable exchange bids or offers. "
+    "Order-book depth, queue priority, partial fills, dividends and corporate "
+    "actions are not simulated. Earnings calendars are not connected. Moves between observations can be missed. Stops can fill below their "
     "trigger. Missing or stale data blocks execution."
 )
 
@@ -77,7 +73,7 @@ def accounting(run: PaperFundRun, orders: list[PaperOrder]) -> dict:
     }
 
 
-def size_order(run: PaperFundRun, orders: list[PaperOrder], price: Decimal, sector: str | None) -> tuple[int, Decimal, Decimal, Decimal]:
+def size_order(run: PaperFundRun, orders: list[PaperOrder], price: Decimal, sector: str | None, asset_class: str = "equity") -> tuple[int, Decimal, Decimal, Decimal]:
     """Round down to whole shares; reserve fees, risk budget and sector capacity."""
     policy = run.policy
     state = accounting(run, orders)
@@ -91,8 +87,10 @@ def size_order(run: PaperFundRun, orders: list[PaperOrder], price: Decimal, sect
     sector_used = sum(((o.mark_price or o.limit_price) * o.quantity for o in active if o.sector == sector), ZERO)
     cash_budget = state["available_cash"] - equity * Decimal(str(policy["cash_reserve_pct"])) / 100
     sector_budget = equity * Decimal(str(policy["max_sector_pct"])) / 100 - sector_used
-    budget = min(cash_budget, equity * Decimal(str(policy["max_position_pct"])) / 100, sector_budget)
+    budget = min(cash_budget, equity * Decimal(str(position_cap(policy, asset_class))) / 100, sector_budget)
     risk_budget = equity * Decimal(str(policy["risk_per_trade_pct"])) / 100
+    if "max_aggregate_risk_pct" in policy:
+        risk_budget = min(risk_budget, max(ZERO, equity * Decimal(str(policy["max_aggregate_risk_pct"])) / 100 - aggregate_risk(run, orders)))
     # Include modeled stop slippage and both execution fees in planned risk.
     stop_fill = (stop * (1 - Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
     risk_per_share = limit - stop_fill + (limit + stop_fill) * Decimal(str(policy["fee_bps"])) / 10000
@@ -102,6 +100,33 @@ def size_order(run: PaperFundRun, orders: list[PaperOrder], price: Decimal, sect
                         + fee(quantity * stop_fill, policy) > risk_budget):
         quantity -= 1
     return quantity, limit, stop, target
+
+
+def aggregate_risk(run, orders):
+    total = ZERO
+    for order in [o for o in orders if o.status in {"open", "pending"}] + getattr(run, "_external_holdings", []):
+        price = order.limit_price if order.status == "pending" else (order.mark_price or order.entry_price)
+        stop = getattr(order, "stop_price", ZERO)
+        stop_fill = (stop * (1 - Decimal(str(run.policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
+        total += max(ZERO, price - stop_fill) * order.quantity + fee(price * order.quantity, run.policy) + fee(stop_fill * order.quantity, run.policy)
+    return total
+
+
+def daily_loss_blocker(run, orders, now):
+    if "max_daily_loss_pct" not in run.policy:
+        return None
+    from app.services.paper_fund.calendar import NEW_YORK
+    day = now.astimezone(NEW_YORK).date().isoformat()
+    equity = accounting(run, orders)["equity"] - getattr(run, "_net_flow_since_start", ZERO)
+    state = dict(getattr(run, "risk_state", None) or {})
+    if state.get("day") != day:
+        state = {"day": day, "baseline": state.get("last_equity", str(equity)), "blocked": False}
+    baseline = Decimal(state["baseline"])
+    loss = max(ZERO, (baseline - equity) / baseline * 100) if baseline > 0 else ZERO
+    state.update(last_equity=str(equity), loss_pct=str(loss),
+                 blocked=state["blocked"] or loss >= Decimal(str(run.policy["max_daily_loss_pct"])))
+    run.risk_state = state
+    return "Daily loss limit reached; new entries paused until the next trading day. Exits remain active." if state["blocked"] else None
 
 
 def _cancel_pending(orders: list[PaperOrder], reason: str) -> None:
@@ -129,7 +154,7 @@ def _position_quote_rejection(order: PaperOrder, quote: InstrumentQuote | None, 
 
 
 def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, now: datetime,
-                   *, automatic_execution: bool = True) -> list[str]:
+                   *, automatic_execution: bool = True, entry_check=None) -> list[str]:
     """Pure state transition used by the locked service and deterministic tests."""
     now = utc(now)
     policy = run.policy
@@ -152,7 +177,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         quote = quotes.get(order.instrument_id)
         error = _position_quote_rejection(order, quote, now)
         if error:
-            blockers.append(f"{order.ticker}: {error} Holding last available mark; exit awaits valid data.")
+            blockers.append(f"{order.ticker}: {error} Holding last available mark; exit awaits valid data. New buys are paused until all holdings have valid quotes.")
         elif not session_error and (order.mark_as_of is None or utc(quote.as_of) >= utc(order.mark_as_of)):
             order.mark_price = quote.price
             order.mark_as_of = quote.as_of
@@ -213,10 +238,22 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         order.exit_quote_at = quote.as_of
         order.exit_reason = reason
     # Any unreliable open mark stops new risk, but never disables exit processing.
+    daily_block = daily_loss_blocker(run, orders, now)
+    if daily_block:
+        blockers.append(daily_block)
+        _cancel_pending(orders, daily_block)
     uncertain_marks = getattr(run, "_external_marks_unreliable", False) or any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
     for order in orders:
         if order.status != "pending" or run.status != "running" or session_error or uncertain_marks or not automatic_execution:
             continue
+        if daily_loss_blocker(run, orders, now):
+            _cancel_pending(orders, "Daily loss limit reached; entry cancelled.")
+            break
+        if _update_drawdown(run, orders) >= Decimal(str(policy["max_drawdown_pct"])):
+            run.halt_reason = f"{policy['max_drawdown_pct']}% drawdown limit reached during execution; automatic liquidation."
+            run.status = "halted"
+            _cancel_pending(orders, run.halt_reason)
+            break
         quote = quotes.get(order.instrument_id)
         error = quote_rejection(quote, now)
         if error:
@@ -240,13 +277,27 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
                            if o is not order and o.status in {"pending", "open"} and o.sector == order.sector), ZERO)
         stop_fill = (order.stop_price * (1 - Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
         planned_loss = (price - stop_fill) * order.quantity + fee(price * order.quantity, policy) + fee(stop_fill * order.quantity, policy)
-        if (cost > run.cash_balance - other_reserved - reserve_floor
-                or cost > state["equity"] * Decimal(str(policy["max_position_pct"])) / 100
+        active = [o for o in orders if o.status in {"pending", "open"}] + getattr(run, "_external_holdings", [])
+        count = len({getattr(o, "instrument_id", id(o)) for o in active})
+        position_used = sum(((o.mark_price or o.limit_price) * o.quantity for o in active
+                             if o is not order and getattr(o, "instrument_id", None) == order.instrument_id), ZERO)
+        asset_class = (getattr(order, "evidence", None) or {}).get("asset_class", "equity")
+        if (count > policy["max_positions"] or cost > run.cash_balance - other_reserved - reserve_floor
+                or cost + position_used > state["equity"] * Decimal(str(position_cap(policy, asset_class))) / 100
                 or cost + sector_used > state["equity"] * Decimal(str(policy["max_sector_pct"])) / 100
-                or planned_loss > state["equity"] * Decimal(str(policy["risk_per_trade_pct"])) / 100):
+                or planned_loss > state["equity"] * Decimal(str(policy["risk_per_trade_pct"])) / 100
+                or ("max_aggregate_risk_pct" in policy and aggregate_risk(run, orders) > state["equity"] * Decimal(str(policy["max_aggregate_risk_pct"])) / 100)):
             order.status = "cancelled"
             order.exit_reason = "Capital or concentration limit changed before fill."
             continue
+        if entry_check is not None:
+            decision = entry_check(order)
+            order.evidence = {**(order.evidence or {}), "fill_risk": decision}
+            if not decision["approved"]:
+                order.status = "cancelled"
+                order.exit_reason = ("Risk: " + "; ".join(decision["reasons"]))[:255]
+                blockers.append(f"{order.ticker}: {order.exit_reason}")
+                continue
         order.entry_price = price
         order.entry_fee = fee(price * order.quantity, policy)
         run.cash_balance = money(run.cash_balance - cost)
@@ -268,7 +319,13 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         _cancel_pending(orders, run.halt_reason)
     elif not automatic_execution:
         _update_drawdown(run, orders)
+    after_daily = daily_loss_blocker(run, orders, now)
+    if after_daily:
+        _cancel_pending(orders, after_daily)
+        blockers.append(after_daily)
     if run.status in {"liquidating", "halted"} and not any(o.status == "open" for o in orders):
+        if getattr(run, "_external_holdings", []):
+            blockers.append("Automatic positions are closed; manually managed holdings remain in Capital and require separate management.")
         # Keep a risk halt latched until the experiment ends, even when flat.
         if run.status == "liquidating" or now >= utc(run.ends_at):
             run.status = "completed"
@@ -400,6 +457,25 @@ async def control_run(session: AsyncSession, owner: str, action: str) -> PaperFu
 
 async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = None,
                 include_overview: bool = True) -> PaperFundResponse | None:
+    import asyncio
+    from sqlalchemy import text
+    try:
+        async with asyncio.timeout(CYCLE_TIMEOUT_SECONDS):
+            # Bound lock waits and abandoned pooler transactions as well as
+            # client-side work. An interrupted cycle must release its cash lock.
+            await session.execute(text("SELECT set_config('lock_timeout', '5s', true), "
+                                       "set_config('idle_in_transaction_session_timeout', '60s', true)"))
+            return await _cycle(session, owner, now=now, include_overview=include_overview)
+    except BaseException:
+        await session.rollback()
+        raise
+
+
+CYCLE_TIMEOUT_SECONDS = 60
+
+
+async def _cycle(session: AsyncSession, owner: str, *, now: datetime | None = None,
+                 include_overview: bool = True) -> PaperFundResponse | None:
     # All Capital mutations use this same lock before touching execution state.
     portfolio = await _portfolio(session, owner)
     run = await _latest(session, owner, lock=True)
@@ -411,7 +487,7 @@ async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = Non
     if run.status == "completed" or (run.last_cycle_at is not None and now < utc(run.last_cycle_at)):
         return await overview(session, owner, now=now) if include_overview else None
     orders = await _orders(session, run)
-    run.policy = await capital_policy(session, portfolio.id, run.policy)
+    run.policy = await capital_policy(session, portfolio.id, profile=portfolio.risk_profile)
     book = await load_book(session, portfolio)
     bind_book(run, orders, book)
     instrument_ids = {o.instrument_id for o in orders} | {p.instrument_id for p in book.positions}
@@ -427,13 +503,31 @@ async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = Non
             holding.mark_price = quote.price
     run._external_marks_unreliable = bool(external_errors)
     automatic = portfolio.trading_mode == "automatic"
+    from types import SimpleNamespace
+    from app.services.risk.risk_centre import _load_price_histories
+    from app.services.paper_fund.risk import entry_risk
+    instruments, histories = {}, {}
+    if automatic and run.status == "running" and now < utc(run.ends_at) and not market_blocker(now):
+        latest_radar = select(RadarRun.id).where(RadarRun.status == "completed", RadarRun.started_at <= now).order_by(RadarRun.started_at.desc(), RadarRun.created_at.desc(), RadarRun.id.desc()).limit(1).scalar_subquery()
+        candidates = select(RadarSnapshot.ticker).where(RadarSnapshot.run_id == latest_radar, RadarSnapshot.radar_priority.in_(["P0", "P1"]))
+        instruments = {i.id: i for i in await session.scalars(select(Instrument).where(
+            (Instrument.id.in_(instrument_ids)) | (Instrument.ticker.in_(candidates))))}
+        histories = await _load_price_histories(session, [SimpleNamespace(ticker=i.ticker) for i in instruments.values()], as_of=now.date())
+    for order in orders:
+        if order.instrument_id in instruments:
+            order.evidence = {**(order.evidence or {}), "asset_class": instruments[order.instrument_id].asset_class}
+    def entry_check(order):
+        try:
+            return entry_risk(run, orders, order, instruments, histories, now)
+        except (ArithmeticError, ValueError, TypeError):
+            return {"approved": False, "reasons": ["Invalid risk observations; entry blocked pending fresh data."]}
     if not automatic:
         _cancel_pending(orders, "Manual mode; automatic entry cancelled.")
     before = [(o.id, o.status) for o in orders]
-    blockers = process_orders(run, orders, quotes, now, automatic_execution=automatic)
+    blockers = process_orders(run, orders, quotes, now, automatic_execution=automatic, entry_check=entry_check)
     blockers.extend(external_errors)
     if not automatic:
-        blockers.insert(0, "Manual mode: automatic buys and sells are stopped.")
+        blockers.insert(0, "Manual mode: ordinary entries and exits are paused; already-triggered liquidation continues.")
     await book_fills(session, portfolio, orders)
     # The engine's validated marks update the shared position book as well.
     for position in await session.scalars(select(Position).where(Position.portfolio_id == portfolio.id, Position.quantity > 0)):
@@ -444,10 +538,10 @@ async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = Non
     await session.flush()
     book = await load_book(session, portfolio)
     bind_book(run, orders, book)
-    if automatic and run.status == "running" and not market_blocker(now) and not external_errors:
+    if automatic and run.status == "running" and not market_blocker(now) and not external_errors and not daily_loss_blocker(run, orders, now):
         stale_held = any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
         if not stale_held:
-            await _queue_signals(session, run, orders, now, blockers)
+            await _queue_signals(session, run, orders, now, blockers, entry_check=entry_check)
     if run.status == "completed":
         portfolio.trading_mode = "manual"
     run.last_cycle_at = now
@@ -459,9 +553,9 @@ async def cycle(session: AsyncSession, owner: str, *, now: datetime | None = Non
     return await overview(session, owner, now=now) if include_overview else None
 
 
-async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, blockers: list[str]) -> None:
+async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, blockers: list[str], *, entry_check=None) -> None:
     radar_run = await session.scalar(select(RadarRun).where(RadarRun.status == "completed", RadarRun.started_at <= now)
-                                      .order_by(RadarRun.started_at.desc(), RadarRun.created_at.desc()).limit(1))
+                                      .order_by(RadarRun.started_at.desc(), RadarRun.created_at.desc(), RadarRun.id.desc()).limit(1))
     if radar_run is None:
         blockers.append("Waiting for a completed market radar scan.")
         return
@@ -471,7 +565,8 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
         .where(RadarSnapshot.run_id == radar_run.id)
         .where(RadarSnapshot.radar_priority.in_(["P0", "P1"]))
         .order_by(RadarSnapshot.priority_score.desc(), RadarSnapshot.ticker))).all())
-    seen = {o.instrument_id for o in orders} | {p.instrument_id for p in getattr(run, "_external_holdings", [])}
+    retryable = {o.instrument_id: o for o in orders if o.status in {"cancelled", "expired"} and o.entry_price is None}
+    seen = {o.instrument_id for o in orders if o.instrument_id not in retryable} | {p.instrument_id for p in getattr(run, "_external_holdings", [])}
     added = 0
     for snapshot, instrument, quote in rows:
         if instrument is None:
@@ -480,6 +575,10 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
             continue
         if instrument.id in seen:
             continue
+        prior = retryable.get(instrument.id)
+        if (prior is not None and (prior.exit_reason or "").startswith("Signal invalidated")
+                and (prior.evidence or {}).get("radar_snapshot_id") == str(snapshot.id)):
+            continue
         error = execution_rejection(snapshot, quote, now)
         if instrument.currency != "USD" or instrument.asset_class not in {"equity", "etf"}:
             error = "Instrument metadata does not match the USD equity mandate."
@@ -487,13 +586,13 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
             if len(blockers) < 25:
                 blockers.append(f"{snapshot.ticker}: {error}")
             continue
-        quantity, limit, stop, target = size_order(run, orders, quote.price, snapshot.sector)
+        quantity, limit, stop, target = size_order(run, orders, quote.price, instrument.sector, instrument.asset_class)
         if quantity <= 0:
             blockers.append(f"{snapshot.ticker}: No capacity under cash, sector, position or risk limits.")
             continue
         order = PaperOrder(
             run_id=run.id, instrument_id=instrument.id, ticker=instrument.ticker, name=instrument.name,
-            sector=snapshot.sector, status="pending", quantity=quantity,
+            sector=instrument.sector, status="pending", quantity=quantity,
             limit_price=limit, stop_price=stop, target_price=target,
             entry_fee=ZERO, exit_fee=ZERO, realized_pnl=ZERO,
             submitted_at=now, expires_at=min(now + timedelta(minutes=run.policy["order_ttl_minutes"]),
@@ -503,10 +602,24 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
             thesis=f"Confirmed positive radar momentum ({snapshot.change_pct}% session move), with measured liquidity and confirmation.",
             evidence={"radar_snapshot_id": str(snapshot.id), "radar_run_id": str(radar_run.id),
                       "quote_as_of": quote.as_of.isoformat(), "quote_source": quote.source,
-                      "radar_evidence": snapshot.evidence, "policy_version": run.policy["version"]},
+                      "radar_evidence": snapshot.evidence, "policy_version": run.policy["version"], "asset_class": instrument.asset_class},
         )
-        session.add(order)
-        orders.append(order)
+        if entry_check is not None:
+            decision = entry_check(order)
+            if not decision["approved"]:
+                blockers.append(f"{order.ticker}: " + "; ".join(decision["reasons"]))
+                continue
+            order.evidence = {**order.evidence, "queue_risk": decision}
+        if instrument.id in retryable:
+            existing = retryable[instrument.id]
+            previous = {"status": existing.status, "reason": existing.exit_reason, "submitted_at": existing.submitted_at.isoformat()}
+            for column in PaperOrder.__table__.columns:
+                if column.name not in {"id", "created_at", "updated_at"}:
+                    setattr(existing, column.name, getattr(order, column.name))
+            existing.evidence = {**existing.evidence, "previous_attempt": previous}
+        else:
+            session.add(order)
+            orders.append(order)
         seen.add(instrument.id)
         added += 1
     if not added and not any(o.status == "pending" for o in orders):
@@ -525,7 +638,7 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
     if run is None:
         return PaperFundResponse(generated_at=now, trading_mode=portfolio.trading_mode, capital=capital, run=None, orders=[], equity_history=[],
                                  blockers=["Choose Automatic to enable execution using this Capital account."],
-                                 policy=POLICY, simulation_notice=SIMULATION_NOTICE)
+                                 policy=await capital_policy(session, portfolio.id, profile=portfolio.risk_profile), simulation_notice=SIMULATION_NOTICE)
     orders = await _orders(session, run)
     book = await load_book(session, portfolio, dashboard_state=dashboard_state)
     reserved = money(sum((reservation(o, run.policy) for o in orders if o.status == "pending"), ZERO))
