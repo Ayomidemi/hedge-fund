@@ -88,6 +88,85 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             quote.raw_payload = {"timestamp": int(at.timestamp())}
             await session.commit()
 
+    async def test_radar_history_excludes_current_future_and_duplicate_sources(self):
+        from app.services.market_radar.scan import _apply_historical_evidence
+        from app.services.market_radar.scoring import RadarCandidate
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            instrument = await session.get(Instrument, instrument_id)
+            original = RadarCandidate(ticker=instrument.ticker, name='Test', jurisdiction='US',
+                                      change_pct=D('5'), price=D('105'), volume=2000000)
+            await _apply_historical_evidence(session, [original], now=NOW)
+            for day, source in ((NOW.date(), 'tiingo'), (NOW.date()+timedelta(days=1), 'tiingo'),
+                                (NOW.date()-timedelta(days=1), 'live'), (NOW.date()-timedelta(days=1), 'yahoo')):
+                session.add(MarketPriceBar(instrument_id=instrument_id, bar_date=day, source=source,
+                    close_price=D('1000'), adjusted_close_price=D('1000'), volume=99999999, currency='USD'))
+            await session.flush()
+            actual = RadarCandidate(ticker=instrument.ticker, name='Test', jurisdiction='US',
+                                    change_pct=D('5'), price=D('105'), volume=2000000)
+            await _apply_historical_evidence(session, [actual], now=NOW)
+            for key in ('bar_count', 'price_return_zscore', 'average_volume', 'avg_dollar_volume'):
+                self.assertEqual(actual.evidence[key], original.evidence[key], key)
+
+    async def test_retired_book_name_loses_protected_radar_membership(self):
+        from app.models import RadarUniverseMember
+        from app.services.market_radar.catalog import sync_monitored_universe
+        from app.services.market_radar.watchlist import AlwaysWatchedSet
+        from app.services.market_radar.scan import _pin_prior_working_set
+        instrument_id, radar_id = await self.seed_signal()
+        async with self.factory() as session:
+            instrument = await session.get(Instrument, instrument_id)
+            member = RadarUniverseMember(ticker=instrument.ticker, name='Retired', jurisdiction='US',
+                source='book', source_rank=10, asset_class='equity', currency='USD', is_active=True,
+                always_watched=True, member_metadata={}, last_synced_at=NOW)
+            session.add(member)
+            await session.flush()
+            await sync_monitored_universe(session, watched=AlwaysWatchedSet({}))
+            self.assertFalse(member.always_watched)
+            self.assertTrue(member.is_active)
+            radar = await session.get(RadarRun, radar_id)
+            radar.working_set_count = 1
+            snapshot = await session.scalar(select(RadarSnapshot).where(RadarSnapshot.run_id == radar_id))
+            snapshot.in_working_set = snapshot.always_watched = True
+            await session.flush()
+            candidates = {}
+            await _pin_prior_working_set(session, candidates, jurisdictions=['US'])
+            self.assertTrue(candidates[instrument.ticker].pinned_prior)
+            self.assertFalse(candidates[instrument.ticker].always_watched)
+
+    async def test_radar_scan_persists_observation_quality_without_creating_orders(self):
+        from app.services.market_radar.scan import run_radar_scan
+        from app.services.market_radar.scoring import RadarCandidate
+        from app.services.market_radar.catalog import CatalogSyncResult
+        from app.services.market_radar.watchlist import AlwaysWatchedSet
+        from app.services.market_data.quote_provider import LiveQuote
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            instrument = await session.get(Instrument, instrument_id)
+            verified = RadarCandidate(ticker=instrument.ticker, name='Test', jurisdiction='US')
+            discovery = RadarCandidate(ticker='UNVERIFIED', name='Discovery', jurisdiction='US',
+                source='fmp', price=D('10'), change_pct=D('90'), flags=['unusual_volume'], source_as_of=NOW)
+            clock = type('Clock', (datetime,), {'now':classmethod(lambda cls, tz=None: NOW)})
+            live = LiveQuote(ticker=instrument.ticker, price=D('105'), previous_close=D('100'),
+                change_pct=D('5'), volume=3000000, as_of=NOW, source='fmp',
+                raw_payload={'timestamp':int(NOW.timestamp())})
+            with patch('app.services.market_radar.scan.datetime', clock), \
+                 patch('app.services.market_radar.scan.load_always_watched', new=AsyncMock(return_value=AlwaysWatchedSet({}))), \
+                 patch('app.services.market_radar.scan.sync_monitored_universe', new=AsyncMock(return_value=CatalogSyncResult(1,0,0,0))), \
+                 patch('app.services.market_radar.scan.load_catalog_candidates', new=AsyncMock(return_value=[verified])), \
+                 patch('app.services.market_radar.scan.fetch_us_movers', new=AsyncMock(return_value=([discovery],3,[]))), \
+                 patch('app.services.market_radar.scan.fetch_quotes', new=AsyncMock(return_value={instrument.ticker:live})), \
+                 patch('app.services.market_radar.scan.record_system_log', new=AsyncMock()):
+                radar = await run_radar_scan(session, jurisdictions=['US'])
+            self.assertEqual(radar.status, 'completed', radar.errors)
+            self.assertTrue(any(note.startswith('Coverage:') for note in radar.notes))
+            rows = {row.ticker:row for row in await session.scalars(select(RadarSnapshot).where(RadarSnapshot.run_id == radar.id))}
+            self.assertEqual(rows[instrument.ticker].evidence['observation_quality'], 'verified_timestamp')
+            self.assertEqual(rows['UNVERIFIED'].evidence['observation_quality'], 'unverified')
+            self.assertIsNone(rows['UNVERIFIED'].radar_priority)
+            self.assertNotIn('unusual_volume', rows['UNVERIFIED'].flags)
+            self.assertEqual(await session.scalar(select(func.count()).select_from(PaperOrder)), 0)
+
     async def call_cycle(self, at=NOW):
         async with self.factory() as session:
             return await cycle(session, self.owner, now=at)
@@ -707,7 +786,9 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
         async with self.factory() as session:
             paused = await control_run(session, self.owner, "pause")
             self.assertEqual(paused.run.status, "paused")
-            resumed = await control_run(session, self.owner, "resume")
+            clock = type('Clock', (datetime,), {'now':classmethod(lambda cls, tz=None: NOW)})
+            with patch('app.services.paper_fund.engine.datetime', clock):
+                resumed = await control_run(session, self.owner, "resume")
             self.assertEqual(resumed.run.status, "running")
         ended = await self.call_cycle(NOW + timedelta(days=7))
         self.assertEqual(ended.run.status, "completed")

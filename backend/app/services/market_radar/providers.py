@@ -91,8 +91,12 @@ async def fetch_us_movers() -> tuple[list[RadarCandidate], int, list[str]]:
                     _int(item.get("avgVolume") or item.get("averageVolume"))
                     or candidate.avg_volume
                 )
-                if default_flag not in candidate.flags:
-                    candidate.flags.append(default_flag)
+                # List membership is discovery provenance, not measured volume
+                # confirmation. Only scoring may create statistical flags.
+                lists = candidate.evidence.setdefault("discovery_lists", [])
+                list_name = path.rsplit("/", 1)[-1]
+                if list_name not in lists:
+                    lists.append(list_name)
                 candidates[ticker] = candidate
 
     return list(candidates.values()), calls, errors

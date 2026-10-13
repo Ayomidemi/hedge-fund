@@ -45,8 +45,7 @@ RADAR_MOVER_LIST_LIMIT = 15
 # Max NGX discovery names beyond always-watched holdings.
 RADAR_NG_DISCOVERY_LIMIT = 25
 
-# Quotes already refreshed by the live-price platform can be reused by Radar if
-# they are from the current UTC day or no older than this live-cache window.
+# Maximum age of a cached radar observation, including same-day quotes.
 RADAR_QUOTE_CACHE_TTL_SECONDS = 900
 
 # Radar may fill missing catalog/always-watched prices during open sessions, but

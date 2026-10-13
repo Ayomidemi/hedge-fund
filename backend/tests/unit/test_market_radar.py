@@ -137,7 +137,7 @@ class RadarScoringTests(TestCase):
         score_candidate(candidate)
         self.assertFalse(is_flagged(candidate))
 
-    def test_discovery_list_flags_are_kept(self) -> None:
+    def test_discovery_list_flags_are_not_measured_evidence(self) -> None:
         candidate = RadarCandidate(
             ticker="XYZ",
             name="XYZ",
@@ -146,7 +146,7 @@ class RadarScoringTests(TestCase):
             flags=["unusual_volume"],
         )
         score_candidate(candidate)
-        self.assertIn("unusual_volume", candidate.flags)
+        self.assertNotIn("unusual_volume", candidate.flags)
         self.assertFalse(is_flagged(candidate))
         self.assertEqual(candidate.anomaly_score, Decimal("0.00"))
 
@@ -288,7 +288,7 @@ class RadarScoringTests(TestCase):
         self.assertTrue(all(item.always_watched for item in working[:5]))
         self.assertEqual(working[5].ticker, "M119")
 
-    def test_working_set_keeps_pinned_after_always_watched(self) -> None:
+    def test_working_set_ranks_pinned_names_by_current_score(self) -> None:
         always = RadarCandidate(
             ticker="SPY",
             name="SPY",
@@ -313,8 +313,8 @@ class RadarScoringTests(TestCase):
         ]
         working = _select_working_set([*movers, pinned, always])
         self.assertEqual(working[0].ticker, "SPY")
-        self.assertEqual(working[1].ticker, "ZTG")
-        self.assertEqual(working[2].ticker, "M9")
+        self.assertEqual(working[1].ticker, "M9")
+        self.assertIn(pinned, working)
 
     def test_scan_lurch_is_flagged_from_clock_three(self) -> None:
         candidate = RadarCandidate(
@@ -384,7 +384,7 @@ class RadarScoringTests(TestCase):
             jurisdiction="US",
         )
         self.assertFalse(_quote_usable_for_radar(quote, now, candidate=watched))
-        self.assertTrue(_quote_usable_for_radar(quote, now, candidate=ordinary))
+        self.assertFalse(_quote_usable_for_radar(quote, now, candidate=ordinary))
 
     def test_quote_targets_are_capped_and_prioritize_watched_names(self) -> None:
         watched = RadarCandidate(

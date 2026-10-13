@@ -162,7 +162,7 @@ async def sync_monitored_universe(
         row.ticker: row
         for row in await session.scalars(
             select(RadarUniverseMember).where(
-                RadarUniverseMember.ticker.in_(list(incoming))
+                RadarUniverseMember.ticker.in_(list(incoming)) | (RadarUniverseMember.source == "book")
             )
         )
     }
@@ -209,6 +209,12 @@ async def sync_monitored_universe(
         member.last_synced_at = now
         upserted += 1
 
+    # Book/watchlist membership is current state. A closed position or removed
+    # watchlist item must not permanently consume protected scan/quote slots.
+    if watched is not None:
+        for member in existing_members.values():
+            if member.source == "book":
+                member.always_watched = member.ticker in watched.candidates
     await session.flush()
 
     active_count = await _active_count(session)

@@ -97,13 +97,7 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
     flags: list[str] = []
     score = Decimal("0")
     change = abs(candidate.change_pct) if candidate.change_pct is not None else Decimal("0")
-    inherited = [
-        flag
-        for flag in candidate.flags
-        if flag in {"unusual_volume", "price_move", "risk_drop"}
-    ]
-
-    if candidate.avg_volume and candidate.avg_volume > 0 and candidate.volume:
+    if candidate.avg_volume and candidate.avg_volume > 0 and candidate.volume is not None:
         candidate.volume_ratio = (
             Decimal(candidate.volume) / Decimal(candidate.avg_volume)
         ).quantize(Decimal("0.01"))
@@ -163,7 +157,7 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
         score += min(max(scan_delta, scan_price), Decimal("15"))
 
     merged: list[str] = []
-    for flag in flags + inherited:
+    for flag in flags:
         if flag not in merged:
             merged.append(flag)
     candidate.flags = merged

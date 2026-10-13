@@ -11,7 +11,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from math import sqrt
+from math import isfinite, sqrt
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -199,10 +199,12 @@ async def run_radar_scan(
                 candidates,
                 skipped_jurisdictions={item["jurisdiction"] for item in skipped},
             )
+            observed_at = datetime.now(timezone.utc)
+            _assess_observations(list(candidates.values()), observed_at)
             await _apply_historical_evidence(
                 session,
                 [item for item in candidates.values() if not item.carried_forward],
-                now=started_at,
+                now=observed_at,
             )
             _apply_sector_relative(
                 [item for item in candidates.values() if not item.carried_forward]
@@ -224,6 +226,7 @@ async def run_radar_scan(
                     )
                 )
             flagged = [item for item in working if is_flagged(item)]
+            notes.append(_coverage_note(list(candidates.values())))
             notes.append(
                 f"Flagged {len(flagged)} working-set names "
                 f"(P0={_count_priority(flagged, 'P0')}, "
@@ -313,11 +316,12 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
             target[item.ticker] = item
             continue
         # A discovery list's receipt time does not supersede a verified quote.
-        replace_tape = not existing.evidence.get("quote_as_of") or bool(
-            item.evidence.get("quote_as_of")
-        )
+        existing_time = _parse_iso_datetime(str(existing.evidence.get("quote_as_of") or ""))
+        incoming_time = _parse_iso_datetime(str(item.evidence.get("quote_as_of") or ""))
+        replace_tape = existing_time is None or (incoming_time is not None and incoming_time >= existing_time)
         if replace_tape and item.price is not None:
             existing.price = item.price
+            existing.previous_close = item.previous_close
         if replace_tape and item.change_pct is not None:
             existing.change_pct = item.change_pct
         if replace_tape and item.volume is not None:
@@ -328,9 +332,7 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
             existing.sector = item.sector
         if replace_tape and item.source:
             existing.source = item.source
-        if replace_tape and item.source_as_of and (
-            existing.source_as_of is None or item.source_as_of > existing.source_as_of
-        ):
+        if replace_tape and item.source_as_of:
             existing.source_as_of = item.source_as_of
         existing.always_watched = existing.always_watched or item.always_watched
         existing.on_watchlist = existing.on_watchlist or item.on_watchlist
@@ -340,7 +342,8 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
         )
         existing.pinned_prior = existing.pinned_prior or item.pinned_prior
         existing.is_catalog_member = existing.is_catalog_member or item.is_catalog_member
-        existing.evidence.update(item.evidence)
+        existing.evidence.update({key: value for key, value in item.evidence.items()
+                                  if replace_tape or key not in {"quote_as_of", "quote_source"}})
         if item.sparkline:
             existing.sparkline = item.sparkline
         for flag in item.flags:
@@ -348,15 +351,50 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
                 existing.flags.append(flag)
 
 
+def _assess_observations(candidates: list[RadarCandidate], now: datetime) -> None:
+    for candidate in candidates:
+        if candidate.carried_forward:
+            candidate.evidence["observation_quality"] = "carried_forward"
+            continue
+        observed = _parse_iso_datetime(str(candidate.evidence.get("quote_as_of") or ""))
+        if observed is None:
+            candidate.stale_reason = "No verified current quote timestamp; discovery observation only."
+            quality = "unverified"
+        elif not 0 <= (_aware_utc(now) - observed).total_seconds() <= RADAR_QUOTE_CACHE_TTL_SECONDS:
+            candidate.stale_reason = "Quote is stale or future dated."
+            quality = "stale"
+        elif _float(candidate.price) is None or candidate.price <= 0 or _float(candidate.change_pct) is None:
+            candidate.stale_reason = "Current price or session return is unavailable."
+            quality = "incomplete"
+        else:
+            candidate.stale_reason = None
+            quality = "verified_timestamp"
+        candidate.evidence["observation_quality"] = quality
+        candidate.evidence["radar_method_version"] = 2
+
+
+def _coverage_note(candidates: list[RadarCandidate]) -> str:
+    eligible = [item for item in candidates if not item.carried_forward]
+    verified = sum(item.evidence.get("observation_quality") == "verified_timestamp" for item in eligible)
+    history = sum(item.evidence.get("return_sample_count", 0) >= 20 for item in eligible)
+    return (f"Coverage: {len(eligible)} observed names; {verified} with verified, current price/return; "
+            f"{history} with completed adjusted return baselines. This is the monitored sample, not the whole market.")
+
+
 def _apply_quotes(candidates: dict[str, RadarCandidate], quotes) -> None:
     for ticker, quote in quotes.items():
         item = candidates.get(ticker)
         if item is None:
             continue
+        current = _parse_iso_datetime(str(item.evidence.get("quote_as_of") or ""))
+        if current is not None and _aware_utc(quote.as_of) < current:
+            continue
         item.price = quote.price
-        item.previous_close = quote.previous_close or item.previous_close
-        item.change_pct = quote.change_pct if quote.change_pct is not None else item.change_pct
-        item.volume = quote.volume if quote.volume is not None else item.volume
+        item.previous_close = quote.previous_close
+        item.change_pct = quote.change_pct
+        if item.change_pct is None and quote.previous_close is not None and quote.previous_close > 0:
+            item.change_pct = (quote.price / quote.previous_close - 1) * 100
+        item.volume = quote.volume
         item.source = quote.source
         item.source_as_of = quote.as_of
         item.stale_reason = None
@@ -408,11 +446,11 @@ async def _apply_cached_quotes(
             if quote_as_of < candidate_as_of:
                 continue
         candidate.price = quote.price
-        candidate.previous_close = quote.previous_close or candidate.previous_close
-        candidate.change_pct = (
-            quote.change_pct if quote.change_pct is not None else candidate.change_pct
-        )
-        candidate.volume = quote.volume if quote.volume is not None else candidate.volume
+        candidate.previous_close = quote.previous_close
+        candidate.change_pct = quote.change_pct
+        if candidate.change_pct is None and quote.previous_close is not None and quote.previous_close > 0:
+            candidate.change_pct = (quote.price / quote.previous_close - 1) * 100
+        candidate.volume = quote.volume
         candidate.currency = quote.currency or candidate.currency
         candidate.source = f"cache:{quote.source}"
         candidate.source_as_of = quote.as_of
@@ -483,19 +521,18 @@ def _estimate_quote_calls(tickers: list[str]) -> int:
 
 def _select_working_set(candidates: list[RadarCandidate]) -> list[RadarCandidate]:
     always = [item for item in candidates if item.always_watched]
-    pinned = [
-        item
-        for item in candidates
-        if item.pinned_prior and not item.always_watched
-    ]
     rest = [
         item
         for item in candidates
-        if not item.always_watched and not item.pinned_prior
+        if not item.always_watched
     ]
-    rest.sort(key=lambda item: item.anomaly_score, reverse=True)
-    remaining = max(RADAR_WORKING_SET_SIZE - len(always) - len(pinned), 0)
-    return always + pinned + rest[:remaining]
+    # Prior membership supplies comparison history, not a permanent seat.
+    # Actual holdings/watchlist/pulse coverage remains protected even if it
+    # exceeds the display budget; ordinary pinned names compete afresh.
+    rest.sort(key=lambda item: (bool(item.stale_reason or item.carried_forward),
+                               -item.anomaly_score, not item.pinned_prior, item.ticker))
+    remaining = max(RADAR_WORKING_SET_SIZE - len(always), 0)
+    return always + rest[:remaining]
 
 
 async def _carry_forward_skipped(
@@ -593,7 +630,9 @@ async def _pin_prior_working_set(
                 exchange=snapshot.exchange,
                 currency=snapshot.currency,
                 source=snapshot.source,
-                always_watched=snapshot.always_watched,
+                # Current holdings/watchlist were loaded above. Historical
+                # membership must not resurrect a removed protected name.
+                always_watched=False,
                 is_catalog_member=True,
             )
             candidates[snapshot.ticker] = existing
@@ -636,6 +675,9 @@ def _apply_scan_deltas(candidates: list[RadarCandidate]) -> None:
             continue
         current_as_of = _aware_utc(current_as_of)
         if current_as_of <= prior_as_of:
+            continue
+        if current_as_of.date() != prior_as_of.date():
+            candidate.evidence["scan_comparison_gap"] = "different_session_date"
             continue
 
         minutes = max(int((current_as_of - prior_as_of).total_seconds() // 60), 0)
@@ -850,23 +892,38 @@ async def _apply_historical_evidence(
         select(MarketPriceBar)
         .where(MarketPriceBar.instrument_id.in_(candidate_by_instrument.keys()))
         .where(MarketPriceBar.bar_date >= cutoff)
+        .where(MarketPriceBar.bar_date < now.date())
+        .where(MarketPriceBar.source.in_(["tiingo", "yahoo"]))
         .order_by(MarketPriceBar.instrument_id, MarketPriceBar.bar_date)
     )
     for bar in bars:
         bars_by_instrument[bar.instrument_id].append(bar)
 
     for instrument_id, candidate in candidate_by_instrument.items():
-        bars_for_candidate = bars_by_instrument.get(instrument_id, [])
-        if len(bars_for_candidate) < 2:
-            candidate.evidence["history_gap"] = "insufficient_bars"
-            if bars_for_candidate:
-                candidate.sparkline = _sparkline(bars_for_candidate, candidate)
+        bars_for_candidate = _completed_daily_bars(bars_by_instrument.get(instrument_id, []), now)
+        candidate.evidence["bar_count"] = len(bars_for_candidate)
+        if not bars_for_candidate:
+            candidate.evidence["history_gap"] = "no_completed_daily_bars"
             continue
-
+        if bars_for_candidate[-1].bar_date < now.date() - timedelta(days=5):
+            candidate.evidence["history_gap"] = "outdated_daily_history"
+            continue
         _apply_return_evidence(candidate, bars_for_candidate)
         _apply_volume_evidence(candidate, bars_for_candidate)
-        candidate.sparkline = _sparkline(bars_for_candidate, candidate)
-        candidate.evidence["bar_count"] = len(bars_for_candidate)
+        candidate.sparkline = _sparkline(bars_for_candidate, candidate, now=now)
+
+
+def _completed_daily_bars(bars, now):
+    """One completed observation per date; live/intraday marks are not a baseline."""
+    selected = {}
+    for bar in bars:
+        if (bar.source not in {"tiingo", "yahoo"}
+                or not now.date() - timedelta(days=RADAR_HISTORY_LOOKBACK_DAYS) <= bar.bar_date < now.date()):
+            continue
+        prior = selected.get(bar.bar_date)
+        if prior is None or (bar.source == "tiingo" and prior.source != "tiingo"):
+            selected[bar.bar_date] = bar
+    return [selected[day] for day in sorted(selected)]
 
 
 def _apply_return_evidence(
@@ -874,8 +931,11 @@ def _apply_return_evidence(
     bars: list[MarketPriceBar],
 ) -> None:
     returns = _bar_returns(bars)
-    if not returns:
+    if len(returns) < 20 or len(returns) != len(bars) - 1:
+        candidate.evidence["history_gap"] = "insufficient_adjusted_returns"
         return
+    candidate.evidence["return_baseline"] = "completed_adjusted_daily"
+    candidate.evidence["return_sample_count"] = len(returns)
     mean_return = _mean(returns)
     stdev_return = _stdev(returns)
     recent_vol = _annualized_volatility(returns[-5:])
@@ -886,12 +946,6 @@ def _apply_return_evidence(
         candidate.evidence["volatility_ratio"] = _round_text(recent_vol / baseline_vol)
 
     change = _float(candidate.change_pct)
-    if change is None:
-        last_bar = bars[-1]
-        previous_bar = bars[-2]
-        change = _return_pct(previous_bar.close_price, last_bar.close_price)
-        if change is not None and candidate.change_pct is None:
-            candidate.change_pct = _decimal(change, "0.01")
     if change is None:
         return
     candidate.evidence["historical_return_mean_pct"] = _round_text(mean_return)
@@ -906,22 +960,26 @@ def _apply_volume_evidence(
     candidate: RadarCandidate,
     bars: list[MarketPriceBar],
 ) -> None:
-    volumes = [float(bar.volume) for bar in bars if bar.volume and bar.volume > 0]
-    if not volumes:
+    measured = [bar for bar in bars if bar.volume is not None and bar.volume >= 0]
+    if len(measured) < 20:
+        candidate.evidence["volume_gap"] = "insufficient_completed_volume"
         return
+    volumes = [float(bar.volume) for bar in measured]
     mean_volume = _mean(volumes)
     stdev_volume = _stdev(volumes)
-    candidate.avg_volume = candidate.avg_volume or int(mean_volume)
+    candidate.avg_volume = int(mean_volume)
     candidate.evidence["average_volume"] = int(mean_volume)
-    if candidate.volume and mean_volume > 0:
+    candidate.evidence["volume_baseline"] = "session_to_date_vs_completed_daily"
+    candidate.evidence["volume_sample_count"] = len(measured)
+    if candidate.volume is not None and candidate.volume >= 0 and mean_volume > 0:
         candidate.volume_ratio = _decimal(candidate.volume / mean_volume, "0.01")
         candidate.evidence["volume_ratio"] = str(candidate.volume_ratio)
         if stdev_volume > 0:
             candidate.evidence["volume_zscore"] = _round_text(
                 (float(candidate.volume) - mean_volume) / stdev_volume
             )
-    if candidate.price is not None and candidate.avg_volume:
-        dollar_volume = candidate.price * Decimal(candidate.avg_volume)
+    if all(_float(bar.close_price) is not None and bar.close_price > 0 for bar in measured):
+        dollar_volume = sum((bar.close_price * bar.volume for bar in measured), Decimal("0")) / len(measured)
         candidate.evidence["avg_dollar_volume"] = _decimal_text(dollar_volume)
 
 
@@ -929,6 +987,8 @@ def _apply_sector_relative(candidates: list[RadarCandidate]) -> None:
     """Benchmark each name against its sector ETF pulse, not against peers."""
     by_ticker = {candidate.ticker: candidate for candidate in candidates}
     for candidate in candidates:
+        if candidate.stale_reason or candidate.carried_forward:
+            continue
         if candidate.change_pct is None:
             continue
         if candidate.jurisdiction != JURISDICTION_US:
@@ -939,7 +999,12 @@ def _apply_sector_relative(candidates: list[RadarCandidate]) -> None:
         if benchmark_ticker is None or benchmark_ticker == candidate.ticker:
             continue
         benchmark = by_ticker.get(benchmark_ticker)
-        if benchmark is None or benchmark.change_pct is None:
+        if benchmark is None or benchmark.change_pct is None or benchmark.stale_reason or benchmark.carried_forward:
+            continue
+        if candidate.source_as_of and benchmark.source_as_of and abs(
+            (_aware_utc(candidate.source_as_of) - _aware_utc(benchmark.source_as_of)).total_seconds()
+        ) > 120:
+            candidate.evidence["relative_gap"] = "unsynchronised_benchmark"
             continue
         relative = float(candidate.change_pct) - float(benchmark.change_pct)
         candidate.evidence["sector_benchmark"] = benchmark_ticker
@@ -984,11 +1049,12 @@ def _quote_usable_for_radar(
     if quote.is_stale:
         return False
     as_of = _aware_utc(quote.as_of)
+    age = (_aware_utc(now) - as_of).total_seconds()
+    if age < 0:
+        return False
     if candidate is not None and (candidate.on_watchlist or candidate.pinned_prior):
-        return now - as_of <= timedelta(seconds=RADAR_WATCHLIST_CACHE_MAX_SECONDS)
-    if as_of.date() == now.date():
-        return True
-    return now - as_of <= timedelta(seconds=RADAR_QUOTE_CACHE_TTL_SECONDS)
+        return age <= RADAR_WATCHLIST_CACHE_MAX_SECONDS
+    return age <= RADAR_QUOTE_CACHE_TTL_SECONDS
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -1000,7 +1066,7 @@ def _aware_utc(value: datetime) -> datetime:
 def _bar_returns(bars: list[MarketPriceBar]) -> list[float]:
     returns: list[float] = []
     for previous, current in zip(bars, bars[1:]):
-        value = _return_pct(previous.close_price, current.close_price)
+        value = _return_pct(previous.adjusted_close_price, current.adjusted_close_price)
         if value is not None:
             returns.append(value)
     return returns
@@ -1009,6 +1075,7 @@ def _bar_returns(bars: list[MarketPriceBar]) -> list[float]:
 def _sparkline(
     bars: list[MarketPriceBar],
     candidate: RadarCandidate,
+    *, now: datetime | None = None,
 ) -> list[dict[str, str]]:
     points = bars[-RADAR_SPARKLINE_POINTS:]
     sparkline = [
@@ -1016,7 +1083,7 @@ def _sparkline(
         for bar in points
     ]
     if candidate.price is not None:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = (now or datetime.now(timezone.utc)).date().isoformat()
         if not sparkline or sparkline[-1]["date"] != today:
             sparkline.append({"date": today, "close": _decimal_text(candidate.price)})
         else:
@@ -1025,7 +1092,7 @@ def _sparkline(
 
 
 def _return_pct(previous: Decimal | None, current: Decimal | None) -> float | None:
-    if previous is None or current is None or previous <= 0:
+    if _float(previous) is None or _float(current) is None or previous <= 0 or current <= 0:
         return None
     return float((current - previous) / previous * Decimal("100"))
 
@@ -1143,7 +1210,8 @@ def _float(value: object) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return float(str(value))
+        result = float(str(value))
+        return result if isfinite(result) else None
     except (TypeError, ValueError):
         return None
 

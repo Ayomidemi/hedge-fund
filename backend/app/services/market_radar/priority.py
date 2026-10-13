@@ -1,13 +1,12 @@
 """Radar priority tiers and Opportunity Queue evidence packages.
 
-Anomaly scoring stays in scoring.py. This module decides whether a flagged
-name is P0–P3, whether it may auto-enter the queue, and what evidence the
-desk sees when it does.
+Anomaly scoring stays in scoring.py. This module assigns attention priorities
+and evidence. Execution separately decides whether a signal may become an order.
 
 P0  Position risk or an extraordinary tape event.
-P1  Strong, confirmed anomaly on a name worth opening today.
-P2  Interesting; keep on Radar, do not auto-promote.
-P3  Background observation; store it, do not open it.
+P1  Strong, confirmed anomaly requiring further execution checks.
+P2  Interesting radar observation.
+P3  Background observation.
 """
 
 from __future__ import annotations
@@ -81,6 +80,12 @@ def assign_priority(
     related = context.related_tickers if context else ()
     candidate.related_tickers = [ticker for ticker in related if ticker != candidate.ticker]
     _write_industry_evidence(candidate, context)
+
+    if candidate.stale_reason or candidate.carried_forward:
+        candidate.priority_score = Decimal("0")
+        candidate.priority_reasons = [candidate.stale_reason or "Carried-forward observation; awaiting a current quote."]
+        _write_priority_evidence(candidate)
+        return candidate
 
     if not is_flagged(candidate):
         _write_priority_evidence(candidate)
