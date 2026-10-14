@@ -15,7 +15,7 @@ from app.core.market_constants import (
     RADAR_POST_CLOSE_WINDOW_HOURS,
     RADAR_PULSE_TICKERS,
 )
-from app.models import RadarRun, RadarSnapshot
+from app.models import RadarRun, RadarSnapshot, RadarWatchlistItem
 from app.services.market_data.sessions import ALL_JURISDICTIONS, session_for
 from app.services.market_radar.priority import (
     IndustryContext,
@@ -31,6 +31,7 @@ async def build_radar_overview(
     *,
     jurisdiction: str | None = None,
     owner_user_id: str | None = None,
+    compact: bool = False,
 ) -> MarketRadarOverviewResponse:
     now = datetime.now(timezone.utc)
     sessions = [
@@ -47,7 +48,8 @@ async def build_radar_overview(
     )
     snapshot_run = await session.scalar(
         select(RadarRun)
-        .options(selectinload(RadarRun.snapshots))
+        .options(selectinload(RadarRun.snapshots).defer(RadarSnapshot.sparkline)
+                 if compact else selectinload(RadarRun.snapshots))
         .where(RadarRun.status == "completed")
         .where(RadarRun.working_set_count > 0)
         .order_by(RadarRun.started_at.desc(), RadarRun.created_at.desc(), RadarRun.id.desc())
@@ -62,7 +64,10 @@ async def build_radar_overview(
     flagged = [row for row in working if row.flags and _priority_value(row, row.evidence or {})]
     watchlist_tickers: set[str] = set()
     watchlist_items = []
-    if owner_user_id:
+    if owner_user_id and compact:
+        watchlist_tickers = set(await session.scalars(select(RadarWatchlistItem.ticker).where(
+            RadarWatchlistItem.owner_user_id == owner_user_id)))
+    elif owner_user_id:
         watchlist = await list_watchlist(session, owner_user_id=owner_user_id)
         watchlist_items = watchlist.items
         watchlist_tickers = {item.ticker.upper() for item in watchlist_items}
@@ -75,10 +80,11 @@ async def build_radar_overview(
             row,
             watchlist_tickers,
             context=contexts.get(industry_key(row)),
+            compact=compact,
         )
 
-    industries = _group_industries(working, watchlist_tickers, contexts)
-    named_flagged = [named(row) for row in _sorted(flagged)]
+    industries = _group_industries(working, watchlist_tickers, contexts, compact=compact)
+    named_flagged = [] if compact else [named(row) for row in _sorted(flagged)]
     queue_candidates = [
         item
         for item in named_flagged
@@ -114,7 +120,7 @@ async def build_radar_overview(
         queue_candidates=queue_candidates,
         desk_alerts=desk_alerts,
         watchlist=watchlist_items,
-        scan_changes=[named(row) for row in _sorted(_scan_changes(working))],
+        scan_changes=[] if compact else [named(row) for row in _sorted(_scan_changes(working))],
     )
 
 
@@ -158,11 +164,12 @@ def _name_response(
     row: RadarSnapshot,
     watchlist_tickers: set[str] | None = None,
     context: IndustryContext | None = None,
+    *, compact: bool = False,
 ) -> MarketRadarNameResponse:
     evidence = dict(row.evidence or {})
     watchlist = bool(
-        (watchlist_tickers and row.ticker.upper() in watchlist_tickers)
-        or evidence.get("on_watchlist")
+        row.ticker.upper() in watchlist_tickers if watchlist_tickers is not None
+        else evidence.get("on_watchlist")
     )
     if context is not None:
         evidence.setdefault("industry_status", context.status)
@@ -191,8 +198,12 @@ def _name_response(
         ),
         priority_reasons=list(evidence.get("priority_reasons") or []),
         flags=list(row.flags or []),
-        evidence=evidence,
-        sparkline=list(row.sparkline or []),
+        evidence={key: value for key, value in evidence.items() if key in {
+            "observation_quality", "return_sample_count", "history_gap", "volume_gap",
+            "sector_relative_return_pct", "move_scope", "scan_state", "volume_ratio",
+            "scan_delta_change_pct", "in_portfolio", "in_opportunity_queue", "care_tier",
+        }} if compact else evidence,
+        sparkline=[] if compact else list(row.sparkline or []),
         as_of=row.as_of,
         source_as_of=row.source_as_of,
         carried_forward=row.carried_forward,
@@ -221,6 +232,7 @@ def _group_industries(
     rows: list[RadarSnapshot],
     watchlist_tickers: set[str] | None,
     contexts: dict[str, IndustryContext],
+    *, compact: bool = False,
 ) -> list[MarketRadarIndustryResponse]:
     grouped: dict[str, list[RadarSnapshot]] = {}
     for row in rows:
@@ -262,7 +274,7 @@ def _group_industries(
                 ),
                 declining_count=displayed.declining_count if displayed is not None else 0,
                 advancing_count=displayed.advancing_count if displayed is not None else 0,
-                names=[
+                names=[] if compact else [
                     _name_response(row, watchlist_tickers, context)
                     for row in _sorted(members)
                 ],

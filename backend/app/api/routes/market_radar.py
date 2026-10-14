@@ -31,6 +31,7 @@ router = APIRouter(prefix="/market-radar")
 @router.get("/overview", response_model=MarketRadarOverviewResponse)
 async def read_market_radar_overview(
     jurisdiction: str | None = Query(default="all"),
+    compact: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> MarketRadarOverviewResponse:
@@ -41,6 +42,7 @@ async def read_market_radar_overview(
         session,
         jurisdiction=normalized if normalized in {"US", "NG", "all"} else "all",
         owner_user_id=user.id,
+        compact=compact,
     )
 
 

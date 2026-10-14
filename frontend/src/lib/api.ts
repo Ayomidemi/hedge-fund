@@ -2575,6 +2575,11 @@ export function getMarketRadarOverview(
   return fetchApi<MarketRadarOverview>(`/api/market-radar/overview${query}`, options);
 }
 
+/** One copy of each displayed name; no chart payload or repeated focus lists. */
+export function getMarketRadarDesk(options?: ApiRequestOptions) {
+  return fetchApi<MarketRadarOverview>("/api/market-radar/overview?compact=true", options);
+}
+
 export type NewsItem = {
   id: string;
   provider: string;

@@ -97,7 +97,6 @@ textarea {
   outline: 2px solid #596549;
   outline-offset: 3px;
 }
-
 @media (prefers-color-scheme: dark) {
   .pease-workspace {
     --pease-paper: #151613;
@@ -106,3 +105,4 @@ textarea {
     background: #10110f;
   }
 }
+

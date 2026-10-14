@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   getPaperFund,
@@ -9,7 +10,6 @@ import {
   type PaperFundOverview,
 } from "@/lib/api";
 import { CapitalBalanceSummary, capitalMoney } from "@/components/portfolio/CapitalBalanceSummary";
-import { PortfolioDashboard } from "@/components/portfolio/PortfolioDashboard";
 import { tickerHubPath } from "@/lib/ticker-hub-path";
 import { CapitalIcon } from "@/components/ui/CapitalIcon";
 import { toast } from "@/components/ui/ToastProvider";
@@ -20,6 +20,7 @@ const timestamps = new Intl.DateTimeFormat("en-US", {
 const panel = "rounded-sm border border-zinc-200/80 bg-[var(--pease-paper)] dark:border-zinc-800/80 dark:bg-[var(--pease-paper)]";
 
 const money = capitalMoney;
+const PortfolioDashboard = dynamic(() => import("@/components/portfolio/PortfolioDashboard").then(module => module.PortfolioDashboard));
 
 function when(value: string | null) {
   return value && Number.isFinite(Date.parse(value)) ? timestamps.format(new Date(value)) : "Awaiting first cycle";
@@ -133,6 +134,17 @@ export function PaperFundPanel({
     <button type="button" disabled={pending} onClick={() => void act("refresh")} aria-label="Refresh Capital" title={error ? "Retry loading Capital" : "Refresh Capital"}
       className="rounded-lg border border-zinc-200 bg-[var(--pease-paper)] p-2.5 text-zinc-500 transition hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"><CapitalIcon name="refresh" className={`h-4 w-4 ${pending ? "animate-spin" : ""}`} /></button>
   </div>;
+
+  if (mode === "radar") return <section aria-label="Capital trading controls" className="border-y border-zinc-200 py-4 dark:border-zinc-800">
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+        <div><span className="text-xs text-zinc-500">Available cash · USD</span><p className="font-semibold tabular-nums">{money(run?.available_cash ?? overview?.capital?.cash_balance)}</p></div>
+        <div><span className="text-xs text-zinc-500">Execution</span><p className="text-xs">{executionStatus}</p></div>
+        <Link href="/opportunity-queue" className="text-xs underline underline-offset-4">{queued.length} queued orders →</Link>
+      </div>{controls}
+    </div>
+    {error ? <p role="alert" className="mt-3 text-xs text-amber-700 dark:text-amber-300">{error}</p> : null}
+  </section>;
 
   return <div className="mx-auto max-w-[1440px] space-y-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
