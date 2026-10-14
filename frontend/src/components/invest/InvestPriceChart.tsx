@@ -35,7 +35,7 @@ export function InvestPriceChart({ ticker }: { ticker: string }) {
   }, [ticker, range, requestKey]);
 
   return (
-    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-5 dark:border-zinc-800 dark:bg-[#151613]">
+    <section className="rounded-sm border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold">Price</h3>
@@ -51,7 +51,7 @@ export function InvestPriceChart({ ticker }: { ticker: string }) {
               onClick={() => setRange(value)}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
                 range === value
-                  ? "bg-emerald-800 text-white"
+                  ? "bg-action text-action-ink"
                   : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
               }`}
             >

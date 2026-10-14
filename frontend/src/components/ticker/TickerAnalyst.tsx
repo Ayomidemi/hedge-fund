@@ -505,7 +505,7 @@ export function TickerAnalyst({
         />
         {error && <ErrorNotice message={error} />}
         {deskLoading && !desk ? (
-          <div className="relative min-h-48 rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="relative min-h-48 rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
             <LoaderCover label="Loading ticker" />
           </div>
         ) : desk ? (
@@ -519,7 +519,7 @@ export function TickerAnalyst({
             }
           />
         ) : (
-          <div className="rounded-xl border border-zinc-200 bg-white p-5 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="rounded-xl border border-rule bg-paper p-5 text-sm text-zinc-500 dark:border-rule dark:bg-paper">
             No desk data yet for {initialTicker}.
           </div>
         )}
@@ -551,7 +551,7 @@ export function TickerAnalyst({
 
 function HistoryHeader({ onNewAnalysis }: { onNewAnalysis: () => void }) {
   return (
-    <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
           Ticker Analyst
@@ -581,7 +581,7 @@ function DeskHeader({
   onNewAnalysis: () => void;
 }) {
   return (
-    <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
           {assetClass || "Ticker Analyst"}
@@ -659,7 +659,7 @@ function TickerDeskView({
         onNewAnalysis={onNewAnalysis}
       />
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap gap-3 text-sm">
           <Link
             href={tickerHubPath(ticker)}
@@ -755,8 +755,8 @@ function TickerDeskView({
         </dl>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+      <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="border-b border-rule px-5 py-4 dark:border-rule">
           <h3 className="text-sm font-semibold">Memos for {ticker}</h3>
         </div>
         <MemoIndex
@@ -818,7 +818,7 @@ function QuickTriageHome({
 
   return (
     <>
-      <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
@@ -898,7 +898,7 @@ function DecisionSnapshotCard({
   const stanceClassName = decisionStanceClassName(snapshot.stance);
 
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
@@ -1039,7 +1039,7 @@ function QuickTriageSection({
   }
 
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
@@ -1511,7 +1511,7 @@ function WorkflowHeader({
   onNewAnalysis: () => void;
 }) {
   return (
-    <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
           Ticker Analyst
@@ -1545,10 +1545,10 @@ function WorkflowStepper({ activeStep }: { activeStep: WorkflowStep }) {
             key={item.key}
             className={`rounded-lg border px-3 py-3 ${
               active
-                ? "border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
+                ? "border-action bg-action text-action-ink"
                 : complete
                   ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
-                  : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950"
+                  : "border-rule bg-paper text-zinc-500 dark:border-rule dark:bg-paper"
             }`}
           >
             <p className="text-xs font-semibold uppercase tracking-wide">
@@ -1572,7 +1572,7 @@ function WorkflowPanel({
   title: string;
 }) {
   return (
-    <section className="space-y-5 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="space-y-5 rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
           {eyebrow}
@@ -1631,7 +1631,7 @@ function MemoIndex({
     <div
       className={
         framed
-          ? "overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+          ? "overflow-hidden rounded-xl border border-rule bg-paper shadow-sm dark:border-rule dark:bg-paper"
           : ""
       }
     >
@@ -1915,7 +1915,7 @@ function AnalysisPanel({
             {formatLabel(analysis.action)}
           </h3>
         </div>
-        <span className="rounded-md bg-zinc-950 px-2.5 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-950">
+        <span className="rounded-md bg-action px-2.5 py-1.5 text-xs font-medium text-action-ink">
           {formatLabel(analysis.classification)}
         </span>
       </div>
@@ -2801,10 +2801,10 @@ function formatFeature(value: string) {
 }
 
 const inputClassName =
-  "mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950 outline-none transition focus:border-zinc-950 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-200";
+  "mt-1 w-full rounded-lg border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none transition placeholder:text-muted focus:border-sky-300 focus:ring-4 focus:ring-sky-100 dark:focus:border-sky-800 dark:focus:ring-sky-950/40";
 
 const buttonClassName =
-  "rounded-md bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-300 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-400";
+  "rounded-lg bg-action px-4 py-2 text-sm font-medium text-action-ink transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50";
 
 const secondaryButtonClassName =
-  "shrink-0 rounded-md border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:disabled:bg-zinc-900 dark:disabled:text-zinc-600";
+  "shrink-0 rounded-lg border border-rule bg-paper px-3 py-2 text-sm font-medium text-ink transition hover:bg-action disabled:cursor-not-allowed disabled:opacity-50";

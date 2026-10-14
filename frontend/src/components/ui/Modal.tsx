@@ -77,18 +77,18 @@ export function Modal({
                 : "max-w-lg"
         }`}
       >
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="shrink-0 border-b border-zinc-200 px-6 py-5 dark:border-zinc-800">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-rule bg-paper text-ink shadow-xl">
+          <div className="shrink-0 border-b border-rule px-6 py-5">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2
                   id={titleId}
-                  className="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50"
+                  className="text-lg font-semibold tracking-tight text-ink"
                 >
                   {title}
                 </h2>
                 {description && (
-                  <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">
+                  <p className="mt-1.5 text-sm leading-relaxed text-muted">
                     {description}
                   </p>
                 )}
@@ -96,7 +96,7 @@ export function Modal({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+                className="rounded-lg p-1.5 text-muted transition hover:bg-hover hover:text-ink"
                 aria-label="Close"
               >
                 <CloseIcon />
@@ -107,7 +107,7 @@ export function Modal({
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
 
           {footer && (
-            <div className="flex shrink-0 items-center justify-end gap-3 border-t border-zinc-200 px-6 py-4 dark:border-zinc-800">
+            <div className="flex shrink-0 items-center justify-end gap-3 border-t border-rule px-6 py-4">
               {footer}
             </div>
           )}

@@ -148,7 +148,7 @@ export function InvestInstrumentDetail({
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-sm text-zinc-500">{instrument.name}</p>
@@ -196,7 +196,7 @@ export function InvestInstrumentDetail({
         </div>
       </section>
 
-      <div className="flex gap-2 overflow-x-auto rounded-sm border border-stone-300/70 bg-[#fffefb] p-2 dark:border-zinc-800 dark:bg-[#151613]">
+      <div className="flex gap-2 overflow-x-auto rounded-sm border border-rule bg-paper p-2 dark:border-rule dark:bg-paper">
         {([
           ["overview", "Overview"],
           ["chart", "Chart"],
@@ -211,7 +211,7 @@ export function InvestInstrumentDetail({
             onClick={() => setTab(value)}
             className={`shrink-0 rounded-sm px-4 py-2 text-sm font-medium ${
               tab === value
-                ? "bg-emerald-800 text-white"
+                ? "bg-action text-action-ink"
                 : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
             }`}
           >
@@ -235,7 +235,7 @@ export function InvestInstrumentDetail({
       {tab === "chart" ? <InvestPriceChart ticker={instrument.ticker} /> : null}
 
       {tab === "news" ? (
-        <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+        <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
           <h3 className="text-lg font-semibold">News</h3>
           {headlines === null ? (
             <p className="mt-3 text-sm text-zinc-500">Loading headlines…</p>
@@ -275,7 +275,7 @@ export function InvestInstrumentDetail({
               <ResearchSectionCard key={section.id} section={section} />
             ))
           ) : (
-            <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-[#151613]">
+            <section className="rounded-sm border border-rule bg-paper p-6 text-sm text-zinc-500 dark:border-rule dark:bg-paper">
               {researchLoading
                 ? "Loading financials…"
                 : "Financials are not available for this name yet."}
@@ -293,7 +293,7 @@ export function InvestInstrumentDetail({
                 <ResearchSectionCard key={section.id} section={section} />
               ))
             ) : peaseView ? null : (
-              <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-[#151613]">
+              <section className="rounded-sm border border-rule bg-paper p-6 text-sm text-zinc-500 dark:border-rule dark:bg-paper">
                 {researchLoading
                   ? "Loading analysis…"
                   : "Live factor scores have not been generated for this instrument yet."}
@@ -301,7 +301,7 @@ export function InvestInstrumentDetail({
             )}
           </div>
           {research?.withheld_capital_signals.length ? (
-            <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+            <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
               <h3 className="text-lg font-semibold">Not shown on Invest</h3>
               <p className="mt-2 text-sm text-zinc-500">
                 Fund-desk fields stay inside Pease Capital. This page is a factor
@@ -325,7 +325,7 @@ export function InvestInstrumentDetail({
       {tab === "order" ? (
         <form
           onSubmit={(event) => void handleOrder(event)}
-          className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]"
+          className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper"
         >
           <h3 className="text-lg font-semibold">Listed-instrument paper order</h3>
           <p className="mt-2 text-sm text-zinc-500">
@@ -343,8 +343,8 @@ export function InvestInstrumentDetail({
                 }}
                 className={`rounded-sm border px-4 py-2 text-sm font-medium ${
                   side === value
-                    ? "border-emerald-800 bg-emerald-800 text-white"
-                    : "border-stone-300/70 bg-[#fffefb] text-zinc-700 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300"
+                    ? "border-action bg-action text-action-ink"
+                    : "border-rule bg-paper text-zinc-700 dark:border-rule dark:bg-paper dark:text-zinc-300"
                 }`}
               >
                 {value === "BUY" ? "Buy" : "Sell"}
@@ -407,7 +407,7 @@ export function InvestInstrumentDetail({
 
 function PeaseViewCard({ view }: { view: InvestPeaseView }) {
   return (
-    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+    <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-wide text-zinc-500">Pease View</p>
@@ -487,7 +487,7 @@ function PeaseViewCard({ view }: { view: InvestPeaseView }) {
 
 function ResearchSectionCard({ section }: { section: InvestResearchSection }) {
   return (
-    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+    <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
       <h3 className="text-lg font-semibold">{section.title}</h3>
       <p className="mt-2 text-sm text-zinc-500">{section.summary}</p>
       {section.metrics.length > 0 ? (
@@ -520,7 +520,7 @@ function ResearchSectionCard({ section }: { section: InvestResearchSection }) {
 
 function FallbackOverview({ instrument }: { instrument: InvestInstrument }) {
   return (
-    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+    <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
       <h3 className="text-lg font-semibold">Instrument profile</h3>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <ProfileDetail label="Asset class" value={instrument.asset_class} />

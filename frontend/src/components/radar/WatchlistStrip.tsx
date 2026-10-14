@@ -57,8 +57,8 @@ export function WatchlistStrip({ items, onChanged }: WatchlistStripProps) {
   }
 
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-rule px-5 py-4 dark:border-rule">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
             Manual list
@@ -104,7 +104,7 @@ export function WatchlistStrip({ items, onChanged }: WatchlistStripProps) {
           {items.map((item) => (
             <article
               key={item.ticker}
-              className="min-w-[180px] rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900/60"
+              className="min-w-[180px] rounded-lg border border-rule bg-zinc-50 p-3 dark:border-rule dark:bg-zinc-900/60"
             >
               <div className="flex items-start justify-between gap-2">
                 <Link

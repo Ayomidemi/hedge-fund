@@ -168,7 +168,7 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
 
   if (!overview) {
     return (
-      <section className="mx-auto max-w-[1200px] rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="mx-auto max-w-[1200px] rounded-xl border border-rule bg-paper p-6 shadow-sm dark:border-rule dark:bg-paper">
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
           Research Lab
         </p>
@@ -196,8 +196,8 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
 
   return (
     <div className="mx-auto max-w-[1560px] space-y-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+      <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-5 py-5 dark:border-rule">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               {summary.portfolio_name}
@@ -209,7 +209,7 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
               Generated {formatDateTime(overview.generated_at)}
             </p>
           </div>
-          <div className="rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
+          <div className="rounded-lg border border-rule px-3 py-2 text-sm text-zinc-600 dark:border-rule dark:text-zinc-300">
             {summary.warning_count} warning{summary.warning_count === 1 ? "" : "s"}
           </div>
         </div>
@@ -247,8 +247,8 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
             onClick={() => setActiveTab(tab.key)}
             className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
               activeTab === tab.key
-                ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
-                : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+                ? "bg-action font-medium text-action-ink"
+                : "border border-rule bg-paper text-zinc-600 dark:border-rule dark:bg-paper dark:text-zinc-400"
             }`}
           >
             {tab.label}
@@ -298,7 +298,7 @@ export function ResearchLab({ initialOverview, unavailable }: ResearchLabProps) 
 
 function Pipeline({ stages }: { stages: ResearchLabOverview["pipeline"] }) {
   return (
-    <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <div className="border-b border-rule px-5 py-4 dark:border-rule">
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
         {stages.map((stage) => (
           <div
@@ -341,7 +341,7 @@ function TrainingRunPanel({
   const failedSteps = result?.steps.filter((step) => step.status === "failed").length ?? 0;
 
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -440,7 +440,7 @@ function TrainingRunPanel({
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                <tr className="border-b border-rule dark:border-rule">
                   <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
                     Step
                   </th>
@@ -726,7 +726,7 @@ function ActionItem({
   item: ResearchActionItem;
 }) {
   const content = (
-    <div className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 transition hover:border-zinc-200 dark:border-zinc-900 dark:bg-zinc-900/50 dark:hover:border-zinc-700">
+    <div className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 transition hover:border-rule dark:border-zinc-900 dark:bg-zinc-900/50 dark:hover:border-zinc-700">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium">{item.label}</p>
@@ -770,7 +770,7 @@ function Panel({
   title: string;
 }) {
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div className="mb-4">
         <h3 className="text-sm font-semibold">{title}</h3>
         {subtitle && <p className="mt-1 text-sm text-zinc-500">{subtitle}</p>}
@@ -793,7 +793,7 @@ function DataTable({
     <div className="overflow-x-auto">
       <table className="w-full min-w-[900px] text-left text-sm">
         <thead>
-          <tr className="border-b border-zinc-200 dark:border-zinc-800">
+          <tr className="border-b border-rule dark:border-rule">
             {headers.map((header) => (
               <th
                 key={header}

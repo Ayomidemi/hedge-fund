@@ -1,48 +1,74 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { ProductSwitcher } from "@/components/shell/ProductSwitcher";
+import { WorkspaceShell, type WorkspaceNavGroup } from "@/components/shell/WorkspaceShell";
 
-const navigationItems = [
-  { label: "Overview", href: "/invest" },
-  { label: "Portfolio", href: "/invest/portfolio" },
-  { label: "Markets", href: "/invest/markets" },
-  { label: "Discover", href: "/invest/discover" },
-  { label: "Watchlist", href: "/invest/watchlist" },
-  { label: "News", href: "/invest/news" },
-  { label: "Cash", href: "/invest/cash" },
-  { label: "Activity", href: "/invest/activity" },
+const navigationGroups: WorkspaceNavGroup[] = [
+  {
+    label: "Workspace",
+    items: [
+      { label: "Overview", href: "/invest", icon: "overview" },
+      { label: "Portfolio", href: "/invest/portfolio", icon: "strategy" },
+      { label: "Cash", href: "/invest/cash", icon: "cash" },
+      { label: "Activity", href: "/invest/activity", icon: "activity" },
+    ],
+  },
+  {
+    label: "Discover",
+    items: [
+      { label: "Markets", href: "/invest/markets", icon: "radar" },
+      { label: "Discover", href: "/invest/discover", icon: "research" },
+      { label: "Watchlist", href: "/invest/watchlist", icon: "watch" },
+      { label: "News", href: "/invest/news", icon: "news" },
+    ],
+  },
 ];
 
-export function InvestShell({ children, canSwitchProducts = false }: {
+function isItemActive(pathname: string, href: string) {
+  if (pathname === "/invest/profile") return false;
+  if (pathname.startsWith("/invest/orders")) return href === "/invest/portfolio";
+  if (
+    pathname.startsWith("/invest/instruments/") ||
+    pathname.startsWith("/invest/fixed-income/") ||
+    pathname === "/invest/search"
+  ) {
+    return href === "/invest/markets";
+  }
+  if (href === "/invest") return pathname === "/invest";
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function titleForPath(pathname: string, activeLabel: string | undefined) {
+  if (pathname === "/invest/profile") return "Account";
+  if (pathname === "/invest/search") return "Search";
+  const instrument = pathname.match(/^\/invest\/instruments\/([^/]+)/i);
+  if (instrument) return decodeURIComponent(instrument[1]).toUpperCase();
+  if (pathname.startsWith("/invest/fixed-income/")) return "Fixed income";
+  if (pathname.startsWith("/invest/orders/")) return "Order";
+  return activeLabel ?? "Invest";
+}
+
+export function InvestShell({
+  children,
+  userOrgName = null,
+  canSwitchProducts = false,
+}: {
   children: React.ReactNode;
+  userOrgName?: string | null;
   canSwitchProducts?: boolean;
 }) {
-  const pathname = usePathname();
-  const activeHref = pathname.startsWith("/invest/orders") ? "/invest/portfolio"
-    : pathname.startsWith("/invest/instruments/") || pathname.startsWith("/invest/fixed-income/") || pathname === "/invest/search" ? "/invest/markets"
-    : navigationItems.find(item => item.href === "/invest" ? pathname === item.href : pathname.startsWith(item.href))?.href;
-
-  return <div className="pease-workspace min-h-screen">
-    <header className="border-b border-[var(--pease-rule)] bg-[var(--pease-paper)]">
-      <div className="mx-auto max-w-[1440px] px-5 sm:px-10">
-        <div className="flex flex-wrap items-center justify-between gap-4 py-6 sm:py-7">
-          <Link href="/invest" className="pease-editorial text-2xl sm:text-3xl">Pease <span className="text-stone-500 dark:text-stone-400">Invest</span></Link>
-          <div className="flex items-center gap-5">
-            <ProductSwitcher active="invest" visible={canSwitchProducts} />
-            <Link href="/invest/profile" aria-current={pathname === "/invest/profile" ? "page" : undefined} className="text-sm underline-offset-4 hover:underline">Your account ↗</Link>
-          </div>
-        </div>
-        <nav aria-label="Invest navigation" className="-mb-px flex gap-6 overflow-x-auto sm:gap-8">
-          {navigationItems.map(item => <Link key={item.href} href={item.href} aria-current={item.href === activeHref ? "page" : undefined}
-            className={`shrink-0 border-b-2 pb-3.5 pt-1 text-sm transition ${item.href === activeHref ? "border-[#526044] font-semibold text-[#39462f] dark:border-stone-300 dark:text-stone-100" : "border-transparent text-stone-500 hover:border-stone-300 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"}`}>{item.label}</Link>)}
-        </nav>
-      </div>
-    </header>
-    <main className="mx-auto max-w-[1440px] px-5 py-8 sm:px-10 sm:py-10">{children}</main>
-    <footer className="mx-auto mt-10 flex max-w-[1440px] flex-wrap justify-between gap-3 border-t border-[var(--pease-rule)] px-5 py-6 text-xs text-stone-500 sm:px-10">
-      <span>Pease Invest</span><span>Paper account · Simulated execution</span>
-    </footer>
-  </div>;
+  return (
+    <WorkspaceShell
+      product="invest"
+      homeHref="/invest"
+      navigationGroups={navigationGroups}
+      accountHref="/invest/profile"
+      accountHint="Your account"
+      userOrgName={userOrgName}
+      canSwitchProducts={canSwitchProducts}
+      isItemActive={isItemActive}
+      titleForPath={titleForPath}
+    >
+      {children}
+    </WorkspaceShell>
+  );
 }

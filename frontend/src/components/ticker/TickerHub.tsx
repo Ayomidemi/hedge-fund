@@ -234,7 +234,7 @@ export function TickerHub({
 
   if (unavailable) {
     return (
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <h2 className="text-xl font-semibold">{ticker}</h2>
         <p className="mt-2 text-sm text-zinc-500">Sign in again or refresh this page.</p>
       </section>
@@ -243,7 +243,7 @@ export function TickerHub({
 
   if (!desk) {
     return (
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <div className="mt-1 flex items-center gap-2">
           <h2 className="text-xl font-semibold">{ticker}</h2>
           <WatchlistButton
@@ -283,8 +283,8 @@ export function TickerHub({
 
   return (
     <div className="mx-auto max-w-[1180px] space-y-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+      <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-5 py-5 dark:border-rule">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               Ticker
@@ -360,7 +360,7 @@ export function TickerHub({
         </div>
 
         {desk.decision_snapshot ? (
-          <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <div className="border-b border-rule px-5 py-4 dark:border-rule">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               Decision
             </p>
@@ -413,7 +413,7 @@ export function TickerHub({
         </div>
       </section>
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold">
@@ -459,7 +459,7 @@ export function TickerHub({
       </section>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+        <section className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">News</h3>
@@ -536,7 +536,7 @@ export function TickerHub({
           )}
         </section>
 
-        <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+        <section className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
           <h3 className="text-sm font-semibold">Tape context</h3>
           <dl className="mt-4 space-y-3 text-sm">
             <Row label="Industry" value={radar?.industry ?? radar?.sector ?? "—"} />
@@ -564,7 +564,7 @@ export function TickerHub({
             />
           </dl>
           {desk.memos.length ? (
-            <div className="mt-5 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+            <div className="mt-5 border-t border-rule pt-4 dark:border-rule">
               <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Memos</p>
               <ul className="mt-2 space-y-2">
                 {desk.memos.slice(0, 3).map((memo) => (
@@ -631,7 +631,7 @@ function FactCard({
   hint: string;
 }) {
   return (
-    <div className="bg-white px-5 py-4 dark:bg-zinc-950">
+    <div className="bg-paper px-5 py-4 dark:bg-paper">
       <p className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-2 text-lg font-semibold capitalize">{value}</p>
       <p className="mt-1 text-xs text-zinc-500">{hint}</p>

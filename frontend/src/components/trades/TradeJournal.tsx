@@ -91,8 +91,8 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
   return (
     <>
       <div className="mx-auto flex max-w-[1560px] flex-col gap-5">
-        <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+        <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-5 py-5 dark:border-rule">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                 {journal.portfolio.name}
@@ -126,8 +126,8 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
         </section>
 
         <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <div className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-rule px-5 py-4 dark:border-rule">
               <div>
                 <h3 className="text-sm font-semibold">Executed trades</h3>
                 <p className="mt-1 text-sm text-zinc-500">
@@ -168,7 +168,7 @@ export function TradeJournal({ journal, isUnavailable }: TradeJournalProps) {
             <div className="overflow-x-auto">
               <table className="w-full min-w-[880px] text-left text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                  <tr className="border-b border-rule dark:border-rule">
                     <Th>Date</Th>
                     <Th>Ticker</Th>
                     <Th>CCY</Th>
@@ -311,14 +311,14 @@ function TradeDetail({
 }) {
   if (!trade) {
     return (
-      <aside className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+      <aside className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
         <p className="text-sm text-zinc-500">Select a trade to inspect it.</p>
       </aside>
     );
   }
 
   return (
-    <aside className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <aside className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">

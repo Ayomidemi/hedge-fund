@@ -27,7 +27,7 @@ export default async function InvestActivityPage() {
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-zinc-500">
@@ -44,7 +44,7 @@ export default async function InvestActivityPage() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="overflow-hidden rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
         {activity.length > 0 ? (
           <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
             {activity.map((item) => (

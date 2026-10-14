@@ -123,13 +123,13 @@ export function LoginForm() {
       title={mode === "sign-in" ? "Sign in" : "Create account"}
       subtitle="Fund operating system"
     >
-      <div className="grid grid-cols-2 gap-2 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
+      <div className="grid grid-cols-2 gap-2 rounded-xl bg-hover p-1">
         <button
           type="button"
           className={`rounded-lg px-3 py-2 text-sm font-medium ${
             mode === "sign-in"
-              ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-800 dark:text-zinc-50"
-              : "text-zinc-600 dark:text-zinc-400"
+              ? "bg-action text-action-ink"
+              : "text-muted"
           }`}
           onClick={() => setMode("sign-in")}
         >
@@ -139,8 +139,8 @@ export function LoginForm() {
           type="button"
           className={`rounded-lg px-3 py-2 text-sm font-medium ${
             mode === "sign-up"
-              ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-800 dark:text-zinc-50"
-              : "text-zinc-600 dark:text-zinc-400"
+              ? "bg-action text-action-ink"
+              : "text-muted"
           }`}
           onClick={() => setMode("sign-up")}
         >

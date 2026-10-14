@@ -39,7 +39,7 @@ export default async function InvestDiscoverPage() {
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
         <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_360px] sm:p-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
@@ -101,7 +101,7 @@ export default async function InvestDiscoverPage() {
             <DiscoverSectionPanel key={section.id} section={section} compact />
           ))}
           {discover.next_actions.length > 0 ? (
-            <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-5 dark:border-zinc-800 dark:bg-[#151613]">
+            <section className="rounded-sm border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                 Next
               </p>
@@ -123,7 +123,7 @@ export default async function InvestDiscoverPage() {
 }
 
 const quickLinkClassName =
-  "rounded-lg border border-stone-300/70 bg-[#fffefb] px-3 py-2 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300 dark:hover:bg-zinc-900";
+  "rounded-lg border border-rule bg-paper px-3 py-2 text-xs font-medium text-ink transition hover:bg-action";
 
 function DiscoverSectionPanel({
   compact = false,
@@ -135,7 +135,7 @@ function DiscoverSectionPanel({
   section: InvestDiscoverSection;
 }) {
   return (
-    <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+    <section className="rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
       <div className="border-b border-zinc-100 p-5 dark:border-zinc-900">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -180,7 +180,7 @@ function DiscoverCard({
 }) {
   const content = (
     <div
-      className={`h-full rounded-sm border border-stone-300/70 bg-[#fffefb] p-4 transition dark:border-zinc-800 dark:bg-[#151613] ${
+      className={`h-full rounded-sm border border-rule bg-paper p-4 transition dark:border-rule dark:bg-paper ${
         item.href ? "hover:bg-zinc-50 dark:hover:bg-zinc-900" : ""
       }`}
     >
@@ -229,7 +229,7 @@ function DiscoverCard({
 
 function SummaryMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-[#fffefb] p-2 dark:bg-[#151613]">
+    <div className="rounded-lg bg-paper p-2 dark:bg-paper">
       <p className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-1 font-semibold tabular-nums">{value}</p>
     </div>

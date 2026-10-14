@@ -12,12 +12,13 @@ import {
 import { CapitalBalanceSummary, capitalMoney } from "@/components/portfolio/CapitalBalanceSummary";
 import { tickerHubPath } from "@/lib/ticker-hub-path";
 import { CapitalIcon } from "@/components/ui/CapitalIcon";
+import { buttonPrimaryClassName } from "@/components/ui/form-styles";
 import { toast } from "@/components/ui/ToastProvider";
 
 const timestamps = new Intl.DateTimeFormat("en-US", {
   month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
 });
-const panel = "rounded-sm border border-zinc-200/80 bg-[var(--pease-paper)] dark:border-zinc-800/80 dark:bg-[var(--pease-paper)]";
+const panel = "rounded-sm border border-rule/80 bg-[var(--pease-paper)] dark:border-rule/80 dark:bg-[var(--pease-paper)]";
 
 const money = capitalMoney;
 const PortfolioDashboard = dynamic(() => import("@/components/portfolio/PortfolioDashboard").then(module => module.PortfolioDashboard));
@@ -123,19 +124,19 @@ export function PaperFundPanel({
     : queued.length ? "Waiting for limit fills" : "Monitoring opportunities";
 
   const controls = <div className="flex flex-wrap items-center gap-2">
-    <div role="group" aria-label="Trading mode" className="inline-flex rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800/70">
+    <div role="group" aria-label="Trading mode" className="inline-flex rounded-lg bg-hover p-1">
       {(["manual", "automatic"] as const).map((value) => <button key={value} type="button"
         aria-pressed={overview?.trading_mode === value} disabled={pending || !overview || overview.trading_mode === value}
         onClick={() => void act(value)}
-        className={`rounded-md px-3.5 py-2 text-xs font-medium capitalize transition focus-visible:outline-2 focus-visible:outline-emerald-600 ${pending || !overview ? "opacity-50" : ""} ${overview?.trading_mode === value ? "bg-[var(--pease-paper)] text-emerald-800 shadow-sm dark:bg-zinc-700 dark:text-emerald-200" : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white"}`}>
+        className={`rounded-md px-3.5 py-2 text-xs font-medium capitalize transition focus-visible:outline-2 focus-visible:outline-sky-300 ${pending || !overview ? "opacity-50" : ""} ${overview?.trading_mode === value ? "bg-action text-action-ink" : "text-muted hover:text-ink"}`}>
         {value === "automatic" ? <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" /> : null}{value}
       </button>)}
     </div>
     <button type="button" disabled={pending} onClick={() => void act("refresh")} aria-label="Refresh Capital" title={error ? "Retry loading Capital" : "Refresh Capital"}
-      className="rounded-lg border border-zinc-200 bg-[var(--pease-paper)] p-2.5 text-zinc-500 transition hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"><CapitalIcon name="refresh" className={`h-4 w-4 ${pending ? "animate-spin" : ""}`} /></button>
+      className="rounded-lg border border-rule bg-[var(--pease-paper)] p-2.5 text-zinc-500 transition hover:bg-zinc-50 disabled:opacity-50 dark:border-rule dark:bg-zinc-900 dark:hover:bg-zinc-800"><CapitalIcon name="refresh" className={`h-4 w-4 ${pending ? "animate-spin" : ""}`} /></button>
   </div>;
 
-  if (mode === "radar") return <section aria-label="Capital trading controls" className="border-y border-zinc-200 py-4 dark:border-zinc-800">
+  if (mode === "radar") return <section aria-label="Capital trading controls" className="border-y border-rule py-4 dark:border-rule">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
         <div><span className="text-xs text-zinc-500">Available cash · USD</span><p className="font-semibold tabular-nums">{money(run?.available_cash ?? overview?.capital?.cash_balance)}</p></div>
@@ -179,7 +180,7 @@ export function PaperFundPanel({
           <div className="px-5 sm:px-7">
             {run ? <EquityChart history={overview.equity_history} startingCash={run.starting_cash} /> : <div className="flex min-h-48 items-center justify-center text-center text-xs text-zinc-500">Enable Automatic to begin performance tracking.</div>}
           </div>
-          {run ? <div className="border-t border-zinc-100 px-5 py-5 dark:border-zinc-800/80 sm:px-7">
+          {run ? <div className="border-t border-zinc-100 px-5 py-5 dark:border-rule/80 sm:px-7">
             <dl className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-4">
               <div><dt className="text-[11px] text-zinc-500">Net profit / loss</dt><dd className={`mt-1.5 text-lg font-medium tabular-nums ${Number(run.total_pnl) < 0 ? "text-red-600 dark:text-red-400" : Number(run.total_pnl) > 0 ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{money(run.total_pnl)}</dd><dd className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">All time · {Number(run.return_pct).toFixed(2)}%</dd></div>
               <Rule label="Realized" value={money(run.realized_pnl)} />
@@ -193,12 +194,12 @@ export function PaperFundPanel({
           <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">Execution</h3><CapitalIcon name="activity" className="h-4 w-4 text-zinc-500 dark:text-zinc-400" /></div>
           <p role="status" className="mt-5 flex items-center gap-2 text-xs font-medium"><span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${automatic && !staleCycle && run?.status === "running" ? "bg-emerald-500" : "bg-amber-500"}`} />{executionStatus}</p>
           <p className="mt-2 text-xs leading-5 text-zinc-500">{automatic ? "Multiple orders can fill in the same check. Each position has its own stop and target; new entries do not wait for it to close." : forcedLiquidation ? "New entries are stopped. Required liquidation of managed positions continues when execution checks pass." : "Automatic entries and ordinary exits are paused."}</p>
-          <dl className="my-6 grid grid-cols-2 gap-4 border-y border-zinc-100 py-4 dark:border-zinc-800">
+          <dl className="my-6 grid grid-cols-2 gap-4 border-y border-zinc-100 py-4 dark:border-rule">
             <div><dt className="text-[11px] text-zinc-500">Queued orders</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{queued.length}</dd></div>
             <div><dt className="text-[11px] text-zinc-500">Auto exit plans</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{positions.length}</dd></div>
           </dl>
           <p className="mb-4 text-xs leading-5 text-zinc-500">{usedSlots} of {positionLimit} position slots used · {heldCount} held, {queued.length} reserved for entries. Cash and risk checks can limit additional trades.</p>
-          <Link href="/opportunity-queue" className="mt-auto flex items-center justify-between rounded-lg bg-zinc-900 px-3.5 py-3 text-xs font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-[var(--pease-paper)]">View opportunity queue<CapitalIcon name="arrow" /></Link>
+          <Link href="/opportunity-queue" className={`${buttonPrimaryClassName} mt-auto justify-between text-xs`}>View opportunity queue<CapitalIcon name="arrow" /></Link>
           <p className="mt-3 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">{run ? `Last check ${when(run.last_cycle_at)}` : "Waiting for execution to start"}</p>
         </section>
       </div>
@@ -215,7 +216,7 @@ export function PaperFundPanel({
     </> : null}
     {mode === "radar" ? <Link href="/opportunity-queue" className="inline-flex items-center gap-3 text-xs font-medium hover:underline">View execution queue<CapitalIcon name="arrow" /></Link> : null}
 
-    {overview ? <div className="divide-y divide-zinc-200/70 border-y border-zinc-200/70 dark:divide-zinc-800 dark:border-zinc-800">
+    {overview ? <div className="divide-y divide-zinc-200/70 border-y border-rule dark:divide-zinc-800 dark:border-rule">
       {mode !== "radar" ? <details className="py-4">
         <summary className="cursor-pointer text-xs font-medium text-zinc-500">Automatic trading rules · <span className="capitalize">{overview.policy.profile ?? "medium"} risk</span></summary>
         <dl className="mt-5 grid grid-cols-2 gap-x-5 gap-y-4 text-sm md:grid-cols-3">
@@ -249,7 +250,7 @@ function EquityChart({ history, startingCash }: { history: PaperFundOverview["eq
   const gradientId = useId();
   const points = history.filter((point) => Number.isFinite(Number(point.equity)) && Number.isFinite(Date.parse(point.recorded_at)));
   if (points.length < 2) return <div className="relative my-5 flex h-44 items-center justify-center overflow-hidden rounded-lg">
-    <div aria-hidden="true" className="absolute inset-0 flex flex-col justify-between py-3">{[0, 1, 2, 3].map(row => <div key={row} className="border-t border-dashed border-zinc-100 dark:border-zinc-800" />)}</div>
+    <div aria-hidden="true" className="absolute inset-0 flex flex-col justify-between py-3">{[0, 1, 2, 3].map(row => <div key={row} className="border-t border-dashed border-zinc-100 dark:border-rule" />)}</div>
     <div className="relative bg-[var(--pease-paper)] px-5 py-3 text-center dark:bg-[var(--pease-paper)]"><CapitalIcon name="activity" className="mx-auto mb-3 h-6 w-6 text-zinc-300 dark:text-zinc-600" /><p className="text-xs font-medium text-zinc-500">Waiting for performance data</p><p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Your first two snapshots will appear here.</p></div>
   </div>;
   const start = Number(startingCash);

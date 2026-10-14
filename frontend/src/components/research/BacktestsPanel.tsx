@@ -285,7 +285,7 @@ export function BacktestsPanel({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[880px] text-left text-sm">
               <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                <tr className="border-b border-rule dark:border-rule">
                   <Th>Run</Th>
                   <Th>When</Th>
                   <Th>Return</Th>
@@ -372,7 +372,7 @@ function RunResult({ run }: { run: DisplayRun }) {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[880px] text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <tr className="border-b border-rule dark:border-rule">
               <Th>As of</Th>
               <Th>Selected</Th>
               <Th>Strategy</Th>
@@ -482,7 +482,7 @@ function EquityCurve({ periods }: { periods: BacktestPeriod[] }) {
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        className="mt-2 h-44 w-full rounded-lg border border-zinc-100 bg-white dark:border-zinc-900 dark:bg-zinc-950"
+        className="mt-2 h-44 w-full rounded-lg border border-zinc-100 bg-paper dark:border-zinc-900 dark:bg-paper"
         role="img"
         aria-label="Equity curve of strategy versus benchmark"
       >

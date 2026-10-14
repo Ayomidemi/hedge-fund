@@ -69,7 +69,7 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
 
   if (unavailable && items.length === 0) {
     return (
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <h2 className="text-xl font-semibold">Watchlist</h2>
         <p className="mt-2 text-sm text-zinc-500">Sign in again or refresh this page.</p>
       </section>
@@ -78,8 +78,8 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
 
   return (
     <div className="mx-auto max-w-[1100px] space-y-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+      <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="border-b border-rule px-5 py-5 dark:border-rule">
           <h2 className="mt-1 text-2xl font-semibold tracking-tight">Watchlist</h2>
           <p className="mt-1 max-w-2xl text-sm text-zinc-500">
             Tickers you want Radar to keep close.
@@ -107,7 +107,7 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
         {sorted.length === 0 ? (
           <p className="p-8 text-center text-sm text-zinc-500">
             The list is empty. Add a ticker, or star one from Market Radar.
@@ -160,7 +160,7 @@ export function WatchlistDesk({ initialItems, unavailable }: WatchlistDeskProps)
                   <button
                     type="button"
                     onClick={() => void handleRemove(item.ticker)}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-zinc-200 text-zinc-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500/30 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-rose-900/70 dark:hover:bg-rose-950/40 dark:hover:text-rose-300"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-rule text-zinc-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500/30 dark:border-rule dark:text-zinc-400 dark:hover:border-rose-900/70 dark:hover:bg-rose-950/40 dark:hover:text-rose-300"
                     aria-label={`Remove ${item.ticker} from watchlist`}
                     title={`Remove ${item.ticker}`}
                   >

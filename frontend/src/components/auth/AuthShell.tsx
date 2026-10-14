@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { theme } from "@/components/ui/theme";
 
 type AuthShellProps = {
   title: string;
@@ -10,10 +11,10 @@ type AuthShellProps = {
 
 export function AuthShell({ title, subtitle, children, footer }: AuthShellProps) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f6f7f4] px-4 dark:bg-zinc-950">
-      <section className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <div className={`flex items-center justify-center px-4 ${theme.page}`}>
+      <section className={`w-full max-w-md p-8 shadow-sm ${theme.card}`}>
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-950 text-sm font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-ink text-sm font-semibold text-paper">
             PC
           </div>
           <div>
@@ -26,7 +27,7 @@ export function AuthShell({ title, subtitle, children, footer }: AuthShellProps)
 
         <div className="mt-6">{children}</div>
 
-        {footer ? <div className="mt-5 border-t border-zinc-200 pt-4 dark:border-zinc-800">{footer}</div> : null}
+        {footer ? <div className="mt-5 border-t border-rule pt-4 dark:border-rule">{footer}</div> : null}
       </section>
     </div>
   );

@@ -176,7 +176,7 @@ export function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#f7f8f5] px-4 py-6 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50 sm:px-6">
+      <div className="min-h-screen bg-paper px-4 py-6 text-zinc-950 dark:bg-paper dark:text-zinc-50 sm:px-6">
         <div className="mx-auto max-w-[720px]">
           <p className="text-sm text-zinc-500">Loading settings...</p>
         </div>
@@ -185,7 +185,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f8f5] px-4 py-6 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50 sm:px-6">
+    <div className="min-h-screen bg-paper px-4 py-6 text-zinc-950 dark:bg-paper dark:text-zinc-50 sm:px-6">
       <div className="mx-auto max-w-[720px]">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -203,8 +203,8 @@ export function SettingsPage() {
           </button>
         </div>
 
-        <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-wrap gap-2 border-b border-zinc-200 p-4 dark:border-zinc-800">
+        <section className="rounded-2xl border border-rule bg-paper shadow-sm dark:border-rule dark:bg-paper">
+          <div className="flex flex-wrap gap-2 border-b border-rule p-4 dark:border-rule">
             {tabs.filter((tab) => tab.key !== "risk" || capitalAccess).map((tab) => (
               <button
                 key={tab.key}
@@ -212,8 +212,8 @@ export function SettingsPage() {
                 onClick={() => setActiveTab(tab.key)}
                 className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
                   activeTab === tab.key
-                    ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
-                    : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+                    ? "bg-action font-medium text-action-ink"
+                    : "border border-rule bg-paper text-zinc-600 dark:border-rule dark:bg-paper dark:text-zinc-400"
                 }`}
               >
                 {tab.label}

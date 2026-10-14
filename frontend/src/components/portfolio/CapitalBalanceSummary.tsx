@@ -22,7 +22,7 @@ export function CapitalBalanceSummary({ capital, run, compact = false }: {
         <dd className={`mt-2 font-medium tracking-[-0.025em] tabular-nums ${compact ? "text-3xl" : "text-[42px] leading-tight sm:text-[56px]"}`}>{capitalMoney(capital.nav)}</dd>
         <dd className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Total cash + holdings · USD</dd>
       </div>
-      <div className={compact ? "" : "lg:border-l lg:border-zinc-100 lg:pl-7 lg:dark:border-zinc-800"}>
+      <div className={compact ? "" : "lg:border-l lg:border-zinc-100 lg:pl-7 lg:dark:border-rule"}>
         <dt className="text-xs font-medium text-zinc-500">Total cash</dt>
         <dd className="mt-2 text-[clamp(1rem,4.8vw,1.5rem)] font-medium tracking-tight tabular-nums">{capitalMoney(capital.cash_balance)}</dd>
         <dd className="mt-3"><dl className="space-y-1.5 text-xs">
@@ -30,7 +30,7 @@ export function CapitalBalanceSummary({ capital, run, compact = false }: {
           <div className="flex flex-wrap justify-between gap-2"><dt className="text-zinc-500">Reserved</dt><dd className="tabular-nums">{capitalMoney(reserved)}</dd></div>
         </dl></dd>
       </div>
-      <div className={compact ? "" : "lg:border-l lg:border-zinc-100 lg:pl-7 lg:dark:border-zinc-800"}>
+      <div className={compact ? "" : "lg:border-l lg:border-zinc-100 lg:pl-7 lg:dark:border-rule"}>
         <dt className="text-xs font-medium text-zinc-500">Holdings value</dt>
         <dd className="mt-2 text-[clamp(1rem,4.8vw,1.5rem)] font-medium tracking-tight tabular-nums">{capitalMoney(capital.invested_value)}</dd>
         <dd className="mt-3 text-xs text-zinc-500">{capital.open_position_count} open position{capital.open_position_count === 1 ? "" : "s"}</dd>

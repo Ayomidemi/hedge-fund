@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { theme } from "@/components/ui/theme";
 
 type ToastType = "success" | "error";
 
@@ -77,15 +78,11 @@ function ToastCard({ type, message }: ToastItem) {
   return (
     <div
       role="status"
-      className={`toast-enter pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-2xl border px-4 py-3.5 shadow-[0_12px_40px_-12px_rgba(24,24,27,0.25)] backdrop-blur-sm ${
-        isSuccess
-          ? "border-emerald-200/70 bg-[#fbfbf8]/95 text-zinc-800 dark:border-emerald-900/50 dark:bg-zinc-950/95 dark:text-zinc-100"
-          : "border-amber-200/80 bg-[#fbfbf8]/95 text-zinc-800 dark:border-amber-900/50 dark:bg-zinc-950/95 dark:text-zinc-100"
-      }`}
+      className={`toast-enter ${theme.toast} ${isSuccess ? theme.toastSuccess : theme.toastError}`}
     >
       <span
         className={`mt-2 h-2 w-2 shrink-0 rounded-full ${
-          isSuccess ? "bg-emerald-500" : "bg-amber-500"
+          isSuccess ? theme.profitMark : theme.lossMark
         }`}
         aria-hidden
       />

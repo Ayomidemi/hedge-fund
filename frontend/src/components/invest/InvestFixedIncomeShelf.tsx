@@ -126,7 +126,7 @@ export function InvestFixedIncomeShelf({
 
       {filtered.length ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="overflow-hidden rounded-sm border border-stone-300/70 dark:border-zinc-800">
+          <div className="overflow-hidden rounded-sm border border-rule dark:border-rule">
             {filtered.map((product) => (
               <button
                 key={product.ticker}
@@ -167,7 +167,7 @@ export function InvestFixedIncomeShelf({
           </div>
 
           {selected ? (
-            <aside className="rounded-sm border border-stone-300/70 p-4 dark:border-zinc-800 lg:sticky lg:top-4">
+            <aside className="rounded-sm border border-rule p-4 dark:border-rule lg:sticky lg:top-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-wide text-zinc-500">
@@ -279,7 +279,7 @@ export function InvestFixedIncomeShelf({
           ) : null}
         </div>
       ) : (
-        <div className="rounded-sm border border-dashed border-zinc-300 p-6 text-sm text-zinc-500 dark:border-zinc-700">
+        <div className="rounded-sm border border-dashed border-zinc-300 p-6 text-sm text-zinc-500 dark:border-rule">
           No fixed-income products match these filters.
         </div>
       )}

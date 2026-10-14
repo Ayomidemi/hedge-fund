@@ -25,8 +25,8 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
   const baseCurrency = home.account.base_currency;
   return <div className="space-y-9">
     <div className="flex flex-wrap items-end justify-between gap-5">
-      <div><p className="mb-2 text-xs text-stone-500 dark:text-stone-400">Paper account · {home.account.account_number}</p><h2 className="text-3xl sm:text-4xl">Your investments.</h2></div>
-      <Link href="/invest/markets" className="inline-flex items-center gap-8 border border-[#4b583d] bg-[#4b583d] px-5 py-3 text-sm text-white transition hover:bg-[#3a462e]">Explore investments <span aria-hidden="true">↗</span></Link>
+      <div><p className="mb-2 text-xs text-muted dark:text-muted">Paper account · {home.account.account_number}</p><h2 className="text-3xl sm:text-4xl">Your investments.</h2></div>
+      <Link href="/invest/markets" className={`${buttonPrimaryClassName} gap-8 px-5 py-3`}>Explore investments <span aria-hidden="true">↗</span></Link>
     </div>
     <InvestAccountSummary home={home} />
     <div className="grid items-start gap-9 xl:grid-cols-[minmax(0,1fr)_300px]">
@@ -35,11 +35,11 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
     </div>
     <div className="grid gap-9 border-t border-[var(--pease-rule)] pt-7 lg:grid-cols-2">
       <Panel title="From the desk" eyebrow="Market notes">
-        <div className="divide-y divide-[var(--pease-rule)]">{home.headlines.map(item => <p key={item} className="py-3 text-sm leading-6 text-stone-600 first:pt-0 dark:text-stone-400">{item}</p>)}{home.headlines.length === 0 ? <p className="text-sm text-stone-500">Market notes will appear when available.</p> : null}</div>
-        <Link href="/invest/news" className="mt-5 inline-block text-sm underline decoration-stone-400 underline-offset-4">Read the news ↗</Link>
+        <div className="divide-y divide-[var(--pease-rule)]">{home.headlines.map(item => <p key={item} className="py-3 text-sm leading-6 text-muted first:pt-0 dark:text-muted">{item}</p>)}{home.headlines.length === 0 ? <p className="text-sm text-muted">Market notes will appear when available.</p> : null}</div>
+        <Link href="/invest/news" className="mt-5 inline-block text-sm underline decoration-rule underline-offset-4">Read the news ↗</Link>
       </Panel>
       <Panel title="Your next move" eyebrow="Quick links">
-        <div className="divide-y divide-[var(--pease-rule)]">{home.quick_actions.map(action => <Link key={action.href} href={action.href} className="group flex items-start justify-between gap-4 py-4 first:pt-0"><div><p className="font-medium group-hover:underline">{action.title}</p><p className="mt-1 text-sm text-stone-500 dark:text-stone-400">{action.detail}</p></div><span className="pt-1 text-stone-500" aria-hidden="true">↗</span></Link>)}</div>
+        <div className="divide-y divide-[var(--pease-rule)]">{home.quick_actions.map(action => <Link key={action.href} href={action.href} className="group flex items-start justify-between gap-4 py-4 first:pt-0"><div><p className="font-medium group-hover:underline">{action.title}</p><p className="mt-1 text-sm text-muted dark:text-muted">{action.detail}</p></div><span className="pt-1 text-muted" aria-hidden="true">↗</span></Link>)}</div>
       </Panel>
     </div>
   </div>;
@@ -56,7 +56,7 @@ function Panel({
 }) {
   return (
     <section className="min-w-0">
-      <p className="text-xs text-stone-500 dark:text-stone-400">
+      <p className="text-xs text-muted dark:text-muted">
         {eyebrow}
       </p>
       <h3 className="pease-editorial mt-1 text-xl">{title}</h3>
@@ -74,7 +74,7 @@ function AllocationList({
 }) {
   if (allocation.length === 0) {
     return (
-      <p className="border-t border-[var(--pease-rule)] py-5 text-sm text-stone-500">
+      <p className="border-t border-[var(--pease-rule)] py-5 text-sm text-muted">
         No allocation data is available yet.
       </p>
     );
@@ -92,9 +92,9 @@ function AllocationList({
                 {money(bucket.value, fallbackCurrency)} - {pct.toFixed(2)}%
               </p>
             </div>
-            <div className="mt-2 h-2 bg-stone-200 dark:bg-zinc-900">
+            <div className="mt-2 h-2 bg-hover dark:bg-zinc-900">
               <div
-                className="h-2 bg-[#647252]"
+                className="h-2 bg-ink"
                 style={{ width: `${pct}%` }}
               />
             </div>
@@ -114,7 +114,7 @@ function HoldingsPanel({
     <section className="min-w-0 overflow-hidden">
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs text-stone-500 dark:text-stone-400">
+          <p className="text-xs text-muted dark:text-muted">
             Positions
           </p>
           <h3 className="pease-editorial mt-1 text-xl">Your holdings</h3>

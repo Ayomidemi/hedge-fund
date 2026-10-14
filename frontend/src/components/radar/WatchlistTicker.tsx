@@ -76,7 +76,7 @@ export function WatchlistTicker({
 
   if (!detail) {
     return (
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <h2 className="text-xl font-semibold">{ticker}</h2>
         <p className="mt-2 text-sm text-zinc-500">
           {unavailable
@@ -112,8 +112,8 @@ export function WatchlistTicker({
 
   return (
     <div className="mx-auto max-w-[1100px] space-y-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+      <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-5 py-5 dark:border-rule">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               Watchlist
@@ -146,7 +146,7 @@ export function WatchlistTicker({
         </div>
         <div className="grid gap-px bg-zinc-200 sm:grid-cols-3 dark:bg-zinc-800">
           {clocks.map((clock) => (
-            <div key={clock.title} className="bg-white px-5 py-4 dark:bg-zinc-950">
+            <div key={clock.title} className="bg-paper px-5 py-4 dark:bg-paper">
               <p className="text-[11px] uppercase tracking-wide text-zinc-500">
                 {clock.title}
               </p>
@@ -157,7 +157,7 @@ export function WatchlistTicker({
         </div>
       </section>
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold">

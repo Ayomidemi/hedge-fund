@@ -1,3 +1,4 @@
+import { LiveDataProvider } from "@/components/providers/LiveDataProvider";
 import { InvestShell } from "@/components/shell/InvestShell";
 import { getServerUserProfile } from "@/lib/supabase/server";
 
@@ -7,7 +8,12 @@ export default async function InvestLayout({
   children: React.ReactNode;
 }>) {
   const user = await getServerUserProfile();
+
   return (
-    <InvestShell canSwitchProducts={user.canSwitchProducts}>{children}</InvestShell>
+    <LiveDataProvider>
+      <InvestShell userOrgName={user.orgName} canSwitchProducts={user.canSwitchProducts}>
+        {children}
+      </InvestShell>
+    </LiveDataProvider>
   );
 }

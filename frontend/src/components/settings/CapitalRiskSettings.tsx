@@ -49,7 +49,7 @@ export function CapitalRiskSettings() {
     {!settings ? <p className="mt-5 text-sm text-zinc-500">{error ? "Settings unavailable." : "Loading risk limits…"}</p> : <>
       <fieldset disabled={pending || loading} className="mt-6 grid gap-3 sm:grid-cols-3">
         <legend className="sr-only">Risk profile</legend>
-        {(["low", "medium", "high"] as const).map((profile) => <label key={profile} className={`cursor-pointer rounded-sm border p-4 ${selected === profile ? "border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/20" : "border-zinc-200 dark:border-zinc-800"}`}>
+        {(["low", "medium", "high"] as const).map((profile) => <label key={profile} className={`cursor-pointer rounded-sm border p-4 ${selected === profile ? "border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/20" : "border-rule dark:border-rule"}`}>
           <span className="flex items-center gap-2"><input type="radio" name="capital-risk" value={profile} checked={selected === profile} onChange={() => setSelected(profile)} className="accent-emerald-700" /><span className="text-sm font-medium capitalize">{profile}</span></span>
           <span className="mt-2 block text-xs leading-5 text-zinc-500">{descriptions[profile]}</span>
         </label>)}
@@ -58,7 +58,7 @@ export function CapitalRiskSettings() {
       <p className="mt-1 text-xs text-zinc-500">Percentages are of account value, except drawdown, which is measured from its peak.</p>
       <dl className="mt-3 divide-y divide-zinc-200 text-sm dark:divide-zinc-800">{rows.map(([key, label, unit]) => <div key={key} className="flex justify-between gap-4 py-2.5"><dt className="text-zinc-500">{label}</dt><dd className="tabular-nums">{settings.options[selected][key]}{unit}</dd></div>)}</dl>
       <p className="mt-4 text-xs leading-5 text-zinc-500">{settings.notice} Daily loss pauses new entries; exits remain active. Drawdown can exceed its trigger during gaps or unavailable execution.</p>
-      <button type="button" disabled={pending || loading || selected === settings.profile} onClick={() => void save()} className="mt-5 rounded-sm bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-950">{pending ? "Saving…" : "Save risk profile"}</button>
+      <button type="button" disabled={pending || loading || selected === settings.profile} onClick={() => void save()} className="mt-5 rounded-lg bg-action px-4 py-2.5 text-sm font-medium text-action-ink disabled:opacity-40">{pending ? "Saving…" : "Save risk profile"}</button>
     </>}
   </section>;
 }

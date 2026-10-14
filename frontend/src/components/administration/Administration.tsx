@@ -123,8 +123,8 @@ export function Administration({
 
   return (
     <div className="mx-auto flex max-w-[1560px] flex-col gap-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+      <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-5 py-5 dark:border-rule">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               {overview.portfolio_name}
@@ -164,8 +164,8 @@ export function Administration({
             onClick={() => setActiveTab(tab.key)}
             className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
               activeTab === tab.key
-                ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
-                : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+                ? "bg-action font-medium text-action-ink"
+                : "border border-rule bg-paper text-zinc-600 dark:border-rule dark:bg-paper dark:text-zinc-400"
             }`}
           >
             {tab.label}
@@ -211,8 +211,8 @@ function LogsPanel({
   const rangeEnd = Math.min(page * pageSize, total);
 
   return (
-    <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-rule px-5 py-4 dark:border-rule">
         <div>
           <h3 className="text-sm font-semibold">System logs</h3>
           <p className="mt-1 text-sm text-zinc-500">
@@ -271,7 +271,7 @@ function LogsPanel({
       </div>
 
       {total > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule px-5 py-4 dark:border-rule">
           <p className="text-sm text-zinc-500">
             Showing {rangeStart}–{rangeEnd} of {total.toLocaleString()}
           </p>
@@ -304,15 +304,15 @@ function LogsPanel({
 
 function ModelsPanel({ models }: { models: AdministrationOverview["model_versions"] }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+      <div className="border-b border-rule px-5 py-4 dark:border-rule">
         <h3 className="text-sm font-semibold">Model registry</h3>
         <p className="mt-1 text-sm text-zinc-500">Registered model versions and approved use.</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[880px] text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <tr className="border-b border-rule dark:border-rule">
               <Th>Model</Th>
               <Th>Version</Th>
               <Th>Pod</Th>
@@ -350,7 +350,7 @@ function DataPanel({ datasets }: { datasets: AdministrationOverview["data_versio
       {datasets.map((dataset) => (
         <div
           key={dataset.key}
-          className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950"
+          className="rounded-xl border border-rule bg-paper p-5 dark:border-rule dark:bg-paper"
         >
           <h3 className="text-sm font-semibold">{dataset.label}</h3>
           <dl className="mt-4 space-y-2 text-sm">
@@ -369,15 +369,15 @@ function DataPanel({ datasets }: { datasets: AdministrationOverview["data_versio
 
 function RulesPanel({ rules }: { rules: AdministrationOverview["portfolio_rules"] }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+      <div className="border-b border-rule px-5 py-4 dark:border-rule">
         <h3 className="text-sm font-semibold">Portfolio rules</h3>
         <p className="mt-1 text-sm text-zinc-500">Risk limits applied to your operating portfolio.</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <tr className="border-b border-rule dark:border-rule">
               <Th>Name</Th>
               <Th>Type</Th>
               <Th>Threshold</Th>
@@ -411,7 +411,7 @@ function RulesPanel({ rules }: { rules: AdministrationOverview["portfolio_rules"
 
 function PoliciesPanel({ policies }: { policies: AdministrationOverview["risk_policies"] }) {
   return (
-    <section className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white dark:divide-zinc-900 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="divide-y divide-zinc-100 rounded-xl border border-rule bg-paper dark:divide-zinc-900 dark:border-rule dark:bg-paper">
       <div className="px-5 py-4">
         <h3 className="text-sm font-semibold">Risk policies</h3>
         <p className="mt-1 text-sm text-zinc-500">Versioned risk policy definitions.</p>

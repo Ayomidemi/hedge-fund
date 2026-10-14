@@ -2,12 +2,36 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #000000;
+  --pease-paper: #ffffff;
+  --pease-ink: #000000;
+  --pease-muted: #71717a;
+  --pease-rule: #e4e4e7;
+  --pease-hover: #f4f4f5;
+  --pease-action: #e0f2fe;
+  --pease-action-ink: #082f49;
+  --pease-action-hover: #bae6fd;
+  --pease-profit: #047857;
+  --pease-loss: #b91c1c;
+  --pease-caution: #b45309;
+  --pease-info: #0369a1;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-paper: var(--pease-paper);
+  --color-ink: var(--pease-ink);
+  --color-muted: var(--pease-muted);
+  --color-rule: var(--pease-rule);
+  --color-hover: var(--pease-hover);
+  --color-action: var(--pease-action);
+  --color-action-ink: var(--pease-action-ink);
+  --color-action-hover: var(--pease-action-hover);
+  --color-profit: var(--pease-profit);
+  --color-loss: var(--pease-loss);
+  --color-caution: var(--pease-caution);
+  --color-info: var(--pease-info);
   --font-sans: var(--font-source-sans);
   --font-serif: var(--font-baskerville);
   --font-mono: "Courier New", monospace;
@@ -15,8 +39,24 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #000000;
+    --foreground: #ffffff;
+    --pease-paper: #000000;
+    --pease-ink: #ffffff;
+    --pease-muted: #a1a1aa;
+    --pease-rule: #27272a;
+    --pease-hover: #18181b;
+    --pease-action: #e0f2fe;
+    --pease-action-ink: #082f49;
+    --pease-action-hover: #bae6fd;
+    --pease-profit: #34d399;
+    --pease-loss: #f87171;
+    --pease-caution: #fbbf24;
+    --pease-info: #7dd3fc;
+  }
+
+  body {
+    color-scheme: dark;
   }
 }
 
@@ -24,6 +64,7 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-source-sans), "Segoe UI", sans-serif;
+  color-scheme: light;
 }
 
 button,
@@ -86,23 +127,12 @@ textarea {
 }
 
 .pease-workspace {
-  --pease-paper: #fffefb;
-  --pease-ink: #252820;
-  --pease-rule: #deddd5;
-  background: #f5f4ee;
+  background: var(--pease-paper);
   color: var(--pease-ink);
 }
 
 .pease-workspace :focus-visible {
-  outline: 2px solid #596549;
+  outline: 2px solid #7dd3fc;
   outline-offset: 3px;
-}
-@media (prefers-color-scheme: dark) {
-  .pease-workspace {
-    --pease-paper: #151613;
-    --pease-ink: #eeede5;
-    --pease-rule: #35372f;
-    background: #10110f;
-  }
 }
 

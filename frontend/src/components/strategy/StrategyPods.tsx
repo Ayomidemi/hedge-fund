@@ -178,8 +178,8 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+      <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-5 py-5 dark:border-rule">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               Investment book
@@ -210,7 +210,7 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
         </div>
 
         {overview.warnings.length > 0 && (
-          <div className="border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <div className="border-t border-rule px-5 py-4 dark:border-rule">
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
               {overview.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
@@ -221,8 +221,8 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
       </section>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(280px,340px)_1fr]">
-        <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+          <div className="border-b border-rule px-4 py-3 dark:border-rule">
             <h3 className="text-sm font-semibold">Books</h3>
           </div>
           <div className="divide-y divide-zinc-100 dark:divide-zinc-900">
@@ -251,8 +251,8 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
         </section>
 
         {selectedPod ? (
-          <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+            <div className="border-b border-rule px-5 py-4 dark:border-rule">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -299,7 +299,7 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
                 <MiniStat label="Confidence" value={scoreText(selectedPod.model_confidence)} />
               </div>
 
-              <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50/80 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+              <div className="mt-4 rounded-lg border border-rule bg-zinc-50/80 px-4 py-3 dark:border-rule dark:bg-zinc-900/40">
                 <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                   Recommendation
                 </p>
@@ -346,12 +346,12 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
               )}
 
               {showControls && (
-                <div className="mt-5 border-t border-zinc-200 pt-5 dark:border-zinc-800">
+                <div className="mt-5 border-t border-rule pt-5 dark:border-rule">
                   <ControlsForm pod={selectedPod} saving={saving} onSave={handleSave} />
                 </div>
               )}
 
-              <div className="mt-5 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+              <div className="mt-5 border-t border-rule pt-4 dark:border-rule">
                 <button
                   type="button"
                   onClick={() => setShowHistory((current) => !current)}
@@ -366,7 +366,7 @@ export function StrategyPods({ initialOverview, unavailable }: StrategyPodsProps
             </div>
           </section>
         ) : (
-          <section className="flex items-center justify-center rounded-xl border border-dashed border-zinc-300 px-5 py-16 text-sm text-zinc-500 dark:border-zinc-700">
+          <section className="flex items-center justify-center rounded-xl border border-dashed border-zinc-300 px-5 py-16 text-sm text-zinc-500 dark:border-rule">
             Select a pod to inspect signals and controls.
           </section>
         )}
@@ -512,7 +512,7 @@ function SnapshotHistory({
     <div className="mt-3 overflow-x-auto">
       <table className="w-full min-w-[520px] text-left text-sm">
         <thead>
-          <tr className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
+          <tr className="border-b border-rule text-xs uppercase tracking-wide text-zinc-500 dark:border-rule">
             <th className="py-2 pr-3 font-medium">Date</th>
             <th className="py-2 pr-3 font-medium">Alloc</th>
             <th className="py-2 pr-3 font-medium">Signal</th>
@@ -547,7 +547,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+    <div className="rounded-lg border border-rule px-3 py-2 dark:border-rule">
       <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">{label}</p>
       <p className="mt-1 text-sm font-semibold tabular-nums">{value}</p>
     </div>

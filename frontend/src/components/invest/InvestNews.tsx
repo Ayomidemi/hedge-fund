@@ -245,7 +245,7 @@ export function InvestNews({
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-5 dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper p-5 dark:border-rule dark:bg-paper">
         <p className="max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
           {overview.summary}
         </p>
@@ -496,7 +496,7 @@ function ChipRow({
         <Link
           key={`${kind}-${symbol}`}
           href={instrumentHref(symbol)}
-          className="inline-flex items-center rounded-md border border-stone-300/70 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          className="inline-flex items-center rounded-md border border-rule bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-rule dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
         >
           {symbol}
         </Link>
@@ -529,8 +529,8 @@ function NewsSection({
   actions?: ReactNode;
 }) {
   return (
-    <section className="overflow-hidden rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
-      <div className="border-b border-stone-300/70 px-5 py-4 dark:border-zinc-800">
+    <section className="overflow-hidden rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
+      <div className="border-b border-rule px-5 py-4 dark:border-rule">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 className="text-lg font-semibold">{title}</h3>
@@ -597,7 +597,7 @@ function NewsRow({
           className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg border text-base transition ${
             item.starred
               ? "border-amber-300 bg-amber-50 text-amber-600 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300"
-              : "border-stone-300/70 text-zinc-400 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+              : "border-rule text-zinc-400 hover:bg-zinc-50 dark:border-rule dark:hover:bg-zinc-900"
           }`}
         >
           {item.starred ? "★" : "☆"}
@@ -620,7 +620,7 @@ function NewsRow({
           <Link
             key={symbol}
             href={instrumentHref(symbol)}
-            className="rounded-md border border-stone-300/70 px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="rounded-md border border-rule px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-rule dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             {symbol}
           </Link>
@@ -641,7 +641,7 @@ function Pagination({
 }) {
   if (page.total <= page.page_size) return null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-300/70 px-5 py-3 text-xs dark:border-zinc-800">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule px-5 py-3 text-xs dark:border-rule">
       <span className="text-zinc-500">{paginationLabel(page)}</span>
       <div className="flex gap-2">
         <button
@@ -716,11 +716,11 @@ function ArticleModal({
       }
     >
       {url ? (
-        <div className="flex h-[72dvh] min-h-[520px] flex-col overflow-hidden rounded-lg border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+        <div className="flex h-[72dvh] min-h-[520px] flex-col overflow-hidden rounded-lg border border-rule bg-paper dark:border-rule dark:bg-paper">
           <iframe
             src={url}
             title={item?.title ?? "Article"}
-            className="h-full w-full flex-1 bg-[#fffefb]"
+            className="h-full w-full flex-1 bg-paper"
             referrerPolicy="no-referrer-when-downgrade"
             sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
           />

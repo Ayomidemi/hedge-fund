@@ -39,7 +39,7 @@ export function CashLedgerTypeBadge({ type }: { type: string }) {
   const label = entryTypeLabels[type] ?? formatLabel(type);
 
   return (
-    <span className="inline-flex rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+    <span className="inline-flex rounded-md border border-rule bg-paper px-2 py-0.5 text-xs font-medium text-zinc-700 dark:border-rule dark:bg-paper dark:text-zinc-300">
       {label}
     </span>
   );

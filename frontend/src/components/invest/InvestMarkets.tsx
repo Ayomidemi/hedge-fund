@@ -23,7 +23,7 @@ export function InvestMarketsBoard({
 
   return (
     <div className="w-full space-y-8">
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
         <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_360px] sm:p-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
@@ -57,7 +57,7 @@ export function InvestMarketsBoard({
               />
             </div>
           </div>
-          <div className="rounded-sm border border-stone-300/70 p-4 dark:border-zinc-800">
+          <div className="rounded-sm border border-rule p-4 dark:border-rule">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Search
             </p>
@@ -89,7 +89,7 @@ export function InvestMarketsBoard({
       </section>
 
       <div className="space-y-8">
-        <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+        <section className="rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
           <div className="border-b border-zinc-100 p-5 dark:border-zinc-900 sm:p-6">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
@@ -140,7 +140,7 @@ function ListedTapePanel({
   boards: InvestMarkets["boards"];
 }) {
   return (
-    <aside className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+    <aside className="rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
       <div className="border-b border-zinc-100 p-5 dark:border-zinc-900">
         <div className="flex items-end justify-between gap-3">
           <div>

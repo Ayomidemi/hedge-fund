@@ -242,7 +242,7 @@ export function NewsCentre({
 
   if (!overview) {
     return (
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <h2 className="text-xl font-semibold">News Centre</h2>
         <p className="mt-2 text-sm text-zinc-500">
           {unavailable ? "Sign in again or refresh this page." : "No news has been stored yet."}
@@ -258,8 +258,8 @@ export function NewsCentre({
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-5">
-      <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-5 dark:border-zinc-800">
+      <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-5 py-5 dark:border-rule">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               News
@@ -424,8 +424,8 @@ function NewsPanel({
   savingStars: Set<string>;
 }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+      <div className="flex items-center justify-between gap-3 border-b border-rule px-5 py-4 dark:border-rule">
         <h3 className="text-sm font-semibold">{title}</h3>
         <p className="text-xs text-zinc-500">{subtitle}</p>
       </div>
@@ -462,7 +462,7 @@ function NewsPaginationControls({
 }) {
   if (page.total <= page.page_size) return null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 px-5 py-3 text-xs dark:border-zinc-800">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule px-5 py-3 text-xs dark:border-rule">
       <span className="text-zinc-500">{paginationLabel(page)}</span>
       <div className="flex gap-2">
         <button
@@ -543,7 +543,7 @@ function NewsRow({
           className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg border text-base transition ${
             item.starred
               ? "border-amber-300 bg-amber-50 text-amber-600 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300"
-              : "border-zinc-200 text-zinc-400 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-800 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+              : "border-rule text-zinc-400 hover:bg-zinc-50 hover:text-zinc-700 dark:border-rule dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
           }`}
         >
           {item.starred ? "★" : "☆"}
@@ -563,7 +563,7 @@ function NewsRow({
             key={symbol}
             type="button"
             onClick={() => onSelectTicker(symbol)}
-            className="rounded-md border border-zinc-200 px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="rounded-md border border-rule px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-rule dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             {symbol}
           </button>
@@ -632,11 +632,11 @@ function NewsArticleModal({
       }
     >
       {url ? (
-        <div className="flex h-[72dvh] min-h-[520px] flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="flex h-[72dvh] min-h-[520px] flex-col overflow-hidden rounded-lg border border-rule bg-paper dark:border-rule dark:bg-paper">
           <iframe
             src={url}
             title={item?.title ?? "News article"}
-            className="h-full w-full flex-1 bg-white"
+            className="h-full w-full flex-1 bg-paper"
             referrerPolicy="no-referrer-when-downgrade"
             sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
           />

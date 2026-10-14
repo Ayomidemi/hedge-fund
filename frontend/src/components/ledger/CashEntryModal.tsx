@@ -138,8 +138,8 @@ export function CashEntryModal({ open, onClose }: CashEntryModalProps) {
                   onClick={() => setEntryType(type.value)}
                   className={`rounded-lg border px-3 py-3 text-left transition ${
                     selected
-                      ? "border-zinc-950 bg-zinc-950 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950"
-                      : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:border-zinc-500"
+                      ? "border-action bg-action text-action-ink"
+                      : "border-rule bg-paper text-zinc-700 hover:border-zinc-400 dark:border-rule dark:bg-paper dark:text-zinc-300 dark:hover:border-zinc-500"
                   }`}
                 >
                   <span className="block text-sm font-medium">{type.label}</span>
@@ -217,7 +217,7 @@ export function CashEntryModal({ open, onClose }: CashEntryModalProps) {
         </label>
 
         {error && (
-          <p className="rounded-lg border border-red-200 bg-white px-3.5 py-2.5 text-sm text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-400">
+          <p className="rounded-lg border border-red-200 bg-paper px-3.5 py-2.5 text-sm text-red-700 dark:border-red-900 dark:bg-paper dark:text-red-400">
             {error}
           </p>
         )}

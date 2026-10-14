@@ -33,10 +33,10 @@ export default async function InvestPortfolioPage({
 
   return (
     <div className="w-full space-y-8">
-      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs text-stone-500">Your account</p><h2 className="text-3xl sm:text-4xl">Portfolio.</h2></div><Link href="/invest/markets" className="text-sm underline underline-offset-4">Explore investments ↗</Link></div>
+      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs text-muted">Your account</p><h2 className="text-3xl sm:text-4xl">Portfolio.</h2></div><Link href="/invest/markets" className="text-sm underline underline-offset-4">Explore investments ↗</Link></div>
       <InvestAccountSummary home={home} />
 
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <h2 className="text-lg font-semibold">Allocation</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {home.allocation.map((bucket) => (
@@ -55,7 +55,7 @@ export default async function InvestPortfolioPage({
         </div>
       </section>
 
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper dark:border-rule dark:bg-paper">
         <h2 className="px-4 pt-5 text-lg font-semibold">Holdings &amp; orders</h2>
         {rows.length === 0 ? (
           <p className="p-6 pt-3 text-sm text-zinc-500">

@@ -71,7 +71,7 @@ export function TickerListSelector({
           Add
         </button>
       </div>
-      <div className="min-h-10 rounded-lg border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="min-h-10 rounded-lg border border-rule bg-paper p-2 dark:border-rule dark:bg-paper">
         {tickers.length === 0 ? (
           <p className="px-1 py-1 text-sm text-zinc-500">No tickers selected.</p>
         ) : (
@@ -79,7 +79,7 @@ export function TickerListSelector({
             {tickers.map((ticker) => (
               <span
                 key={ticker}
-                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
+                className="inline-flex items-center gap-1.5 rounded-md border border-rule bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-700 dark:border-rule dark:bg-zinc-900 dark:text-zinc-200"
               >
                 {ticker}
                 <button

@@ -29,7 +29,7 @@ export default async function InvestOrderDetailPage({
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <p className="text-sm text-zinc-500">{order.name}</p>
         <h2 className="mt-1 text-2xl font-semibold">
           {order.side} {order.ticker}
@@ -69,14 +69,14 @@ export default async function InvestOrderDetailPage({
         <div className="mt-5 flex flex-wrap gap-2">
           <Link
             href="/invest/portfolio"
-            className="inline-flex items-center justify-center rounded-sm border border-stone-300/70 bg-[#fffefb] px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="inline-flex items-center justify-center rounded-sm border border-rule bg-paper px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-rule dark:bg-paper dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             Back to portfolio
           </Link>
           <InvestOrderActions orderId={order.id} status={order.status} />
           <Link
             href={hrefForOrder(order)}
-            className="inline-flex items-center justify-center rounded-sm border border-stone-300/70 bg-[#fffefb] px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-[#151613] dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="inline-flex items-center justify-center rounded-sm border border-rule bg-paper px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-rule dark:bg-paper dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             Open asset
           </Link>

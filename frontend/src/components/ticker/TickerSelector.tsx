@@ -369,7 +369,7 @@ export function TickerSelector({
           ) : null}
           {showDropdown ? (
             <div
-              className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-xl dark:border-zinc-800 dark:bg-zinc-950"
+              className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-lg border border-rule bg-paper py-1 text-sm shadow-xl dark:border-rule dark:bg-paper"
               id={listboxId}
               role="listbox"
             >

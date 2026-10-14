@@ -91,7 +91,7 @@ export function InvestFixedIncomeDetail({
 
   return (
     <div className="w-full space-y-4">
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-sm text-zinc-500">{product.issuer}</p>
@@ -136,7 +136,7 @@ export function InvestFixedIncomeDetail({
       </section>
 
       <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
-        <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+        <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
           <h3 className="text-lg font-semibold">Projected cashflows</h3>
           <p className="mt-2 text-sm text-zinc-500">
             Amounts are shown per 100 face value using the current quote assumptions.
@@ -163,7 +163,7 @@ export function InvestFixedIncomeDetail({
 
         <form
           onSubmit={(event) => void handleBuy(event)}
-          className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]"
+          className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper"
         >
           <h3 className="text-lg font-semibold">Paper fixed-income order</h3>
           <p className="mt-2 text-sm text-zinc-500">
@@ -246,7 +246,7 @@ export function InvestFixedIncomeDetail({
         </form>
       </div>
 
-      <section className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 dark:border-zinc-800 dark:bg-[#151613]">
+      <section className="rounded-sm border border-rule bg-paper p-6 dark:border-rule dark:bg-paper">
         <h3 className="text-lg font-semibold">Payout and risks</h3>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
           {product.expected_payout}

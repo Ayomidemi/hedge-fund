@@ -21,7 +21,7 @@ export default async function InvestInstrumentPage({
 
   if (!instrument) {
     return (
-      <div className="rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-[#151613]">
+      <div className="rounded-sm border border-rule bg-paper p-6 text-sm text-zinc-500 dark:border-rule dark:bg-paper">
         {ticker.toUpperCase()} could not be loaded.
       </div>
     );

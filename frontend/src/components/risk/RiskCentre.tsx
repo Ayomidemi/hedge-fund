@@ -135,7 +135,7 @@ export function RiskCentre({ initialOverview, unavailable }: RiskCentreProps) {
 
   if (!overview) {
     return (
-      <section className="mx-auto max-w-[1200px] rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="mx-auto max-w-[1200px] rounded-xl border border-rule bg-paper p-6 shadow-sm dark:border-rule dark:bg-paper">
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
           Risk Centre
         </p>
@@ -159,7 +159,7 @@ export function RiskCentre({ initialOverview, unavailable }: RiskCentreProps) {
 
   return (
     <div className="mx-auto max-w-[1560px] space-y-5">
-      <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -216,8 +216,8 @@ export function RiskCentre({ initialOverview, unavailable }: RiskCentreProps) {
             onClick={() => setActiveTab(tab.key)}
             className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
               activeTab === tab.key
-                ? "bg-zinc-950 font-medium text-white dark:bg-zinc-100 dark:text-zinc-950"
-                : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+                ? "bg-action font-medium text-action-ink"
+                : "border border-rule bg-paper text-zinc-600 dark:border-rule dark:bg-paper dark:text-zinc-400"
             }`}
           >
             {tab.label}
@@ -333,7 +333,7 @@ function LimitsPanel({
       <Panel title="Policy" subtitle="Current phase-one hierarchy">
         <div className="space-y-3">
           {policy.map((limit) => (
-            <div key={limit.key} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+            <div key={limit.key} className="rounded-lg border border-rule p-3 dark:border-rule">
               <div className="flex items-start justify-between gap-3">
                 <p className="text-sm font-medium">{limit.label}</p>
                 <span className="text-xs text-zinc-500">{formatLabel(limit.severity)}</span>
@@ -545,7 +545,7 @@ function PreTradePanel({
 function SelectedInstrumentSummary({ prefill }: { prefill: TickerPrefill | null }) {
   if (!prefill) {
     return (
-      <p className="rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-500 dark:border-zinc-800">
+      <p className="rounded-lg border border-rule px-3 py-2 text-sm text-zinc-500 dark:border-rule">
         Select a ticker to load instrument details.
       </p>
     );
@@ -553,7 +553,7 @@ function SelectedInstrumentSummary({ prefill }: { prefill: TickerPrefill | null 
 
   const instrument = prefill.instrument;
   return (
-    <div className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
+    <div className="rounded-lg border border-rule px-3 py-2 text-sm dark:border-rule">
       <p className="font-medium">
         {instrument.ticker} · {instrument.currency}
       </p>
@@ -604,8 +604,8 @@ function Panel({
   title: string;
 }) {
   return (
-    <section className={`overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950 ${className}`}>
-      <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className={`overflow-hidden rounded-xl border border-rule bg-paper shadow-sm dark:border-rule dark:bg-paper ${className}`}>
+      <div className="border-b border-rule px-5 py-4 dark:border-rule">
         <h3 className="text-sm font-semibold">{title}</h3>
         <p className="mt-0.5 text-sm text-zinc-500">{subtitle}</p>
       </div>
@@ -624,7 +624,7 @@ function Metric({
   value: string;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-200 px-3.5 py-3 dark:border-zinc-800">
+    <div className="rounded-lg border border-rule px-3.5 py-3 dark:border-rule">
       <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </p>
@@ -670,7 +670,7 @@ function DataTable({
     <div className="overflow-x-auto">
       <table className="w-full min-w-[680px] text-left text-sm">
         <thead>
-          <tr className="border-b border-zinc-200 dark:border-zinc-800">
+          <tr className="border-b border-rule dark:border-rule">
             {headers.map((header) => (
               <th
                 key={header}
@@ -750,10 +750,10 @@ function formatLabel(value: string) {
 }
 
 const inputClass =
-  "w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-zinc-500 dark:border-zinc-800 dark:bg-zinc-950";
+  "w-full rounded-lg border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100 dark:focus:border-sky-800 dark:focus:ring-sky-950/40";
 
 const primaryButtonClass =
-  "rounded-md bg-zinc-950 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950";
+  "rounded-lg bg-action px-3 py-2 text-sm font-medium text-action-ink disabled:cursor-not-allowed disabled:opacity-60";
 
 const secondaryButtonClass =
-  "rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300";
+  "rounded-lg border border-rule bg-paper px-3 py-2 text-sm font-medium text-ink transition hover:bg-action disabled:cursor-not-allowed disabled:opacity-60";

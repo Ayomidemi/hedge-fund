@@ -68,7 +68,7 @@ const quarterOptions = [
   { label: "Q4", value: "4" },
 ];
 const whiteButtonClassName =
-  "inline-flex h-10 items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-200 dark:bg-white dark:text-zinc-800 dark:hover:bg-zinc-50";
+  "inline-flex h-10 items-center justify-center rounded-lg border border-rule bg-paper px-4 text-sm font-medium text-ink transition hover:bg-action disabled:cursor-not-allowed disabled:opacity-50";
 
 export function ReportsCenter({
   initialReport,
@@ -376,7 +376,7 @@ export function ReportsCenter({
 
   if (!report) {
     return (
-      <section className="mx-auto max-w-[1200px] rounded-lg border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="mx-auto max-w-[1200px] rounded-lg border border-rule bg-paper p-6 shadow-sm dark:border-rule dark:bg-paper">
         <datalist id="report-month-options">
           {monthOptions.map((option) => (
             <option key={option.value} value={option.value}>
@@ -397,7 +397,7 @@ export function ReportsCenter({
           <select
             value={selectedKind}
             onChange={(event) => handleKindChange(event.target.value as ReportKind)}
-            className={`${inputControlClassName} h-10 w-[134px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+            className={`${inputControlClassName} h-10 w-[134px]`}
             aria-label="Report type"
           >
             {reportKindOptions.map((option) => (
@@ -440,8 +440,8 @@ export function ReportsCenter({
           </option>
         ))}
       </datalist>
-      <section className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex flex-col gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800 xl:flex-row xl:items-start xl:justify-between">
+      <section className="rounded-lg border border-rule bg-paper dark:border-rule dark:bg-paper">
+        <div className="flex flex-col gap-4 border-b border-rule px-5 py-4 dark:border-rule xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
               {report.portfolio_name}
@@ -459,7 +459,7 @@ export function ReportsCenter({
             <select
               value={selectedKind}
               onChange={(event) => handleKindChange(event.target.value as ReportKind)}
-              className={`${inputControlClassName} h-9 w-[128px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+              className={`${inputControlClassName} h-9 w-[128px]`}
               aria-label="Report type"
             >
               {reportKindOptions.map((option) => (
@@ -515,12 +515,12 @@ export function ReportsCenter({
           ))}
         </div>
         {error ? (
-          <p className="border-t border-zinc-200 px-5 py-3 text-sm text-amber-700 dark:border-zinc-800 dark:text-amber-300">
+          <p className="border-t border-rule px-5 py-3 text-sm text-amber-700 dark:border-rule dark:text-amber-300">
             {error}
           </p>
         ) : null}
         {controlsDirty ? (
-          <p className="border-t border-zinc-200 px-5 py-3 text-sm text-zinc-500 dark:border-zinc-800">
+          <p className="border-t border-rule px-5 py-3 text-sm text-zinc-500 dark:border-rule">
             Period controls changed. Generate to update the report; Save keeps
             the report currently on screen.
           </p>
@@ -578,7 +578,7 @@ function ReportTabs({
   onChange: (view: ReportCenterView) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-1 border-b border-zinc-200 dark:border-zinc-800">
+    <div className="flex flex-wrap gap-1 border-b border-rule dark:border-rule">
       {reportViewOptions.map((option) => {
         const isActive = option.value === activeView;
         return (
@@ -821,7 +821,7 @@ function PeriodControls({
         type="date"
         value={selectedAsOf}
         onChange={(event) => setSelectedAsOf(event.target.value)}
-        className={`${inputControlClassName} h-9 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+        className={`${inputControlClassName} h-9 w-[150px]`}
         aria-label="Report day"
       />
     );
@@ -833,7 +833,7 @@ function PeriodControls({
         type="date"
         value={selectedAsOf}
         onChange={(event) => setSelectedAsOf(event.target.value)}
-        className={`${inputControlClassName} h-9 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+        className={`${inputControlClassName} h-9 w-[150px]`}
         aria-label="Report week"
       />
     );
@@ -845,7 +845,7 @@ function PeriodControls({
         type="month"
         value={selectedMonth}
         onChange={(event) => setSelectedMonth(event.target.value)}
-        className={`${inputControlClassName} h-9 w-[150px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+        className={`${inputControlClassName} h-9 w-[150px]`}
         aria-label="Report month"
         list="report-month-options"
       />
@@ -858,7 +858,7 @@ function PeriodControls({
         <select
           value={selectedQuarter}
           onChange={(event) => setSelectedQuarter(event.target.value)}
-          className={`${inputControlClassName} h-9 w-[82px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+          className={`${inputControlClassName} h-9 w-[82px]`}
           aria-label="Report quarter"
         >
           {quarterOptions.map((option) => (
@@ -888,7 +888,7 @@ function YearSelect({
     <select
       value={selectedYear}
       onChange={(event) => setSelectedYear(event.target.value)}
-      className={`${inputControlClassName} h-9 w-[108px] dark:border-zinc-200 dark:bg-white dark:text-zinc-800`}
+      className={`${inputControlClassName} h-9 w-[108px]`}
       aria-label="Report year"
     >
       {yearOptions.map((option) => (
@@ -930,8 +930,8 @@ function ArchivePanel({
               key={snapshot.id}
               className={`rounded-lg border px-3 py-2 transition ${
                 isActive
-                  ? "border-zinc-950 bg-zinc-950 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
-                  : "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                  ? "border-action bg-action text-action-ink"
+                  : "border-rule hover:bg-zinc-50 dark:border-rule dark:hover:bg-zinc-900"
               }`}
             >
               <div className="flex items-start justify-between gap-3">
@@ -967,7 +967,7 @@ function ArchivePanel({
                     disabled={busy}
                     className={`rounded-md px-2 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                       isActive
-                        ? "text-zinc-200 hover:bg-white/10 dark:text-zinc-700"
+                        ? "text-zinc-200 hover:bg-paper/10 dark:text-zinc-700"
                         : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                     }`}
                   >
@@ -979,8 +979,8 @@ function ArchivePanel({
                     disabled={busy}
                     className={`rounded-md px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                       isActive
-                        ? "bg-white text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50"
-                        : "bg-zinc-950 text-white hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                        ? "bg-paper text-zinc-950 dark:bg-paper dark:text-zinc-50"
+                        : "bg-action text-action-ink hover:bg-action-hover"
                     }`}
                   >
                     Open
@@ -1045,7 +1045,7 @@ function SnapshotModal({
               type="button"
               onClick={() => onDelete(snapshot)}
               disabled={busy}
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-white px-4 text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-zinc-950 dark:text-rose-300 dark:hover:bg-rose-950/40"
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-rose-200 bg-paper px-4 text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:bg-paper dark:text-rose-300 dark:hover:bg-rose-950/40"
             >
               Delete
             </button>
@@ -1062,7 +1062,7 @@ function SnapshotModal({
               type="button"
               onClick={() => onOpen(snapshot)}
               disabled={busy || !report}
-              className="inline-flex h-10 items-center justify-center rounded-lg bg-zinc-950 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+              className="inline-flex h-10 items-center justify-center rounded-lg bg-action px-4 text-sm font-medium text-action-ink transition hover:bg-action-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               Open Report
             </button>
@@ -1104,7 +1104,7 @@ function SnapshotModal({
           </div>
 
           {report ? (
-            <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+            <div className="rounded-lg border border-rule p-4 dark:border-rule">
               <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                 Preview
               </p>
@@ -1152,7 +1152,7 @@ function CompactSectionPreview({ section }: { section: ReportCompactSection }) {
 
 function CompactSectionCard({ section }: { section: ReportCompactSection }) {
   return (
-    <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-lg border border-rule bg-paper p-4 dark:border-rule dark:bg-paper">
       <h3 className="text-sm font-semibold">{section.title}</h3>
       <dl className="mt-3 space-y-2">
         {section.items.slice(0, 4).map((item) => (
@@ -1165,7 +1165,7 @@ function CompactSectionCard({ section }: { section: ReportCompactSection }) {
         ))}
       </dl>
       {section.note ? (
-        <p className="mt-3 border-t border-zinc-200 pt-3 text-xs leading-5 text-zinc-500 dark:border-zinc-800">
+        <p className="mt-3 border-t border-rule pt-3 text-xs leading-5 text-zinc-500 dark:border-rule">
           {section.note}
         </p>
       ) : null}
@@ -1210,7 +1210,7 @@ function BenchmarkSummary({ report }: { report: MonthlyReport }) {
 
 function RiskWarningList({ warnings }: { warnings: string[] }) {
   return (
-    <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+    <div className="mt-4 border-t border-rule pt-4 dark:border-rule">
       {warnings.length > 0 ? (
         <div className="space-y-2">
           {warnings.slice(0, 3).map((warning) => (
@@ -1234,7 +1234,7 @@ function RiskWarningList({ warnings }: { warnings: string[] }) {
 
 function SummaryRead({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border-l border-zinc-200 pl-3 dark:border-zinc-800">
+    <div className="border-l border-rule pl-3 dark:border-rule">
       <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </p>
@@ -1340,7 +1340,7 @@ function TickerAttributionTable({ rows }: { rows: AttributionRow[] }) {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <tr className="border-b border-rule dark:border-rule">
               <Th>Ticker</Th>
               <Th>Status</Th>
               <Th>Weight</Th>
@@ -1445,7 +1445,7 @@ function RealizedEvents({ events }: { events: AttributionRealizedEvent[] }) {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-left text-sm">
           <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <tr className="border-b border-rule dark:border-rule">
               <Th>Date</Th>
               <Th>Ticker</Th>
               <Th>Qty</Th>
@@ -1503,7 +1503,7 @@ function BridgeMetric({
     <div
       className={`rounded-lg border p-3 ${
         emphasis
-          ? "border-zinc-300 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900"
+          ? "border-zinc-300 bg-zinc-100 dark:border-rule dark:bg-zinc-900"
           : "border-zinc-100 bg-zinc-50 dark:border-zinc-900 dark:bg-zinc-900/50"
       }`}
     >
@@ -1592,8 +1592,8 @@ function Panel({
   title: string;
 }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+    <section className="overflow-hidden rounded-lg border border-rule bg-paper dark:border-rule dark:bg-paper">
+      <div className="border-b border-rule px-5 py-4 dark:border-rule">
         <h3 className="text-sm font-semibold">{title}</h3>
         {subtitle ? <p className="mt-1 text-sm text-zinc-500">{subtitle}</p> : null}
       </div>
@@ -1612,7 +1612,7 @@ function Metric({
   value: string;
 }) {
   return (
-    <div className="bg-white px-5 py-3 dark:bg-zinc-950">
+    <div className="bg-paper px-5 py-3 dark:bg-paper">
       <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
         {label}
       </p>
@@ -1659,7 +1659,7 @@ function Table({
     <div className="overflow-x-auto">
       <table className="w-full min-w-[620px] text-left text-sm">
         <thead>
-          <tr className="border-b border-zinc-200 dark:border-zinc-800">
+          <tr className="border-b border-rule dark:border-rule">
             {headers.map((header) => (
               <th
                 key={header}

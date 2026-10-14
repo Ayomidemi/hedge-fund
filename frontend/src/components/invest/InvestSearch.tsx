@@ -88,7 +88,7 @@ export function InvestSearch({
         />
         <div
           aria-label="Market"
-          className="inline-flex flex-wrap rounded-sm border border-stone-300/70 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900"
+          className="inline-flex w-fit flex-wrap rounded-lg border border-rule bg-hover p-1"
         >
           {marketOptions.map((option) => (
             <button
@@ -98,7 +98,7 @@ export function InvestSearch({
               aria-pressed={market === option.code}
               className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
                 market === option.code
-                  ? "bg-[#fffefb] text-zinc-950 dark:bg-[#151613] dark:text-zinc-50"
+                  ? "bg-action text-action-ink"
                   : "text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
               }`}
             >
@@ -119,7 +119,7 @@ export function InvestSearch({
         className={
           isEmbedded
             ? "mt-4 divide-y divide-zinc-100 border-t border-zinc-100 dark:divide-zinc-900 dark:border-zinc-900"
-            : "mt-5 divide-y divide-zinc-100 rounded-sm border border-stone-300/70 bg-[#fffefb] dark:divide-zinc-900 dark:border-zinc-800 dark:bg-[#151613]"
+            : "mt-5 divide-y divide-zinc-100 rounded-sm border border-rule bg-paper dark:divide-zinc-900 dark:border-rule dark:bg-paper"
         }
       >
         {results.length === 0 ? (

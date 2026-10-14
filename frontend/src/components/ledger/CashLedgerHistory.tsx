@@ -50,13 +50,13 @@ export function CashLedgerHistory({
     <>
       <div className="mx-auto flex max-w-[1200px] flex-col gap-6">
         {isUnavailable && (
-          <div className="rounded-lg border border-red-200 bg-white p-4 text-sm text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-400">
+          <div className="rounded-lg border border-red-200 bg-paper p-4 text-sm text-red-700 dark:border-red-900 dark:bg-paper dark:text-red-400">
             Your cash ledger could not be loaded yet. Sign in again or refresh this page.
           </div>
         )}
 
-        <section className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-6 py-5 dark:border-zinc-800">
+        <section className="rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-rule px-6 py-5 dark:border-rule">
             <div>
               <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
                 Capital · Cash ledger
@@ -88,8 +88,8 @@ export function CashLedgerHistory({
 
         <p className="text-xs text-zinc-500">Inflows and outflows include trading activity. They measure money moving through the account, not profit or loss.</p>
 
-        <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
+        <section className="overflow-hidden rounded-xl border border-rule bg-paper dark:border-rule dark:bg-paper">
+          <div className="flex items-center justify-between gap-3 border-b border-rule px-6 py-4 dark:border-rule">
             <div>
               <h3 className="text-sm font-semibold">Movement history</h3>
               <p className="mt-0.5 text-sm text-zinc-500">
@@ -107,7 +107,7 @@ export function CashLedgerHistory({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-sm">
               <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                <tr className="border-b border-rule dark:border-rule">
                   <Th>Date</Th>
                   <Th>Type</Th>
                   <Th>Platform</Th>

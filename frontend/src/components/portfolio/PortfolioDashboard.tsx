@@ -128,7 +128,7 @@ export function PortfolioDashboard({ dashboard, automatic = false, onTradeClosed
           </DataTable>
         </section>
 
-        <details className="border-t border-zinc-200/70 pt-4 dark:border-zinc-800" open={breachedChecks.length > 0}>
+        <details className="border-t border-rule pt-4 dark:border-rule" open={breachedChecks.length > 0}>
           <summary className="cursor-pointer text-xs font-medium text-zinc-500">Risk &amp; allocation · {breachedChecks.length ? `${breachedChecks.length} limits breached` : "Within limits"}</summary>
           <div className="mt-4 grid gap-5 xl:grid-cols-2">
           <Panel title="Risk centre" eyebrow="Controls">
@@ -157,7 +157,7 @@ export function PortfolioDashboard({ dashboard, automatic = false, onTradeClosed
           </div>
         </details>
 
-        <details className="border-t border-zinc-200/70 pt-4 dark:border-zinc-800">
+        <details className="border-t border-rule pt-4 dark:border-rule">
           <summary className="cursor-pointer text-xs font-medium text-zinc-500">Recent cash movements</summary>
           <div className="mt-4">
         <DataTable
@@ -248,7 +248,7 @@ function DataTable({
   children: React.ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-sm border border-zinc-200/80 bg-[var(--pease-paper)] dark:border-zinc-800/80 dark:bg-[var(--pease-paper)]">
+    <div className="overflow-hidden rounded-sm border border-rule/80 bg-[var(--pease-paper)] dark:border-rule/80 dark:bg-[var(--pease-paper)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-900">
         <div>
           <p className="sr-only">
@@ -266,7 +266,7 @@ function DataTable({
 }
 
 const ghostButtonClassName =
-  "rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-900";
+  "rounded-lg border border-rule px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-rule dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-900";
 
 function Th({ children }: { children: React.ReactNode }) {
   return (
@@ -325,7 +325,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-sm border border-zinc-200/80 bg-[var(--pease-paper)] p-5 dark:border-zinc-800/80 dark:bg-[var(--pease-paper)]">
+    <div className="rounded-sm border border-rule/80 bg-[var(--pease-paper)] p-5 dark:border-rule/80 dark:bg-[var(--pease-paper)]">
       <div className="border-b border-zinc-100 pb-4 dark:border-zinc-900">
         <p className="sr-only">
           {eyebrow}

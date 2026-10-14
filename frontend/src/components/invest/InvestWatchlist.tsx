@@ -36,7 +36,7 @@ export function InvestWatchlist({
 
   if (items.length === 0) {
     return (
-      <div className="w-full rounded-sm border border-stone-300/70 bg-[#fffefb] p-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-[#151613]">
+      <div className="w-full rounded-sm border border-rule bg-paper p-6 text-sm text-zinc-500 dark:border-rule dark:bg-paper">
         Nothing saved yet.{" "}
         <Link href="/invest/markets" className="font-medium underline">
           Search
@@ -47,7 +47,7 @@ export function InvestWatchlist({
   }
 
   return (
-    <ul className="w-full divide-y divide-zinc-100 rounded-sm border border-stone-300/70 bg-[#fffefb] dark:divide-zinc-900 dark:border-zinc-800 dark:bg-[#151613]">
+    <ul className="w-full divide-y divide-zinc-100 rounded-sm border border-rule bg-paper dark:divide-zinc-900 dark:border-rule dark:bg-paper">
       {items.map((item) => (
         <li
           key={item.id}

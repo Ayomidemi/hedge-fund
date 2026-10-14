@@ -1,3 +1,5 @@
+import { theme } from "@/components/ui/theme";
+
 type HorizontalBarDatum = {
   detail?: string;
   label: string;
@@ -75,10 +77,10 @@ function barToneClass(
   tone: HorizontalBarDatum["tone"],
   value: number,
 ) {
-  if (tone === "positive") return "bg-emerald-500";
-  if (tone === "negative") return "bg-rose-500";
-  if (tone === "warning") return "bg-amber-500";
-  if (value > 0) return "bg-emerald-500";
-  if (value < 0) return "bg-rose-500";
-  return "bg-zinc-900 dark:bg-zinc-100";
+  if (tone === "positive") return theme.profitMark;
+  if (tone === "negative") return theme.plotLoss;
+  if (tone === "warning") return theme.cautionMark;
+  if (value > 0) return theme.profitMark;
+  if (value < 0) return theme.plotLoss;
+  return "bg-ink";
 }

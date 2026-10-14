@@ -16,7 +16,7 @@ export function LabPanel({
   title: string;
 }) {
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-xl border border-rule bg-paper p-5 shadow-sm dark:border-rule dark:bg-paper">
       <div className="mb-4">
         <h3 className="text-sm font-semibold">{title}</h3>
         {subtitle && <p className="mt-1 text-sm text-zinc-500">{subtitle}</p>}
