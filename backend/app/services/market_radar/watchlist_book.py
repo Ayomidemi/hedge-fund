@@ -457,8 +457,9 @@ async def _bars_as_points(
 
 
 async def _fill_tiingo_daily(
-    session: AsyncSession, instrument: Instrument, start: date
+    session: AsyncSession, instrument: Instrument, start: date, *, end: date | None = None
 ) -> int:
+    end = end or date.today()
     symbol = instrument.ticker.removesuffix(".NG").lower()
     try:
         async with httpx.AsyncClient(
@@ -470,7 +471,7 @@ async def _fill_tiingo_daily(
                 f"/tiingo/daily/{symbol}/prices",
                 params={
                     "startDate": start.isoformat(),
-                    "endDate": date.today().isoformat(),
+                    "endDate": end.isoformat(),
                 },
             )
             response.raise_for_status()
@@ -482,31 +483,33 @@ async def _fill_tiingo_daily(
     if not isinstance(payload, list) or not payload:
         return 0
 
-    rows = []
+    rows_by_date = {}
     for item in payload:
         if not isinstance(item, dict):
             continue
-        close_price = _decimal(item.get("adjClose") or item.get("close"))
-        if close_price is None:
+        close_price = _decimal(item.get("close"))
+        if close_price is None or close_price <= 0:
             continue
         bar_date = _parse_date(item.get("date"))
-        if bar_date is None:
+        if bar_date is None or not start <= bar_date <= end:
             continue
-        rows.append(
-            {
+        volume = _decimal(item.get("volume"))
+        volume = (int(volume) if volume is not None and 0 <= volume <= 2**63 - 1
+                  and volume == volume.to_integral_value() else None)
+        rows_by_date[bar_date] = {
                 "instrument_id": instrument.id,
                 "bar_date": bar_date,
                 "source": "tiingo",
-                "open_price": _decimal(item.get("adjOpen") or item.get("open")),
-                "high_price": _decimal(item.get("adjHigh") or item.get("high")),
-                "low_price": _decimal(item.get("adjLow") or item.get("low")),
+                "open_price": _decimal(item.get("open")),
+                "high_price": _decimal(item.get("high")),
+                "low_price": _decimal(item.get("low")),
                 "close_price": close_price,
                 "adjusted_close_price": _decimal(item.get("adjClose")),
-                "volume": int(item["volume"]) if item.get("volume") is not None else None,
+                "volume": volume,
                 "currency": instrument.currency,
                 "raw_payload": item,
             }
-        )
+    rows = list(rows_by_date.values())
     if not rows:
         return 0
     statement = insert(MarketPriceBar).values(rows)
@@ -608,7 +611,8 @@ def _decimal(value: object) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
+        return number if number.is_finite() else None
     except (InvalidOperation, ValueError, TypeError):
         return None
 

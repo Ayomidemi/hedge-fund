@@ -15,6 +15,7 @@ from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 PAPER_FUND_LOCK_KEY = 4_100_004
+HISTORY_JOB_TIMEOUT_SECONDS = 90
 
 
 @celery_app.task(name="paper_fund.refresh_risk_history")
@@ -27,10 +28,15 @@ async def _refresh_history():
     engine = create_async_engine(settings.sqlalchemy_database_url, **engine_options)
     factory = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     try:
-        async with hold_job_lock(engine, 4_100_005) as locked:
-            if locked:
-                async with factory() as session:
-                    await refresh_risk_history(session)
+        async with asyncio.timeout(HISTORY_JOB_TIMEOUT_SECONDS):
+            async with hold_job_lock(engine, 4_100_005) as locked:
+                if locked:
+                    async with factory() as session:
+                        await refresh_risk_history(session)
+    except TimeoutError:
+        # Session/lock contexts unwind before releasing the data worker. Already
+        # committed attempts retain their retry lease; completed work is kept.
+        logger.warning("radar_history_job_timed_out")
     finally:
         await engine.dispose()
 

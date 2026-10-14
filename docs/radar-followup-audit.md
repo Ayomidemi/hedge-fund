@@ -1,5 +1,8 @@
 # Radar flow follow-up audit — 14 October 2026
 
+Follow-up: the priority-dependent history-preparation gap described below was
+subsequently addressed and activated; see [history preparation](radar-history-preparation.md).
+
 ## Assessment
 
 The second review found additional defects in observation merging, stale-data

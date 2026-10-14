@@ -1254,6 +1254,24 @@ class RadarUniverseMember(Base, TimestampMixin):
     )
 
 
+class RadarHistoryPreparation(Base, TimestampMixin):
+    """Durable data-preparation progress, independent of trading priority."""
+
+    __tablename__ = "radar_history_preparation"
+
+    ticker: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    bar_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_bar_date: Mapped[date | None] = mapped_column(Date)
+    last_error: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (Index("ix_radar_history_due", "next_attempt_at", "last_attempt_at"),)
+
+
 class FxRate(Base, TimestampMixin):
     """Latest FX rate for a currency pair. Refreshed on the same schedule as
     instrument quotes. Rate is quote_currency per 1 base_currency

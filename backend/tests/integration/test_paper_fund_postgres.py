@@ -338,7 +338,7 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
                     as_of=NOW, source_as_of=NOW, radar_priority='P1', priority_score=D('90')))
             await session.commit()
         fetched = []
-        async def fetch(session, instrument, start):
+        async def fetch(session, instrument, start, **kwargs):
             fetched.append(instrument.ticker)
             if len(fetched) == 1:
                 raise TimeoutError('simulated provider timeout')
@@ -351,6 +351,134 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
                 saved = await refresh_risk_history(session, now=NOW)
         self.assertEqual(len(fetched), 4)
         self.assertEqual(saved, 10)
+
+    async def test_unranked_discoveries_and_catalog_names_prepare_without_existing_instruments(self):
+        from types import SimpleNamespace
+        from app.models import RadarHistoryPreparation, RadarUniverseMember
+        from app.services.paper_fund.history import refresh_risk_history
+        _, radar_id = await self.seed_signal()
+        names = {f'NEW{i}' for i in range(7)} | {'CATALOG'}
+        async with self.factory() as session:
+            for ticker in names - {'CATALOG'}:
+                session.add(RadarSnapshot(run_id=radar_id, ticker=ticker, name=ticker,
+                    jurisdiction='US', currency='USD', asset_class='equity', source='fmp',
+                    as_of=NOW, radar_priority=None, in_working_set=False))
+            for ticker, jurisdiction, currency in (('CATALOG', 'US', 'USD'), ('NG.NG', 'NG', 'NGN')):
+                session.add(RadarUniverseMember(ticker=ticker, name=ticker, jurisdiction=jurisdiction,
+                    currency=currency, source='manual', last_synced_at=NOW))
+            await session.commit()
+        fetched = []
+        async def fetch(session, instrument, start, **kwargs):
+            fetched.append(instrument.ticker)
+            if instrument.ticker == 'NEW0':
+                raise TimeoutError('fixture')
+            return 0
+        with patch('app.services.paper_fund.history.settings', SimpleNamespace(hf_tiingo_api_key='fixture')), \
+             patch('app.services.paper_fund.history._fill_tiingo_daily', new=fetch):
+            for at in (NOW, NOW+timedelta(minutes=5)):
+                async with self.factory() as session:
+                    await refresh_risk_history(session, now=at)
+            self.assertEqual(len(fetched), 8)
+            self.assertEqual(set(fetched), names)
+            # A new session/worker preserves retry timing; no repeated empty downloads.
+            async with self.factory() as session:
+                from sqlalchemy import event
+                statements = []
+                def capture(connection, cursor, statement, parameters, context, executemany):
+                    statements.append(statement)
+                event.listen(self.engine.sync_engine, 'before_cursor_execute', capture)
+                try:
+                    await refresh_risk_history(session, now=NOW+timedelta(minutes=10))
+                finally:
+                    event.remove(self.engine.sync_engine, 'before_cursor_execute', capture)
+                self.assertFalse(any('market_price_bars' in statement for statement in statements))
+                self.assertEqual(len(fetched), 8)
+                state = await session.get(RadarHistoryPreparation, 'NEW0')
+                self.assertEqual(state.last_seen_at, NOW)
+                self.assertEqual(state.status, 'retry')
+                self.assertEqual(state.last_error, 'TimeoutError')
+                self.assertGreater(state.next_attempt_at, NOW+timedelta(minutes=10))
+                self.assertEqual(await session.scalar(select(func.count()).select_from(PaperOrder)), 0)
+                self.assertEqual(await session.scalar(select(func.count()).select_from(InstrumentQuote)), 1)
+
+    async def test_prepared_history_enables_scoring_but_does_not_create_orders(self):
+        from types import SimpleNamespace
+        from app.models import RadarHistoryPreparation
+        from app.services.paper_fund.history import refresh_risk_history
+        from app.services.market_radar.scan import _apply_historical_evidence
+        from app.services.market_radar.scoring import RadarCandidate
+        _, radar_id = await self.seed_signal()
+        async with self.factory() as session:
+            session.add(RadarSnapshot(run_id=radar_id, ticker='UNRANKED', name='New', jurisdiction='US',
+                currency='USD', asset_class='equity', source='fmp', as_of=NOW, radar_priority=None))
+            await session.commit()
+        async def fetch(session, instrument, start, **kwargs):
+            day = NOW.date()-timedelta(days=1)
+            for index in range(30):
+                while day.weekday() >= 5:
+                    day -= timedelta(days=1)
+                session.add(MarketPriceBar(instrument_id=instrument.id, bar_date=day, source='tiingo',
+                    close_price=D(100+index%3), adjusted_close_price=D(100+index%3), volume=10000, currency='USD'))
+                day -= timedelta(days=1)
+            await session.commit()
+            return 30
+        with patch('app.services.paper_fund.history.settings', SimpleNamespace(hf_tiingo_api_key='fixture')), \
+             patch('app.services.paper_fund.history._fill_tiingo_daily', new=fetch):
+            async with self.factory() as session:
+                await refresh_risk_history(session, now=NOW)
+                state = await session.get(RadarHistoryPreparation, 'UNRANKED')
+                self.assertEqual(state.status, 'partial')
+                self.assertEqual(state.bar_count, 30)
+                self.assertEqual(state.next_attempt_at, NOW+timedelta(hours=12))
+                item = RadarCandidate(ticker='UNRANKED', name='New', jurisdiction='US',
+                                      change_pct=D('6'), volume=30000)
+                await _apply_historical_evidence(session, [item], now=NOW)
+                self.assertEqual(item.evidence['return_sample_count'], 29)
+                self.assertIn('price_return_zscore', item.evidence)
+                self.assertEqual(item.volume_ratio, D('3'))
+                self.assertEqual(await session.scalar(select(func.count()).select_from(PaperOrder)), 0)
+
+    async def test_history_download_preserves_raw_prices_and_excludes_invalid_dates(self):
+        from app.services.market_radar.watchlist_book import _fill_tiingo_daily
+        instrument_id, _ = await self.seed_signal()
+        end = NOW.date()-timedelta(days=1)
+        valid = {'date':end.isoformat(), 'close':100, 'adjClose':50, 'volume':1000}
+        payload = [valid, valid, {**valid, 'date':NOW.date().isoformat()},
+                   {**valid, 'date':(end-timedelta(days=1)).isoformat(), 'close':'NaN'},
+                   {**valid, 'date':(end-timedelta(days=2)).isoformat(), 'volume':'Infinity'}]
+        client = AsyncMock()
+        client.get.return_value = httpx.Response(200, json=payload, request=httpx.Request('GET', 'https://example.test'))
+        async with self.factory() as session:
+            instrument = await session.get(Instrument, instrument_id)
+            with patch('app.services.market_radar.watchlist_book.httpx.AsyncClient') as factory:
+                factory.return_value.__aenter__.return_value = client
+                saved = await _fill_tiingo_daily(session, instrument, end-timedelta(days=4), end=end)
+            self.assertEqual(saved, 2)
+            self.assertEqual(client.get.call_args.kwargs['params']['endDate'], end.isoformat())
+            bar = await session.scalar(select(MarketPriceBar).where(MarketPriceBar.instrument_id == instrument_id,
+                MarketPriceBar.bar_date == end, MarketPriceBar.source == 'tiingo'))
+            self.assertEqual(bar.close_price, D('100'))
+            self.assertEqual(bar.adjusted_close_price, D('50'))
+            self.assertEqual(await session.scalar(select(func.count()).select_from(MarketPriceBar).where(
+                MarketPriceBar.instrument_id == instrument_id, MarketPriceBar.bar_date == NOW.date())), 0)
+
+    async def test_preparation_coverage_matches_radar_provider_precedence(self):
+        from app.services.paper_fund.history import _coverage
+        instrument_id, _ = await self.seed_signal()
+        async with self.factory() as session:
+            before = (await _coverage(session, [instrument_id], NOW))[instrument_id]
+            bar = await session.scalar(select(MarketPriceBar).where(MarketPriceBar.instrument_id == instrument_id)
+                                       .order_by(MarketPriceBar.bar_date.desc()).limit(1))
+            bar.adjusted_close_price = D('0')
+            session.add(MarketPriceBar(instrument_id=instrument_id, source='yahoo', bar_date=bar.bar_date,
+                close_price=D('100'), adjusted_close_price=D('100'), volume=10000, currency='USD'))
+            for day in (NOW.date(), NOW.date()+timedelta(days=1)):
+                session.add(MarketPriceBar(instrument_id=instrument_id, source='tiingo', bar_date=day,
+                    close_price=D('100'), adjusted_close_price=D('100'), volume=10000, currency='USD'))
+            await session.flush()
+            after = (await _coverage(session, [instrument_id], NOW))[instrument_id]
+            self.assertEqual(after[0], before[0]-1)
+            self.assertLess(after[1], before[1])
 
     async def test_concurrent_risk_policy_creation_has_one_shared_version(self):
         from app.services.risk.risk_centre import _get_or_create_policy_version

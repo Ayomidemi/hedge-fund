@@ -25,12 +25,12 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 from app.core.auth import AuthenticatedUser, require_capital_user
 from app.db.session import get_session
 from app.main import app
-from app.models import PaperEquitySnapshot, PaperFundRun, PaperOrder
+from app.models import PaperEquitySnapshot, PaperFundRun, PaperOrder, RadarHistoryPreparation
 
 
 TEST_URL = os.environ.get("HF_TEST_DATABASE_URL")
 PRE_REPAIR_HEAD = "202610020002"
-REPAIR_HEAD = "202610070001"
+REPAIR_HEAD = "202610140001"
 BACKEND = Path(__file__).resolve().parents[2]
 
 
@@ -86,7 +86,7 @@ class PaperFundMigrationTests(IsolatedAsyncioTestCase):
         async with self.engine.connect() as connection:
             def verify(sync_connection):
                 inspector = inspect(sync_connection)
-                for model in (PaperFundRun, PaperOrder, PaperEquitySnapshot):
+                for model in (PaperFundRun, PaperOrder, PaperEquitySnapshot, RadarHistoryPreparation):
                     table = model.__table__
                     actual = {column["name"]: column for column in inspector.get_columns(table.name)}
                     self.assertEqual(set(actual), set(table.columns.keys()), table.name)
