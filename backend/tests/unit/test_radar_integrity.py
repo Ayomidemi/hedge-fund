@@ -3,12 +3,14 @@ from decimal import Decimal as D
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
+import httpx
 
-from app.services.market_radar.scoring import RadarCandidate, score_candidate
-from app.services.market_radar.priority import assign_priority
+from app.services.market_radar.scoring import RadarCandidate, score_candidate, is_flagged
+from app.services.market_radar.priority import assign_priority, build_industry_contexts
+from app.services.market_radar.providers import _decimal, _int, _safe_error
 from app.services.market_radar.scan import (
     _apply_historical_evidence, _apply_quotes, _apply_sector_relative,
-    _apply_scan_deltas, _assess_observations,
+    _apply_scan_deltas, _assess_observations, _apply_cached_quotes,
     _merge, _quote_usable_for_radar, _select_working_set,
 )
 
@@ -80,6 +82,79 @@ class RadarHistoryIntegrityTests(IsolatedAsyncioTestCase):
 
 
 class RadarObservationIntegrityTests(TestCase):
+    def test_vendor_nonfinite_numbers_are_missing_values(self):
+        for value in ('NaN', 'Infinity', '-Infinity'):
+            with self.subTest(value=value):
+                self.assertIsNone(_decimal(value))
+                self.assertIsNone(_int(value))
+
+    def test_vendor_error_summary_does_not_expose_request_credentials(self):
+        request = httpx.Request('GET', 'https://example.test/quotes?apikey=TEST_SECRET')
+        response = httpx.Response(401, request=request)
+        with self.assertRaises(httpx.HTTPStatusError) as raised:
+            response.raise_for_status()
+        self.assertEqual(_safe_error(raised.exception), 'HTTP 401')
+        self.assertNotIn('TEST_SECRET', _safe_error(httpx.ReadTimeout(str(request.url))))
+
+    def test_nonfinite_statistical_evidence_cannot_create_confirmation(self):
+        item = candidate(price=D('100'), change_pct=D('1'),
+            evidence={'price_return_zscore':'NaN', 'volume_zscore':'Infinity',
+                      'sector_relative_return_pct':'-Infinity'})
+        score_candidate(item)
+        assign_priority(item)
+        self.assertEqual(item.flags, [])
+        self.assertIsNone(item.radar_priority)
+
+    def test_stale_observation_is_not_an_alert(self):
+        item = candidate(change_pct=D('20'), volume_ratio=D('10'),
+                         flags=['price_move'], stale_reason='old quote')
+        score_candidate(item)
+        self.assertFalse(is_flagged(item))
+        self.assertEqual(item.flags, [])
+
+    def test_stale_names_do_not_dilute_breadth_or_change_direction(self):
+        current = [candidate(f'NEW{i}', industry='Banks', change_pct=D('6')) for i in range(3)]
+        old = [candidate(f'OLD{i}', industry='Banks', change_pct=D('-40'),
+                         stale_reason='old quote') for i in range(20)]
+        for item in current + old:
+            score_candidate(item)
+        clean = build_industry_contexts(current)['US:banks']
+        actual = build_industry_contexts(current + old)['US:banks']
+        self.assertEqual(actual, clean)
+
+    def test_merge_replaces_the_whole_observation_and_clears_derived_confirmation(self):
+        item = candidate(price=D('100'), change_pct=D('20'), volume=10000,
+                         volume_ratio=D('10'), source_as_of=NOW-timedelta(minutes=1),
+                         evidence={'quote_as_of':(NOW-timedelta(minutes=1)).isoformat(),
+                                   'volume_zscore':'8', 'sector_relative_return_pct':'7'})
+        incoming = candidate(price=D('101'), source_as_of=NOW,
+                             evidence={'quote_as_of':NOW.isoformat()})
+        _merge({'TEST':item}, [incoming])
+        self.assertIsNone(item.change_pct)
+        self.assertIsNone(item.volume)
+        self.assertIsNone(item.volume_ratio)
+        self.assertNotIn('volume_zscore', item.evidence)
+        self.assertNotIn('sector_relative_return_pct', item.evidence)
+
+    def test_old_observation_cannot_replace_current_confirmation(self):
+        item = candidate(price=D('100'), source_as_of=NOW,
+                         evidence={'quote_as_of':NOW.isoformat(), 'volume_zscore':'0'})
+        incoming = candidate(price=D('90'), source_as_of=NOW-timedelta(minutes=1),
+                             evidence={'quote_as_of':(NOW-timedelta(minutes=1)).isoformat(),
+                                       'volume_zscore':'8', 'discovery_lists':['most-actives']})
+        _merge({'TEST':item}, [incoming])
+        self.assertEqual(item.evidence['volume_zscore'], '0')
+        self.assertEqual(item.evidence['discovery_lists'], ['most-actives'])
+
+    def test_relative_confirmation_is_removed_when_benchmark_becomes_stale(self):
+        benchmark = candidate('XLK', change_pct=D('1'), sector='Technology')
+        item = candidate(change_pct=D('6'), sector='Technology')
+        _apply_sector_relative([benchmark, item])
+        self.assertIn('sector_relative_return_pct', item.evidence)
+        benchmark.stale_reason = 'old quote'
+        _apply_sector_relative([benchmark, item])
+        self.assertNotIn('sector_relative_return_pct', item.evidence)
+
     def test_assessment_keeps_verified_and_marks_discovery_as_unverified(self):
         verified = candidate(price=D('105'), change_pct=D('5'), source_as_of=NOW,
                              evidence={'quote_as_of':NOW.isoformat()})
@@ -152,3 +227,19 @@ class RadarObservationIntegrityTests(TestCase):
         selected = _select_working_set(old + [new])
         self.assertEqual(len(selected), 100)
         self.assertIn(new, selected)
+
+
+class RadarCacheIntegrityTests(IsolatedAsyncioTestCase):
+    async def test_fresh_cache_supersedes_discovery_receipt_time(self):
+        item = candidate(price=D('90'), change_pct=D('20'), volume_ratio=D('10'),
+                         source='fmp', source_as_of=NOW)
+        quote = SimpleNamespace(instrument_id=1, price=D('100'), previous_close=D('99'),
+            change_pct=D('1'), volume=None, currency='USD', source='tiingo',
+            as_of=NOW-timedelta(seconds=30), is_stale=False)
+        session = SimpleNamespace(scalars=AsyncMock(return_value=[quote]))
+        with patch('app.services.market_radar.scan._load_instruments_by_quote_symbol',
+                   new=AsyncMock(return_value={'TEST':SimpleNamespace(id=1)})):
+            hits = await _apply_cached_quotes(session, [item], now=NOW)
+        self.assertEqual(hits, 1)
+        self.assertEqual(item.price, D('100'))
+        self.assertIsNone(item.volume_ratio)

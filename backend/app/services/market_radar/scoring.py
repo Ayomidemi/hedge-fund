@@ -94,6 +94,10 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
     Vendor list membership may tag a row. It does not add score and does not
     by itself put the name in the Opportunity Queue.
     """
+    if candidate.stale_reason or candidate.carried_forward:
+        candidate.flags = []
+        candidate.anomaly_score = Decimal("0")
+        return candidate
     flags: list[str] = []
     score = Decimal("0")
     change = abs(candidate.change_pct) if candidate.change_pct is not None else Decimal("0")
@@ -105,9 +109,7 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
         candidate.volume_ratio = None
 
     price_z = abs(
-        _evidence_decimal(candidate, "price_return_zscore")
-        or _evidence_decimal(candidate, "price_return_zscore")
-        or Decimal("0")
+        _evidence_decimal(candidate, "price_return_zscore") or Decimal("0")
     )
     if price_z >= Decimal("2"):
         flags.append("price_anomaly")
@@ -121,9 +123,7 @@ def score_candidate(candidate: RadarCandidate) -> RadarCandidate:
         if "price_anomaly" not in flags and "price_move" not in flags:
             score += Decimal("5")
 
-    volume_z = _evidence_decimal(candidate, "volume_zscore") or _evidence_decimal(
-        candidate, "volume_zscore"
-    )
+    volume_z = _evidence_decimal(candidate, "volume_zscore")
     if volume_z is not None and volume_z >= Decimal("2"):
         flags.append("volume_anomaly")
         score += min(volume_z * Decimal("2.5"), Decimal("12"))
@@ -189,6 +189,8 @@ def thresholds_for(tier: CareTier) -> CareThresholds:
 
 
 def is_flagged(candidate: RadarCandidate) -> bool:
+    if candidate.stale_reason or candidate.carried_forward:
+        return False
     if "scan_lurch" in candidate.flags:
         return True
     thresholds = thresholds_for(care_tier(candidate))
@@ -247,6 +249,7 @@ def _evidence_decimal(candidate: RadarCandidate, key: str) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
+        return number if number.is_finite() else None
     except (InvalidOperation, TypeError, ValueError):
         return None

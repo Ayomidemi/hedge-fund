@@ -171,6 +171,77 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
         async with self.factory() as session:
             return await cycle(session, self.owner, now=at)
 
+    async def test_failed_radar_scan_rolls_back_partial_writes_and_recovers_session(self):
+        from app.services.market_radar.scan import run_radar_scan
+        from app.services.market_radar.catalog import CatalogSyncResult
+        from app.services.market_radar.scoring import RadarCandidate
+        from app.services.market_radar.watchlist import AlwaysWatchedSet
+        instrument_id, _ = await self.seed_signal()
+        for database_failure in (False, True):
+            with self.subTest(database_failure=database_failure):
+                async with self.factory() as session:
+                    quote = await session.scalar(select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument_id))
+                    before_runs = await session.scalar(select(func.count()).select_from(RadarRun))
+                    before_rows = await session.scalar(select(func.count()).select_from(RadarSnapshot))
+                    async def staged_write(*args, **kwargs):
+                        quote.price = D('999')
+                        await session.flush()
+                        return 1
+                    async def fail_after_snapshots(*args, **kwargs):
+                        await session.flush()
+                        self.assertGreater(await session.scalar(select(func.count()).select_from(RadarSnapshot)), before_rows)
+                        if database_failure:
+                            await session.execute(text('SELECT 1 / 0'))
+                        raise RuntimeError('simulated failure after snapshot publication')
+                    with patch('app.services.market_radar.scan.load_always_watched', new=AsyncMock(return_value=AlwaysWatchedSet({}))), \
+                         patch('app.services.market_radar.scan.sync_monitored_universe', new=AsyncMock(return_value=CatalogSyncResult(1,0,0,0))), \
+                         patch('app.services.market_radar.scan.load_catalog_candidates', new=AsyncMock(return_value=[RadarCandidate(ticker='BROKEN', name='Broken', jurisdiction='US')])), \
+                         patch('app.services.market_radar.scan._pin_prior_working_set', new=AsyncMock()), \
+                         patch('app.services.market_radar.scan._apply_cached_quotes', new=AsyncMock(return_value=0)), \
+                         patch('app.services.market_radar.scan.fetch_us_movers', new=AsyncMock(return_value=([],0,[]))), \
+                         patch('app.services.market_radar.scan._persist_vendor_tapes', new=staged_write), \
+                         patch('app.services.market_radar.scan._annotate_queue_tape_moves', new=fail_after_snapshots), \
+                         patch('app.services.market_radar.scan.logger.exception'):
+                        run = await run_radar_scan(session, force=True, jurisdictions=['US'])
+                    self.assertEqual(run.status, 'failed')
+                    self.assertEqual(run.working_set_count, 0)
+                    await session.refresh(quote)
+                    self.assertEqual(quote.price, D('100'))
+                    self.assertEqual(await session.scalar(select(func.count()).select_from(RadarRun)), before_runs + 1)
+                    self.assertEqual(await session.scalar(select(func.count()).select_from(RadarSnapshot)), before_rows)
+                    self.assertEqual(await session.scalar(select(func.count()).select_from(PaperOrder)), 0)
+                    self.assertEqual(await session.scalar(select(func.count()).select_from(RadarRun).where(RadarRun.id == run.id)), 1)
+
+    async def test_radar_overview_preserves_scan_evidence_and_excludes_stale_alerts(self):
+        from app.services.market_radar.overview import build_radar_overview
+        _, old_run_id = await self.seed_signal()
+        _, run_id = await self.seed_signal()
+        async with self.factory() as session:
+            for radar_id in (old_run_id, run_id):
+                run = await session.get(RadarRun, radar_id)
+                run.working_set_count = 2
+            current = await session.scalar(select(RadarSnapshot).where(RadarSnapshot.run_id == run_id))
+            current.in_working_set = True
+            current.flags = ['price_move']
+            current.evidence = {**current.evidence, 'industry_status':'market_event', 'move_scope':'market'}
+            for ticker, stale, working in (('STALE', 'old quote', True), ('OUTSIDE', None, False), ('QUIET', None, True)):
+                session.add(RadarSnapshot(run_id=run_id, ticker=ticker, name=ticker, jurisdiction='US',
+                    sector='Technology', currency='USD', asset_class='equity', source='fmp',
+                    as_of=NOW, source_as_of=NOW, in_working_set=working, price=D('100'),
+                    change_pct=D('6') if ticker != 'QUIET' else D('1'),
+                    flags=['price_move'] if ticker != 'QUIET' else ['volatility_shift'],
+                    radar_priority='P0' if ticker != 'QUIET' else None,
+                    carried_forward=False, stale_reason=stale, evidence={}))
+            await session.commit()
+            result = await build_radar_overview(session)
+            self.assertEqual(result.latest_run.id, run_id)
+            self.assertEqual(result.flagged_count, 1)
+            self.assertEqual(result.flagged[0].ticker, current.ticker)
+            self.assertEqual(result.flagged[0].evidence['move_scope'], 'market')
+            self.assertEqual(result.flagged[0].evidence['industry_status'], 'market_event')
+            self.assertEqual(result.industries[0].flagged_count, 1)
+            self.assertIsNone(next(row for row in result.working_set if row.ticker == 'STALE').radar_priority)
+
     async def test_multiple_entries_fill_together_and_existing_positions_do_not_block_new_entries(self):
         first, radar_id = await self.seed_signal(stock_cap="5")
         second, _ = await self.seed_signal(radar_id=radar_id, stock_cap="5")

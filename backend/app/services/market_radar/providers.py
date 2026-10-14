@@ -53,9 +53,9 @@ async def fetch_us_movers() -> tuple[list[RadarCandidate], int, list[str]]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
-                errors.append(f"FMP {path} failed: {exc}")
+                errors.append(f"FMP {path} failed: {_safe_error(exc)}")
                 logger.warning(
-                    "radar_fmp_movers_failed", extra={"path": path, "error": str(exc)}
+                    "radar_fmp_movers_failed", extra={"path": path, "error": _safe_error(exc)}
                 )
                 continue
 
@@ -126,8 +126,8 @@ async def fetch_ngn_discovery() -> tuple[list[RadarCandidate], int, list[str]]:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
-                errors.append(f"NGN {path} failed: {exc}")
-                extra = {"path": path, "error": str(exc)}
+                errors.append(f"NGN {path} failed: {_safe_error(exc)}")
+                extra = {"path": path, "error": _safe_error(exc)}
                 if _is_rate_limit_error(exc):
                     retry_after = _set_ngn_discovery_backoff(now)
                     extra["retry_after"] = retry_after.isoformat()
@@ -227,11 +227,19 @@ def _ngn_rows(payload: object) -> list[dict]:
     return []
 
 
+def _safe_error(exc: Exception) -> str:
+    # HTTP exception strings can contain request URLs with API credentials.
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
+
+
 def _decimal(value: object) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value).replace("%", ""))
+        number = Decimal(str(value).replace("%", ""))
+        return number if number.is_finite() else None
     except (InvalidOperation, ValueError):
         return None
 
@@ -241,5 +249,5 @@ def _int(value: object) -> int | None:
         return None
     try:
         return int(float(str(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None

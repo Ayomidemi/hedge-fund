@@ -42,7 +42,7 @@ async def build_radar_overview(
     latest_run = await session.scalar(
         select(RadarRun)
         .where(RadarRun.status == "completed")
-        .order_by(RadarRun.started_at.desc())
+        .order_by(RadarRun.started_at.desc(), RadarRun.created_at.desc(), RadarRun.id.desc())
         .limit(1)
     )
     snapshot_run = await session.scalar(
@@ -50,7 +50,7 @@ async def build_radar_overview(
         .options(selectinload(RadarRun.snapshots))
         .where(RadarRun.status == "completed")
         .where(RadarRun.working_set_count > 0)
-        .order_by(RadarRun.started_at.desc())
+        .order_by(RadarRun.started_at.desc(), RadarRun.created_at.desc(), RadarRun.id.desc())
         .limit(1)
     )
 
@@ -59,14 +59,16 @@ async def build_radar_overview(
         snapshots = [row for row in snapshots if row.jurisdiction == jurisdiction]
 
     working = [row for row in snapshots if row.in_working_set]
-    flagged = [row for row in working if row.flags]
+    flagged = [row for row in working if row.flags and _priority_value(row, row.evidence or {})]
     watchlist_tickers: set[str] = set()
     watchlist_items = []
     if owner_user_id:
         watchlist = await list_watchlist(session, owner_user_id=owner_user_id)
         watchlist_items = watchlist.items
         watchlist_tickers = {item.ticker.upper() for item in watchlist_items}
-    contexts = build_industry_contexts(working)
+    # Classification uses the scan's entire sample, including names outside
+    # the display working set, just as it did when assigning priorities.
+    contexts = build_industry_contexts(snapshots)
 
     def named(row: RadarSnapshot) -> MarketRadarNameResponse:
         return _name_response(
@@ -163,8 +165,8 @@ def _name_response(
         or evidence.get("on_watchlist")
     )
     if context is not None:
-        evidence["industry_status"] = context.status
-        evidence["move_scope"] = _live_move_scope(row, context)
+        evidence.setdefault("industry_status", context.status)
+        evidence.setdefault("move_scope", _live_move_scope(row, context))
     return MarketRadarNameResponse(
         ticker=row.ticker,
         name=row.name,
@@ -204,8 +206,10 @@ def _name_response(
 
 def _live_move_scope(row: RadarSnapshot, context: IndustryContext) -> str:
     ticker = (row.ticker or "").upper()
-    if ticker in RADAR_PULSE_TICKERS or not row.flags:
+    if ticker in RADAR_PULSE_TICKERS or not row.flags or row.stale_reason or row.carried_forward:
         return "none"
+    if context.key.endswith(":unclassified"):
+        return "unknown"
     if context.status == "market_event":
         return "market"
     if context.status == "industry_event":
@@ -223,8 +227,12 @@ def _group_industries(
         grouped.setdefault(industry_key(row), []).append(row)
 
     industries: list[MarketRadarIndustryResponse] = []
+    display_contexts = build_industry_contexts(rows)
     for key, members in grouped.items():
         context = contexts.get(key)
+        # Counts and medians describe displayed names; classification retains
+        # the scan-wide context used for priority and execution evidence.
+        displayed = display_contexts.get(key)
         status = context.status if context is not None else "quiet"
         industries.append(
             MarketRadarIndustryResponse(
@@ -240,20 +248,20 @@ def _group_industries(
                 ),
                 name_count=len(members),
                 flagged_count=(
-                    context.flagged_count
-                    if context is not None
+                    displayed.flagged_count
+                    if displayed is not None
                     else len([row for row in members if row.flags])
                 ),
                 heat=heat_for_status(status),
                 status=status,
                 median_change_pct=(
-                    context.median_change_pct if context is not None else None
+                    displayed.median_change_pct if displayed is not None else None
                 ),
                 median_volume_ratio=(
-                    context.median_volume_ratio if context is not None else None
+                    displayed.median_volume_ratio if displayed is not None else None
                 ),
-                declining_count=context.declining_count if context is not None else 0,
-                advancing_count=context.advancing_count if context is not None else 0,
+                declining_count=displayed.declining_count if displayed is not None else 0,
+                advancing_count=displayed.advancing_count if displayed is not None else 0,
                 names=[
                     _name_response(row, watchlist_tickers, context)
                     for row in _sorted(members)
@@ -278,6 +286,8 @@ def _sorted(rows: list[RadarSnapshot]) -> list[RadarSnapshot]:
 
 
 def _priority_value(row: RadarSnapshot, evidence: dict) -> str | None:
+    if row.stale_reason or row.carried_forward:
+        return None
     return getattr(row, "radar_priority", None) or evidence.get("radar_priority")
 
 
@@ -318,6 +328,8 @@ def _decimal_or_none(value: object):
 def _scan_changes(rows: list[RadarSnapshot]) -> list[RadarSnapshot]:
     changed: list[RadarSnapshot] = []
     for row in rows:
+        if row.stale_reason or row.carried_forward:
+            continue
         flags = set(row.flags or [])
         evidence = row.evidence or {}
         state = str(evidence.get("scan_state") or "")

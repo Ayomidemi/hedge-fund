@@ -69,7 +69,7 @@ def assign_priority(
     candidate: RadarCandidate,
     context: IndustryContext | None = None,
 ) -> RadarCandidate:
-    dimensions = dimension_scores(candidate, context)
+    dimensions = {} if candidate.stale_reason or candidate.carried_forward else dimension_scores(candidate, context)
     candidate.dimension_scores = {
         key: value for key, value in dimensions.items() if value is not None
     }
@@ -261,6 +261,9 @@ def build_industry_contexts(
 
     draft: dict[str, IndustryContext] = {}
     for key, group in grouped.items():
+        sample = group[0]
+        # Unavailable observations are not quiet peers or directional votes.
+        group = [item for item in group if _member_has_current_change(item)]
         flagged = [item for item in group if _member_is_flagged(item)]
         changes = sorted(
             float(item.change_pct)
@@ -277,7 +280,6 @@ def build_industry_contexts(
             if group
             else Decimal("0")
         )
-        sample = group[0]
         jurisdictions = {
             str(getattr(item, "jurisdiction", "") or "") for item in group
         }
@@ -291,7 +293,7 @@ def build_industry_contexts(
             jurisdiction=(
                 next(iter(jurisdictions))
                 if len(jurisdictions) == 1
-                else "mixed"
+                else (getattr(sample, "jurisdiction", "") if not group else "mixed")
             ),
             member_count=len(group),
             flagged_count=len(flagged),
@@ -646,7 +648,16 @@ def _member_is_flagged(member: Any) -> bool:
         return False
     if isinstance(member, RadarCandidate):
         return is_flagged(member)
-    return bool(getattr(member, "flags", None))
+    # Persisted rows can have descriptive flags below the attention threshold.
+    # Only rows actually assigned priority were alerts in the original scan.
+    return bool(getattr(member, "flags", None) and getattr(member, "radar_priority", None))
+
+
+def _member_has_current_change(member: Any) -> bool:
+    return not (
+        getattr(member, "carried_forward", False)
+        or getattr(member, "stale_reason", None)
+    ) and _decimal(getattr(member, "change_pct", None)) is not None
 
 
 def _industry_status_without_market(
@@ -697,6 +708,8 @@ def _market_event_jurisdictions(
     flagged_by_jurisdiction: dict[str, list[Any]] = defaultdict(list)
     names_by_jurisdiction: dict[str, list[Any]] = defaultdict(list)
     for member in members:
+        if not _member_has_current_change(member):
+            continue
         if _industry_key(member).endswith(":unclassified"):
             continue
         jurisdiction = str(getattr(member, "jurisdiction", "") or "")
@@ -789,7 +802,8 @@ def _decimal(value: object) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
+        return number if number.is_finite() else None
     except (InvalidOperation, TypeError, ValueError):
         return None
 

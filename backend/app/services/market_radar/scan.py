@@ -91,6 +91,7 @@ async def run_radar_scan(
     )
     session.add(run)
     await session.flush()
+    run_id = run.id
 
     scanned: list[str] = []
     skipped: list[dict] = []
@@ -145,15 +146,6 @@ async def run_radar_scan(
                 jurisdictions=[jurisdiction],
             )
 
-            jurisdiction_candidates = [
-                item for item in candidates.values() if item.jurisdiction == jurisdiction
-            ]
-            cache_hits += await _apply_cached_quotes(
-                session,
-                jurisdiction_candidates,
-                now=started_at,
-            )
-
             if jurisdiction == JURISDICTION_US:
                 movers, calls, vendor_errors = await fetch_us_movers()
                 vendor_calls += calls
@@ -172,6 +164,11 @@ async def run_radar_scan(
             jurisdiction_candidates = [
                 item for item in candidates.values() if item.jurisdiction == jurisdiction
             ]
+            # Include newly discovered names when looking for verified cached
+            # observations; discovery receipt times cannot displace them.
+            cache_hits += await _apply_cached_quotes(
+                session, jurisdiction_candidates, now=datetime.now(timezone.utc)
+            )
             missing = _quote_targets(jurisdiction_candidates, jurisdiction)
             live_quotes: dict[str, LiveQuote] = {}
             if missing and (state.allows_live_quotes or force):
@@ -278,15 +275,19 @@ async def run_radar_scan(
         await session.commit()
     except Exception as exc:
         logger.exception("radar_scan_failed")
-        run.status = "failed"
-        run.finished_at = datetime.now(timezone.utc)
-        run.jurisdictions_scanned = scanned
-        run.jurisdictions_skipped = skipped
-        run.vendor_calls = vendor_calls
-        run.cache_hits = cache_hits
-        run.catalog_count = catalog_count
-        run.errors = errors + [{"error": str(exc)}]
-        run.notes = notes
+        # Roll back quotes, catalog changes, snapshots and annotations together.
+        # A database error also requires rollback before any further SQL.
+        await session.rollback()
+        run = RadarRun(
+            id=run_id, started_at=started_at, finished_at=datetime.now(timezone.utc),
+            status="failed", triggered_by_user_id=triggered_by_user_id,
+            jurisdictions_requested=requested, jurisdictions_scanned=scanned,
+            jurisdictions_skipped=skipped, vendor_calls=vendor_calls,
+            cache_hits=cache_hits, catalog_count=catalog_count,
+            errors=errors + [{"error": type(exc).__name__, "message": "Scan failed; all scan writes were rolled back."}],
+            notes=notes,
+        )
+        session.add(run)
         await session.commit()
         return run
 
@@ -318,22 +319,22 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
         # A discovery list's receipt time does not supersede a verified quote.
         existing_time = _parse_iso_datetime(str(existing.evidence.get("quote_as_of") or ""))
         incoming_time = _parse_iso_datetime(str(item.evidence.get("quote_as_of") or ""))
-        replace_tape = existing_time is None or (incoming_time is not None and incoming_time >= existing_time)
-        if replace_tape and item.price is not None:
+        replace_tape = (item.price is not None or incoming_time is not None) and (
+            existing_time is None or (incoming_time is not None and incoming_time >= existing_time)
+        )
+        if replace_tape:
+            _clear_observation_evidence(existing)
             existing.price = item.price
             existing.previous_close = item.previous_close
-        if replace_tape and item.change_pct is not None:
             existing.change_pct = item.change_pct
-        if replace_tape and item.volume is not None:
             existing.volume = item.volume
-        if item.avg_volume is not None:
-            existing.avg_volume = item.avg_volume
+            existing.volume_ratio = item.volume_ratio
+            existing.source = item.source
+            existing.source_as_of = item.source_as_of
+            if item.avg_volume is not None:
+                existing.avg_volume = item.avg_volume
         if item.sector and not existing.sector:
             existing.sector = item.sector
-        if replace_tape and item.source:
-            existing.source = item.source
-        if replace_tape and item.source_as_of:
-            existing.source_as_of = item.source_as_of
         existing.always_watched = existing.always_watched or item.always_watched
         existing.on_watchlist = existing.on_watchlist or item.on_watchlist
         existing.in_portfolio = existing.in_portfolio or item.in_portfolio
@@ -342,13 +343,31 @@ def _merge(target: dict[str, RadarCandidate], incoming: Iterable[RadarCandidate]
         )
         existing.pinned_prior = existing.pinned_prior or item.pinned_prior
         existing.is_catalog_member = existing.is_catalog_member or item.is_catalog_member
+        discovery_lists = list(dict.fromkeys([
+            *existing.evidence.get("discovery_lists", []),
+            *item.evidence.get("discovery_lists", []),
+        ]))
         existing.evidence.update({key: value for key, value in item.evidence.items()
-                                  if replace_tape or key not in {"quote_as_of", "quote_source"}})
+                                  if replace_tape or key in {"catalog_source", "liquidity_rank"}})
+        if discovery_lists:
+            existing.evidence["discovery_lists"] = discovery_lists
         if item.sparkline:
             existing.sparkline = item.sparkline
         for flag in item.flags:
             if flag not in existing.flags:
                 existing.flags.append(flag)
+
+
+def _clear_observation_evidence(candidate: RadarCandidate) -> None:
+    """Derived confirmations belong to one observation and must be recomputed."""
+    candidate.volume_ratio = None
+    for key in (
+        "price_return_zscore", "volume_zscore", "volume_ratio",
+        "sector_benchmark", "sector_benchmark_return_pct", "sector_relative_return_pct",
+        "relative_gap", "scan_delta_change_pct", "scan_delta_price_pct",
+        "scan_minutes_since_prior", "scan_state", "scan_comparison_gap",
+    ):
+        candidate.evidence.pop(key, None)
 
 
 def _assess_observations(candidates: list[RadarCandidate], now: datetime) -> None:
@@ -389,6 +408,7 @@ def _apply_quotes(candidates: dict[str, RadarCandidate], quotes) -> None:
         current = _parse_iso_datetime(str(item.evidence.get("quote_as_of") or ""))
         if current is not None and _aware_utc(quote.as_of) < current:
             continue
+        _clear_observation_evidence(item)
         item.price = quote.price
         item.previous_close = quote.previous_close
         item.change_pct = quote.change_pct
@@ -438,13 +458,10 @@ async def _apply_cached_quotes(
             if candidate.price is None:
                 candidate.stale_reason = "stale quote"
             continue
-        if candidate.price is not None and candidate.source in RADAR_VENDOR_QUOTE_SOURCES:
+        current = _parse_iso_datetime(str(candidate.evidence.get("quote_as_of") or ""))
+        if current is not None and _aware_utc(quote.as_of) <= current:
             continue
-        if candidate.price is not None and candidate.source_as_of is not None:
-            quote_as_of = _aware_utc(quote.as_of)
-            candidate_as_of = _aware_utc(candidate.source_as_of)
-            if quote_as_of < candidate_as_of:
-                continue
+        _clear_observation_evidence(candidate)
         candidate.price = quote.price
         candidate.previous_close = quote.previous_close
         candidate.change_pct = quote.change_pct
@@ -987,6 +1004,9 @@ def _apply_sector_relative(candidates: list[RadarCandidate]) -> None:
     """Benchmark each name against its sector ETF pulse, not against peers."""
     by_ticker = {candidate.ticker: candidate for candidate in candidates}
     for candidate in candidates:
+        for key in ("sector_benchmark", "sector_benchmark_return_pct",
+                    "sector_relative_return_pct", "relative_gap"):
+            candidate.evidence.pop(key, None)
         if candidate.stale_reason or candidate.carried_forward:
             continue
         if candidate.change_pct is None:
