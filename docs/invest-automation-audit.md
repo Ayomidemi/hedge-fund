@@ -1,12 +1,12 @@
 # Invest automatic trading readiness audit
 
-7 October 2026. Scope: audit and implementation design for **a separate Invest paper account**, as requested. This audit does not enable automation, reset balances, transfer Capital money, or alter existing orders. Production code changes already present from the Capital audit were preserved.
+Originally audited 7 October; revalidated against the current code on **15 October 2026**. Scope: audit and implementation design for **a separate Invest paper account**, as requested. This audit does not enable automation, reset balances, transfer Capital money, or alter existing orders.
 
 ## Decision
 
 Invest can support automatic paper trading, but adding a toggle to the current instant-fill broker would produce unreliable execution and accounting. Reuse the market-data, signal-validation, sizing and order-transition logic from Capital, with an Invest-specific account/ledger adapter. Keep separate account locks, budgets, orders, positions, performance and permissions. Do not call Capital's account-bound engine or `/paper-fund` endpoints on behalf of Invest users.
 
-The read-only account check found an active USD PAPER account with **$90,542.24 cash, three open positions and five filled orders**. Its configured starting cash is $100,000; this is not Capital's $10,000 account. The automatic allocation remains an explicit setup decision. Existing cash and holdings should be preserved, with automation disabled by default until the account is configured.
+The **7 October** read-only account check found an active USD PAPER account with $90,542.24 cash, three open positions and five filled orders. Those are historical observations, not a current balance check. The code's default starting cash remains $100,000; an existing balance or deployment override must be read at setup. This is separate from Capital's $10,000 account. The automatic allocation remains an explicit setup decision. Existing cash and holdings should be preserved, with automation disabled by default until the account is configured.
 
 ## Findings, ordered by importance
 
@@ -32,6 +32,8 @@ The deployed policy currently allows only market orders. Merely adding `limit` t
 
 `get_cached_quote_price` checks only the stored `is_stale` flag, not current age. The probe accepted a three-day-old timestamp with the flag cleared. Its fetch fallback also returns a price without an execution-age gate, and can select the first returned symbol if the requested symbol is absent. This helper is a valuation/cache helper, not a sufficient execution gate.
 
+**Newly reproduced on 15 October:** requesting `TEST` when the provider returns only `OTHER` accepts `OTHER`'s price. Also, the real broker warning branch accepts a $3,000 purchase against $10,000 equity with no concentration warning at a configured 25% threshold. It divides by `equity + purchase`, reporting about 23.1% instead of 30%; spending existing cash does not add equity. The numerator also needs existing holdings in the same instrument. Concentration must become a post-trade hard gate for automation, including pending orders and manual positions.
+
 **Required:** account-active and PAPER-provider checks; exact-symbol/currency verification; market-calendar and provider-time validation; hard risk limits before both reservation and fill. Reuse the validated Tiingo-reference handling and disclose simulated pricing. Keep closed, stale, missing and future-dated data fail-closed.
 
 ### 4. High: pending orders cannot reserve cash or stock
@@ -54,6 +56,8 @@ After an automated strategy closes all positions, the existing display can show 
 
 **Required:** separate Invest run/strategy state, persisted mode, allocation and hard risk policy; idempotent signal/order intents; restart recovery; account-scoped leases/locks; a visible heartbeat and execution blockers. Do not expose Capital permissions or internal account data through Invest routes.
 
+Invest Discover and market-radar priority are candidate discovery, not executable buy instructions. Define a versioned Invest strategy that produces a side, entry rule, expiry, exit plan and maximum loss; then size it against the Invest account. Neither an AI research recommendation nor a high radar score alone should authorize an order.
+
 ### 7. Product scope: bonds need a different automatic strategy
 
 Invest supports bills, bonds, cash-equivalents and foreign-currency products. Current fixed-income paper fills can use dirty-price/model marks. The inspected worker schedule has no automatic coupon, maturity redemption or reinvestment lifecycle. A US-equity momentum engine cannot be applied unchanged to these instruments.
@@ -72,13 +76,24 @@ Invest supports bills, bonds, cash-equivalents and foreign-currency products. Cu
 | API/security | Add owner-scoped `/invest/automation` status and mode/configuration endpoints guarded by `require_invest_user`. Validate provider, account status, budget and policy server-side. |
 | UI | One Manual/Automatic toggle backed by server state; show allocated budget, cash, reserved cash, available buying power, pending orders, managed positions, realized/unrealized P/L and last worker check. Existing manual holdings remain visible. Clearly identify automatic orders and why an enabled account is waiting. |
 
-Manual mode should cancel unfilled automatic entries and stop automatic buys/sells without selling or deleting positions just because the toggle changed. An already committed fill remains a fill. Persist the transition under the account lock. The UI must make the pause's effect on planned exits explicit. A manual sale must resize or release the corresponding automatic plan so it cannot later oversell the same shares.
+Define pause semantics before implementing the toggle. Recommended: Manual mode stops new automatic entries and cancels unfilled automatic entry orders; already armed protective exits remain active and are explicitly labeled in the UI. Provide a separate, clearly labeled stop-all control if the user needs all automatic orders paused. This is a proposed policy, not existing behavior. Never sell or delete positions merely because the toggle changed. An already committed fill remains a fill. Persist mode transitions under the account lock and recheck mode at order acceptance. A manual sale must resize or release the corresponding automatic plan so it cannot later oversell the same shares.
 
 The worker must size against both the configured automation allocation and the whole account's cash/exposure limits. Separate Invest cash does not mean existing manual holdings can be ignored. An automatic position should never spend Capital funds or create a deposit in either account.
 
+Expose account-specific Low / Medium / High risk presets as concrete, versioned limits: maximum loss per position, single-name and sector exposure, total invested exposure, minimum cash reserve, daily loss and drawdown stops. All presets must retain quote/session validation and cash reconciliation. High risk must not bypass those invariants. Select numerical limits through paper evaluation rather than copying Capital's account settings implicitly.
+
+## Data preparation and performance
+
+- The new history-preparation queue in `services/paper_fund/history.py` selects the US catalog, recent radar discoveries and Capital `Position` holdings. It does **not** explicitly prioritize Invest `RetailPosition` holdings or pending Invest orders. Some Invest names enter via the shared catalog/discoveries, but coverage is not guaranteed. Include Invest managed holdings and executable candidates before enabling historical risk/scoring checks.
+- The shared quote universe already includes Invest positions/watchlists, but not pending Invest orders. Add accepted pending orders so their fills and expiry checks receive timely quotes.
+- Fetch/deduplicate quotes by instrument across accounts, compute reusable market features once per observation, and keep provider calls outside account write locks. Currently `accounts.submit_order` locks the account before instrument, FX, policy and broker work; the broker can then fetch a quote and value positions while holding that lock. Under automation this can delay manual orders and other account writes.
+- Serialize only each account's cash/reservation transaction. Multiple symbols can have pending orders and fill in the same cycle; one position must not block the next eligible opportunity. Different accounts can run concurrently with bounded concurrency. Never hold an account lock while waiting for a limit price.
+- Use bounded account batches, deadlines, provider backoff and task deduplication. Protect Capital execution latency with a dedicated Invest queue or measured worker capacity/fairness; adding a busy Invest loop to the existing single execution worker is not sufficient.
+- Measure cycle duration, account-lock wait, quote age, order acceptance-to-fill time, provider requests, SQL queries and delayed/missed cycles. Dashboard status should read persisted worker state; loading a page must not scan markets or execute orders.
+
 ## Delivery sequence and acceptance criteria
 
-1. **Fix financial invariants first:** fresh locked state, exact-once cash/fill accounting, complete realized P/L, hard execution gates. Reproduce and close the six readiness probes below.
+1. **Fix financial invariants first:** fresh locked state, exact-once cash/fill accounting, complete realized P/L, hard execution gates. Close the eight reproduced readiness gaps below with regression tests.
 2. **Implement the Invest order lifecycle:** limits, reservations, expiry, later-observation fills and managed exits. Test each transition independently of a running worker.
 3. **Add shared-core adapter and worker:** simulate duplicate delivery, worker crashes/restarts, overlapping cycles and provider failures. Verify Capital and Invest cannot touch each other's books, even for the same user.
 4. **Expose control and reporting:** server-persisted toggle and explicit budget, common balances across Home/Portfolio/Cash/Orders, clear blocked/stale states, weekly realized/unrealized results.
@@ -88,9 +103,10 @@ Must-pass scenarios include simultaneous manual and automatic orders, competing 
 
 ## Evidence and validation
 
-- Read-only inspection of the existing Invest account/policies; no runtime configuration or financial records changed.
-- Existing Invest unit suite: **61 tests passed**. These do not establish automatic-trading readiness.
-- `backend/audits/invest_automation.py`: **six readiness gaps reproduced**. Four API/risk/cache/balance probes use local objects and mocks; two lock probes use real PostgreSQL sessions in a disposable schema. All six reported `gap_present: true`; these are findings, not six passing safety tests.
+- Current source inspection and isolated probes; no runtime configuration or financial records changed. The account/policy inspection cited above was from 7 October and was not repeated against the application database today.
+- Existing Invest unit suite, rerun 15 October: **61 tests passed**. These do not establish automatic-trading readiness.
+- Broader validation on 15 October: **374 backend unit tests**, **50 PostgreSQL integration/migration tests**, and **9 frontend helper tests** passed. Frontend TypeScript and targeted ESLint checks passed after correcting four type errors left in the radar UI work. The new compact-radar integration test checks observation equivalence, owner-specific watchlist membership, deferred-data loading and reduced fixture payload size. These checks do not include a browser visual review or prove live page-load timings.
+- `backend/audits/invest_automation.py`, rerun 15 October: **eight readiness gaps reproduced**. Six API/risk/cache/broker/balance probes use local objects and mocks; two lock probes use real PostgreSQL sessions in a disposable schema. All eight reported `gap_present: true`; these are findings, not eight passing safety tests. No provider requests were made.
 - The lock probe creates and drops its own schema and rejects non-local or non-`*_test` database URLs. Run from `backend` with `HF_TEST_DATABASE_URL` explicitly pointing to the disposable test database.
 - A separate import-order issue surfaced when importing the broker directly: brokerage and Invest package initializers eagerly import each other. The probe uses the application's working import order. Remove that coupling while extracting a reusable core so a new standalone worker can import its services reliably.
 

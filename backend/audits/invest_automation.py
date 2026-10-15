@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -29,7 +29,9 @@ from app.db.locks import lock_retail_account
 from app.models import RetailAccount
 from app.services.invest.risk import evaluate_order_risk
 from app.services.brokerage.paper import PaperBrokerProvider, _balances
-from app.services.market_data.quote_cache import get_cached_quote_price
+from app.services.brokerage.protocol import SubmitOrderRequest
+from app.services.invest.configuration import PaperBrokerPolicy
+from app.services.market_data.quote_cache import get_cached_quote_price, get_or_fetch_quote_price
 
 D = Decimal
 
@@ -92,6 +94,31 @@ async def main():
                             as_of=datetime.now(timezone.utc)-timedelta(days=3))
     price = await get_cached_quote_price(SimpleNamespace(scalar=AsyncMock(return_value=quote)), 'TEST')
     report('quote_reader_accepts_old_timestamp_when_flag_is_clear', price == quote.price, price=price)
+    wrong_quote = SimpleNamespace(ticker='OTHER', price=D('999'))
+    with patch('app.services.market_data.quote_cache.get_cached_quote_price', AsyncMock(return_value=None)), \
+         patch('app.services.market_data.quote_cache.fetch_quotes', AsyncMock(return_value={'OTHER': wrong_quote})):
+        price = await get_or_fetch_quote_price(SimpleNamespace(), 'TEST')
+    report('quote_reader_accepts_different_symbol', price == wrong_quote.price,
+           requested_symbol='TEST', returned_symbol='OTHER', price=price)
+
+    # Exercise the real broker warning branch, with all persistence/provider
+    # boundaries mocked. A cash-funded purchase does not increase total equity.
+    broker = PaperBrokerProvider(SimpleNamespace(add=Mock(), flush=AsyncMock()))
+    account = SimpleNamespace(id=uuid4(), user_id='probe', base_currency='USD', cash_balance=D('10000'))
+    instrument = SimpleNamespace(id=uuid4(), ticker='TEST', currency='USD', asset_class='equity', sector='Technology')
+    broker._load_account = AsyncMock(return_value=account)
+    broker._load_instrument = AsyncMock(return_value=instrument)
+    broker._equity = AsyncMock(return_value=D('10000'))
+    broker._cash_amount = AsyncMock(return_value=D('3000'))
+    broker._apply_buy = AsyncMock()
+    policy = PaperBrokerPolicy(frozenset({'market'}), frozenset({'BUY', 'SELL'}), D('.25'),
+                               True, D('.00000001'), D('.000001'), D('.01'))
+    with patch('app.services.brokerage.paper.get_typed_paper_broker_policy', AsyncMock(return_value=policy)), \
+         patch('app.services.brokerage.paper.get_fixed_income_product_db', AsyncMock(return_value=None)), \
+         patch('app.services.brokerage.paper.get_or_fetch_quote_price', AsyncMock(return_value=D('100'))):
+        result = await broker.submit_order('probe', SubmitOrderRequest(symbol='TEST', side='BUY', notional=D('3000')))
+    report('concentration_warning_misses_30pct_purchase_at_25pct_threshold', not result.warnings,
+           actual_weight_pct=30, threshold_pct=25, warnings=result.warnings)
     with patch('app.services.invest.risk.session_for', return_value=SimpleNamespace(is_open=False, label='US market')):
         risk = evaluate_order_risk(account=SimpleNamespace(cash_balance=D('10000'), base_currency='USD'),
             instrument=SimpleNamespace(ticker='TEST', currency='USD', asset_class='equity'),

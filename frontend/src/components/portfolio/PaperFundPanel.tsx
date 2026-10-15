@@ -150,7 +150,7 @@ export function PaperFundPanel({
   return <div className="mx-auto max-w-[1440px] space-y-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">{mode === "queue" ? "Opportunity queue" : mode === "radar" ? "Your capital" : "Portfolio overview"}</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">{mode === "queue" ? "Opportunity queue" : "Portfolio overview"}</h2>
         <p className="mt-1 text-xs text-zinc-500">{overview?.capital?.portfolio.name ?? "Capital account"}</p>
       </div>
       {controls}
@@ -214,10 +214,9 @@ export function PaperFundPanel({
       {!automatic && positions.length > 0 ? <p className="text-xs text-amber-700 dark:text-amber-400">{forcedLiquidation ? "Required liquidation remains active in Manual mode." : "Ordinary exit plans are paused in Manual mode. Stops and targets will not execute automatically."}</p> : null}
       {history.length > 0 ? <OrderTable title="Execution history" orders={history} kind="history" empty="No executions yet." /> : null}
     </> : null}
-    {mode === "radar" ? <Link href="/opportunity-queue" className="inline-flex items-center gap-3 text-xs font-medium hover:underline">View execution queue<CapitalIcon name="arrow" /></Link> : null}
 
     {overview ? <div className="divide-y divide-zinc-200/70 border-y border-rule dark:divide-zinc-800 dark:border-rule">
-      {mode !== "radar" ? <details className="py-4">
+      <details className="py-4">
         <summary className="cursor-pointer text-xs font-medium text-zinc-500">Automatic trading rules · <span className="capitalize">{overview.policy.profile ?? "medium"} risk</span></summary>
         <dl className="mt-5 grid grid-cols-2 gap-x-5 gap-y-4 text-sm md:grid-cols-3">
           <Rule label="Maximum stock position" value={`${overview.policy.max_position_pct}% of account value`} />
@@ -232,7 +231,7 @@ export function PaperFundPanel({
         </dl>
         <Link href="/settings" className="mt-4 inline-block text-xs underline">Change risk profile in Settings</Link>
         <p className="mt-4 text-xs leading-5 text-zinc-500">Stops trigger simulated exits; gaps can exceed the planned loss. Fees: {overview.policy.fee_bps} bps; slippage assumption: {overview.policy.slippage_bps} bps.</p>
-      </details> : null}
+      </details>
       {overview.blockers.length ? <details open={automatic && queued.length === 0} className="py-4">
         <summary className="cursor-pointer text-xs font-medium text-zinc-500">{automatic && queued.length === 0 ? "Why no new trades" : "Execution checks"} <span className="ml-1 text-zinc-500 dark:text-zinc-400">({overview.blockers.length})</span></summary>
         <ul className="mt-3 list-disc space-y-2 pl-4 text-xs leading-5 text-zinc-500">{overview.blockers.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>

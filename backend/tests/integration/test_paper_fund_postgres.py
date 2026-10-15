@@ -242,6 +242,47 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             self.assertEqual(result.industries[0].flagged_count, 1)
             self.assertIsNone(next(row for row in result.working_set if row.ticker == 'STALE').radar_priority)
 
+    async def test_compact_radar_preserves_observations_without_duplicate_payloads(self):
+        from app.models import RadarWatchlistItem
+        from app.services.market_radar.overview import build_radar_overview
+        _, run_id = await self.seed_signal()
+        async with self.factory() as session:
+            run = await session.get(RadarRun, run_id)
+            run.working_set_count = 1
+            row = await session.scalar(select(RadarSnapshot).where(RadarSnapshot.run_id == run_id))
+            row.in_working_set = True
+            row.flags = ['price_move']
+            row.sparkline = [{'price': '100'}, {'price': '101'}, {'price': '102'}]
+            row.evidence = {'return_sample_count': 30, 'history_gap': False,
+                            'on_watchlist': True, 'large_provider_detail': 'x' * 5000}
+            ticker = row.ticker
+            session.add(RadarWatchlistItem(owner_user_id=self.owner, ticker=ticker, name='Test', jurisdiction='US'))
+            await session.commit()
+        # Separate sessions ensure the compact query really works with its
+        # deferred sparkline, rather than reusing a fully loaded ORM object.
+        async with self.factory() as session:
+            full = await build_radar_overview(session, owner_user_id=self.owner)
+        async with self.factory() as session:
+            with patch('app.services.market_radar.overview.list_watchlist',
+                       AsyncMock(side_effect=AssertionError('Compact view must not load watchlist history'))):
+                compact = await build_radar_overview(session, owner_user_id=self.owner, compact=True)
+        self.assertEqual(compact.working_set_count, full.working_set_count)
+        self.assertEqual(compact.flagged_count, full.flagged_count)
+        self.assertEqual(compact.p1_count, full.p1_count)
+        for a, b in zip(compact.working_set, full.working_set, strict=True):
+            for key in ('ticker', 'price', 'radar_priority', 'priority_reasons', 'source_as_of',
+                        'stale_reason', 'carried_forward', 'on_watchlist', 'in_portfolio'):
+                self.assertEqual(getattr(a, key), getattr(b, key), key)
+            self.assertEqual(a.evidence['return_sample_count'], 30)
+            self.assertEqual(a.sparkline, [])
+        self.assertTrue(compact.working_set[0].on_watchlist)
+        self.assertEqual(compact.flagged, [])
+        self.assertTrue(all(not industry.names for industry in compact.industries))
+        self.assertLess(len(compact.model_dump_json()), len(full.model_dump_json()) / 2)
+        async with self.factory() as session:
+            other = await build_radar_overview(session, owner_user_id='another-owner', compact=True)
+        self.assertFalse(other.working_set[0].on_watchlist)
+
     async def test_multiple_entries_fill_together_and_existing_positions_do_not_block_new_entries(self):
         first, radar_id = await self.seed_signal(stock_cap="5")
         second, _ = await self.seed_signal(radar_id=radar_id, stock_cap="5")

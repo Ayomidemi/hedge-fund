@@ -20,7 +20,7 @@ const number = (value: unknown, suffix = "", signed = false) => value !== null &
 export function MarketRadar({ initialOverview }: { initialOverview: MarketRadarOverview | null }) {
   const [updated, setUpdated] = useState<MarketRadarOverview | null>(null);
   const overview = updated && (!initialOverview || updated.generated_at >= initialOverview.generated_at) ? updated : initialOverview;
-  const [market, setMarket] = useState("all");
+  const [market, setMarket] = useState<"all" | "US" | "NG">("all");
   const [industry, setIndustry] = useState("");
   const [query, setQuery] = useState("");
   const [view, setView] = useState<RadarView>("all");
@@ -101,7 +101,7 @@ export function MarketRadar({ initialOverview }: { initialOverview: MarketRadarO
         <div className="flex flex-wrap items-center gap-3 border-b border-rule p-4 dark:border-rule">
           <input type="search" aria-label="Search radar" placeholder="Find a ticker, company or industry" value={query}
             onChange={event => { setQuery(event.target.value); setPage(0); }} className={`${control} min-w-0 flex-1 basis-56`} />
-          <select aria-label="Market" className={control} value={market} onChange={event => { setMarket(event.target.value); setIndustry(""); setPage(0); }}>
+          <select aria-label="Market" className={control} value={market} onChange={event => { setMarket(event.target.value as "all" | "US" | "NG"); setIndustry(""); setPage(0); }}>
             <option value="all">All markets</option><option value="US">United States</option><option value="NG">Nigeria</option>
           </select>
           <select aria-label="Sort observations" className={control} value={sort} onChange={event => { setSort(event.target.value as RadarSort); setPage(0); }}>
