@@ -40,8 +40,8 @@ async def get_or_fetch_quote_price(
 
     symbol = ticker.strip().upper()
     fetched = await fetch_quotes([symbol])
-    live = fetched.get(symbol) or next(iter(fetched.values()), None)
-    if live is None or live.price <= 0:
+    live = fetched.get(symbol)
+    if live is None or live.price <= 0 or live.ticker.strip().upper() != symbol:
         return None
     if instrument_id is not None:
         await persist_quotes(

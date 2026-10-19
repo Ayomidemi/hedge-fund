@@ -19,6 +19,8 @@ from app.api.schemas.invest import (
     InvestProfileActivityResponse,
     InvestProfileResponse,
     InvestTransactionResponse,
+    InvestTradingModeRequest,
+    InvestTradingModeResponse,
     InvestUiConfigResponse,
     InvestWatchlistCreate,
     InvestWatchlistItemResponse,
@@ -75,6 +77,27 @@ async def create_account(
     response = await invest.get_account_response(session, user)
     await session.commit()
     return response
+
+
+@router.post("/trading-mode", response_model=InvestTradingModeResponse)
+async def set_invest_trading_mode(
+    payload: InvestTradingModeRequest,
+    user: AuthenticatedUser = Depends(require_invest_user),
+    session: AsyncSession = Depends(get_session),
+) -> InvestTradingModeResponse:
+    from app.services.invest.automation import set_trading_mode
+
+    try:
+        account = await set_trading_mode(session, user, payload.mode)
+    except invest.InvestError as exc:
+        raise _http_error(exc) from exc
+    return InvestTradingModeResponse(
+        trading_mode=account.trading_mode,
+        automation_status=account.automation_status,
+        halt_reason=account.halt_reason,
+        reserved_cash=account.reserved_cash,
+        blockers=list(account.automation_blockers or []),
+    )
 
 
 @router.get("/profile", response_model=InvestProfileResponse)

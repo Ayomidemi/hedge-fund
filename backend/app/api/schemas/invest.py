@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -56,6 +57,15 @@ class InvestHomeResponse(BaseModel):
     holdings: list[InvestHolding] = Field(default_factory=list)
     headlines: list[str] = Field(default_factory=list)
     quick_actions: list[InvestQuickActionResponse] = Field(default_factory=list)
+    trading_mode: Literal["manual", "automatic"] = "manual"
+    reserved_cash: Decimal = Decimal("0")
+    realized_pnl: Decimal = Decimal("0")
+    automation_status: str = "idle"
+    halt_reason: str | None = None
+    automation_blockers: list[str] = Field(default_factory=list)
+    last_cycle_at: datetime | None = None
+    pending_orders: int = 0
+    managed_positions: int = 0
 
 
 class InvestOrderCreate(BaseModel):
@@ -95,6 +105,19 @@ class InvestOrderResponse(BaseModel):
     broker_provider: str | None = None
     broker_order_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    origin: str = "manual"
+
+
+class InvestTradingModeRequest(BaseModel):
+    mode: Literal["manual", "automatic"]
+
+
+class InvestTradingModeResponse(BaseModel):
+    trading_mode: Literal["manual", "automatic"]
+    automation_status: str
+    halt_reason: str | None = None
+    reserved_cash: Decimal
+    blockers: list[str] = Field(default_factory=list)
 
 
 class InvestCashRequest(BaseModel):

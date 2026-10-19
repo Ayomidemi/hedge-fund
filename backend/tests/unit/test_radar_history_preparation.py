@@ -53,6 +53,7 @@ class HistoryWorkerDeadlineTests(IsolatedAsyncioTestCase):
              patch('app.workers.tasks.paper_fund.HISTORY_JOB_TIMEOUT_SECONDS', 0.02), \
              patch('app.services.paper_fund.history.refresh_risk_history', new=stalled):
             await asyncio.wait_for(_refresh_history(), timeout=1)
-        session_context.__aexit__.assert_awaited_once()
+        self.assertEqual(session_context.__aenter__.await_count, session_context.__aexit__.await_count)
+        self.assertGreaterEqual(session_context.__aexit__.await_count, 1)
         lock_context.__aexit__.assert_awaited_once()
         engine.dispose.assert_awaited_once()

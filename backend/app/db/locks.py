@@ -24,6 +24,7 @@ async def lock_retail_account(
         select(RetailAccount)
         .where(RetailAccount.id == account.id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if locked is None:
         raise RuntimeError("Invest account was not found.")

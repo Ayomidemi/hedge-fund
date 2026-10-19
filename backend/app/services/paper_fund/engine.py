@@ -15,7 +15,9 @@ from app.api.schemas.paper_fund import (
 )
 from app.core.auth import AuthenticatedUser
 from app.db.locks import lock_idempotency_scope, lock_portfolio
-from app.models import Instrument, InstrumentQuote, PaperEquitySnapshot, PaperFundRun, PaperOrder, Position, RadarRun, RadarSnapshot
+from app.models import Instrument, InstrumentQuote, PaperCycleEvent, PaperEquitySnapshot, PaperFundRun, PaperOrder, Position, RadarRun, RadarSnapshot
+from app.services.paper_fund.eligibility import instrument_rejection
+from app.services.paper_fund.reentry import reentry_rejection
 from app.services.portfolio.operating_core import get_or_create_default_portfolio, get_dashboard, load_dashboard_state
 from app.services.paper_fund.capital import bind_book, book_fills, capital_policy, load_book
 from app.services.market_radar.execution import MAX_SIGNAL_AGE_SECONDS, execution_rejection, quote_rejection
@@ -517,14 +519,27 @@ async def _cycle(session: AsyncSession, owner: str, *, now: datetime | None = No
         if order.instrument_id in instruments:
             order.evidence = {**(order.evidence or {}), "asset_class": instruments[order.instrument_id].asset_class}
     def entry_check(order):
+        identity_error = instrument_rejection(instruments.get(order.instrument_id), now)
+        if identity_error:
+            return {"approved": False, "reasons": [identity_error]}
         try:
             return entry_risk(run, orders, order, instruments, histories, now)
         except (ArithmeticError, ValueError, TypeError):
             return {"approved": False, "reasons": ["Invalid risk observations; entry blocked pending fresh data."]}
+    signal_ids = {o.signal_id for o in orders if o.status == "pending" and o.signal_id}
+    pending_signals = {s.id: s for s in await session.scalars(select(RadarSnapshot).where(
+        RadarSnapshot.id.in_(signal_ids)))} if signal_ids else {}
+    def fill_check(order):
+        signal = pending_signals.get(order.signal_id)
+        error = (execution_rejection(signal, quotes.get(order.instrument_id), now) if signal
+                 else "The original radar signal is unavailable; entry must be rescreened.")
+        if error:
+            return {"approved": False, "reasons": [error]}
+        return entry_check(order)
+    before = {o.id: o.status for o in orders}
     if not automatic:
         _cancel_pending(orders, "Manual mode; automatic entry cancelled.")
-    before = [(o.id, o.status) for o in orders]
-    blockers = process_orders(run, orders, quotes, now, automatic_execution=automatic, entry_check=entry_check)
+    blockers = process_orders(run, orders, quotes, now, automatic_execution=automatic, entry_check=fill_check)
     blockers.extend(external_errors)
     if not automatic:
         blockers.insert(0, "Manual mode: ordinary entries and exits are paused; already-triggered liquidation continues.")
@@ -538,22 +553,34 @@ async def _cycle(session: AsyncSession, owner: str, *, now: datetime | None = No
     await session.flush()
     book = await load_book(session, portfolio)
     bind_book(run, orders, book)
+    decisions = []
     if automatic and run.status == "running" and not market_blocker(now) and not external_errors and not daily_loss_blocker(run, orders, now):
         stale_held = any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
         if not stale_held:
-            await _queue_signals(session, run, orders, now, blockers, entry_check=entry_check)
+            await _queue_signals(session, run, orders, now, blockers, entry_check=entry_check, decisions=decisions)
     if run.status == "completed":
         portfolio.trading_mode = "manual"
     run.last_cycle_at = now
     run.blockers = list(dict.fromkeys(blockers))[:30]
     await session.flush()
+    transitions = [{"order_id": str(o.id), "ticker": o.ticker, "from": before.get(o.id),
+                    "to": o.status, "reason": o.exit_reason,
+                    "risk": (o.evidence or {}).get("fill_risk")}
+                   for o in orders if before.get(o.id) != o.status]
+    session.add(PaperCycleEvent(run_id=run.id, recorded_at=now, decisions=decisions,
+                               transitions=transitions, blockers=list(dict.fromkeys(blockers))))
     await _snapshot(session, run, orders, now, book=book,
-                    force=before != [(o.id, o.status) for o in orders] or run.status == "completed")
+                    force=bool(transitions) or run.status == "completed")
     await session.commit()
     return await overview(session, owner, now=now) if include_overview else None
 
 
-async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, blockers: list[str], *, entry_check=None) -> None:
+async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[PaperOrder], now: datetime, blockers: list[str], *, entry_check=None, decisions=None) -> None:
+    decisions = decisions if decisions is not None else []
+    def reject(snapshot, code, reason):
+        decisions.append({"ticker": snapshot.ticker, "signal_id": str(snapshot.id), "outcome": "blocked", "code": code, "reason": reason})
+        if len(blockers) < 30:
+            blockers.append(f"{snapshot.ticker}: {reason}")
     radar_run = await session.scalar(select(RadarRun).where(RadarRun.status == "completed", RadarRun.started_at <= now)
                                       .order_by(RadarRun.started_at.desc(), RadarRun.created_at.desc(), RadarRun.id.desc()).limit(1))
     if radar_run is None:
@@ -565,33 +592,38 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
         .where(RadarSnapshot.run_id == radar_run.id)
         .where(RadarSnapshot.radar_priority.in_(["P0", "P1"]))
         .order_by(RadarSnapshot.priority_score.desc(), RadarSnapshot.ticker))).all())
-    retryable = {o.instrument_id: o for o in orders if o.status in {"cancelled", "expired"} and o.entry_price is None}
-    seen = {o.instrument_id for o in orders if o.instrument_id not in retryable} | {p.instrument_id for p in getattr(run, "_external_holdings", [])}
+    external = {p.instrument_id for p in getattr(run, "_external_holdings", [])}
     added = 0
     for snapshot, instrument, quote in rows:
         if instrument is None:
-            if len(blockers) < 25:
-                blockers.append(f"{snapshot.ticker}: No verified instrument and executable quote have been loaded from the data provider.")
+            reject(snapshot, "instrument_missing", "No verified instrument and executable quote have been loaded from the data provider.")
             continue
-        if instrument.id in seen:
+        if instrument.id in external:
+            reject(snapshot, "manual_holding", "This instrument is already held under manual management.")
             continue
-        prior = retryable.get(instrument.id)
-        if (prior is not None and (prior.exit_reason or "").startswith("Signal invalidated")
-                and (prior.evidence or {}).get("radar_snapshot_id") == str(snapshot.id)):
+        error = reentry_rejection(run, orders, instrument.id, snapshot, now, accounting(run, orders)["equity"])
+        if error:
+            reject(snapshot, "attempt_policy", error)
             continue
-        error = execution_rejection(snapshot, quote, now)
+        error = instrument_rejection(instrument, now) or execution_rejection(snapshot, quote, now)
         if instrument.currency != "USD" or instrument.asset_class not in {"equity", "etf"}:
             error = "Instrument metadata does not match the USD equity mandate."
         if error:
-            if len(blockers) < 25:
-                blockers.append(f"{snapshot.ticker}: {error}")
+            reject(snapshot, "eligibility", error)
             continue
         quantity, limit, stop, target = size_order(run, orders, quote.price, instrument.sector, instrument.asset_class)
         if quantity <= 0:
-            blockers.append(f"{snapshot.ticker}: No capacity under cash, sector, position or risk limits.")
+            reject(snapshot, "capacity", "No capacity under cash, sector, position or risk limits.")
+            continue
+        from app.services.paper_fund.calendar import NEW_YORK
+        day = now.astimezone(NEW_YORK).date()
+        turnover = sum((o.quantity * o.entry_price for o in orders if o.instrument_id == instrument.id
+                        and o.opened_at and o.opened_at.astimezone(NEW_YORK).date() == day), ZERO)
+        if turnover + quantity * limit > accounting(run, orders)["equity"] * Decimal(str(run.policy["max_symbol_daily_turnover_pct"])) / 100:
+            reject(snapshot, "turnover", "Daily entry turnover limit reached for this instrument.")
             continue
         order = PaperOrder(
-            run_id=run.id, instrument_id=instrument.id, ticker=instrument.ticker, name=instrument.name,
+            run_id=run.id, instrument_id=instrument.id, signal_id=snapshot.id, ticker=instrument.ticker, name=instrument.name,
             sector=instrument.sector, status="pending", quantity=quantity,
             limit_price=limit, stop_price=stop, target_price=target,
             entry_fee=ZERO, exit_fee=ZERO, realized_pnl=ZERO,
@@ -607,20 +639,12 @@ async def _queue_signals(session: AsyncSession, run: PaperFundRun, orders: list[
         if entry_check is not None:
             decision = entry_check(order)
             if not decision["approved"]:
-                blockers.append(f"{order.ticker}: " + "; ".join(decision["reasons"]))
+                reject(snapshot, "risk", "; ".join(decision["reasons"]))
                 continue
             order.evidence = {**order.evidence, "queue_risk": decision}
-        if instrument.id in retryable:
-            existing = retryable[instrument.id]
-            previous = {"status": existing.status, "reason": existing.exit_reason, "submitted_at": existing.submitted_at.isoformat()}
-            for column in PaperOrder.__table__.columns:
-                if column.name not in {"id", "created_at", "updated_at"}:
-                    setattr(existing, column.name, getattr(order, column.name))
-            existing.evidence = {**existing.evidence, "previous_attempt": previous}
-        else:
-            session.add(order)
-            orders.append(order)
-        seen.add(instrument.id)
+        session.add(order)
+        orders.append(order)
+        decisions.append({"ticker": snapshot.ticker, "signal_id": str(snapshot.id), "outcome": "queued", "code": "approved", "reason": "Entry checks passed."})
         added += 1
     if not added and not any(o.status == "pending" for o in orders):
         blockers.append("No new radar signal currently passes every execution and capital check.")
@@ -645,6 +669,15 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
     state = {**book.state, "reserved_cash": reserved, "available_cash": money(book.cash - reserved)}
     history = list(await session.scalars(select(PaperEquitySnapshot).where(PaperEquitySnapshot.run_id == run.id)
                                         .order_by(PaperEquitySnapshot.recorded_at)))
+    from app.services.paper_fund.health import worker_health
+    from app.services.paper_fund.reporting import review_diagnostics
+    diagnostics = review_diagnostics(run, book, history, now)
+    diagnostics['workers'] = await worker_health(session, now)
+    last_event = await session.scalar(select(PaperCycleEvent).where(PaperCycleEvent.run_id == run.id)
+                                     .order_by(PaperCycleEvent.recorded_at.desc(), PaperCycleEvent.id.desc()).limit(1))
+    diagnostics['last_decisions'] = last_event.decisions if last_event else []
+    diagnostics['decisions_at'] = last_event.recorded_at if last_event else None
+    diagnostics['profile_stock_cap_pct'] = profile_policy(portfolio.risk_profile)['max_position_pct']
     if len(history) > 500:
         history = [history[round(i * (len(history) - 1) / 499)] for i in range(500)]
     blockers = list(run.blockers)
@@ -668,4 +701,5 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
             closed_at=o.closed_at, exit_reason=o.exit_reason, thesis=o.thesis) for o in orders],
         equity_history=[PaperEquityResponse.model_validate(s) for s in history],
         blockers=list(dict.fromkeys(blockers)), policy=run.policy, simulation_notice=SIMULATION_NOTICE,
+        diagnostics=diagnostics,
     )

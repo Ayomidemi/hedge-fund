@@ -106,6 +106,8 @@ export function PaperFundPanel({
   }
 
   const run = overview?.run;
+  const diagnostics = overview?.diagnostics;
+  const delayedServices = diagnostics?.workers?.filter(worker => worker.status !== "healthy") ?? [];
   const queued = overview?.orders.filter((order) => order.status === "pending") ?? [];
   const positions = overview?.orders.filter((order) => order.status === "open") ?? [];
   const heldCount = overview?.capital?.open_position_count ?? positions.length;
@@ -159,6 +161,7 @@ export function PaperFundPanel({
     {error ? <p role="alert" className="rounded-sm bg-red-50 p-4 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
     {overview && !automatic ? <p role="status" className="border-l-2 border-amber-400 pl-3 text-xs leading-5 text-zinc-500">Manual mode pauses ordinary automatic trading, including stop and target exits. Already-triggered risk or end-of-review liquidation continues until managed positions close.</p> : null}
     {staleCycle ? <p role="status" className="rounded-sm bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">The engine has not reported a cycle for over 90 seconds. Automatic execution may be delayed.</p> : null}
+    {delayedServices.length > 0 ? <p role="status" className="border-l-2 border-amber-400 pl-3 text-xs leading-5 text-muted">Trading services need attention: {delayedServices.map(worker => ({ execution: "order execution", history: "price history preparation", metadata: "instrument verification" }[worker.name] ?? worker.name)).join(", ")}. New entries still require verified data. Refreshing this page does not restart these services.</p> : null}
     {run?.halt_reason ? <p role="status" className="rounded-sm bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{run.halt_reason}</p> : null}
     {run?.status === "liquidating" ? <p className="text-sm text-zinc-500">Positions will close when eligible quotes are available. Profit or loss remains provisional until every position closes.</p> : null}
 
@@ -181,12 +184,15 @@ export function PaperFundPanel({
             {run ? <EquityChart history={overview.equity_history} startingCash={run.starting_cash} /> : <div className="flex min-h-48 items-center justify-center text-center text-xs text-zinc-500">Enable Automatic to begin performance tracking.</div>}
           </div>
           {run ? <div className="border-t border-zinc-100 px-5 py-5 dark:border-rule/80 sm:px-7">
-            <dl className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-4">
-              <div><dt className="text-[11px] text-zinc-500">Net profit / loss</dt><dd className={`mt-1.5 text-lg font-medium tabular-nums ${Number(run.total_pnl) < 0 ? "text-red-600 dark:text-red-400" : Number(run.total_pnl) > 0 ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{money(run.total_pnl)}</dd><dd className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">All time · {Number(run.return_pct).toFixed(2)}%</dd></div>
-              <Rule label="Realized" value={money(run.realized_pnl)} />
+            <dl className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3">
+              <Rule label="Current review P/L" value={money(diagnostics?.review_pnl)} />
+              <div><dt className="text-[11px] text-zinc-500">All-time profit / loss</dt><dd className={`mt-1.5 text-lg font-medium tabular-nums ${Number(run.total_pnl) < 0 ? "text-red-600 dark:text-red-400" : Number(run.total_pnl) > 0 ? "text-emerald-700 dark:text-emerald-400" : ""}`}>{money(run.total_pnl)}</dd><dd className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{Number(run.return_pct).toFixed(2)}% of net contributions</dd></div>
+              <Rule label="Realized · all time" value={money(run.realized_pnl)} />
               <Rule label="Unrealized" value={money(run.unrealized_pnl)} />
-              <Rule label="Max. drawdown" value={`${Number(run.max_drawdown_pct).toFixed(2)}%`} />
+              <Rule label="Recorded max. drawdown" value={`${Number(run.max_drawdown_pct).toFixed(2)}%`} />
+              <Rule label="Cash share of account" value={diagnostics?.cash_pct != null ? `${Number(diagnostics.cash_pct).toFixed(1)}%` : "—"} />
             </dl>
+            {(diagnostics?.market_gap_count ?? 0) > 0 ? <p className="mt-4 border-l-2 border-amber-400 pl-3 text-xs leading-5 text-muted">This review has {diagnostics?.market_gap_count} gaps in market-hour observations. The longest spans {Math.round(diagnostics?.longest_market_gap_minutes ?? 0)} trading minutes. Returns and drawdown do not capture price movements inside those gaps.</p> : null}
             <details className="mt-4 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400"><summary className="w-fit cursor-pointer">About these results</summary><p className="mt-1">Profit / loss excludes deposits and withdrawals and includes {money(run.fees_paid)} in fees. Return is a percentage of net contributions. Drawdown covers this review. The chart includes cash movements.</p></details>
           </div> : null}
         </section>
@@ -230,8 +236,14 @@ export function PaperFundPanel({
           <Rule label="Stop / profit target" value={`${overview.policy.stop_loss_pct}% / ${overview.policy.take_profit_pct}%`} />
         </dl>
         <Link href="/settings" className="mt-4 inline-block text-xs underline">Change risk profile in Settings</Link>
+        {diagnostics?.profile_stock_cap_pct != null && diagnostics.profile_stock_cap_pct > overview.policy.max_position_pct ? <p className="mt-3 text-xs leading-5 text-muted">Your account limit caps each stock at {overview.policy.max_position_pct}%, below the {diagnostics.profile_stock_cap_pct}% profile allowance. Changing the risk profile does not override this account limit.</p> : null}
+        <p className="mt-3 text-xs leading-5 text-muted">Re-entry requires a new signal and a 60-minute cooldown after exit. Each symbol allows at most two fills and four entry attempts per trading day. Leveraged and inverse products are excluded from new automatic entries.</p>
         <p className="mt-4 text-xs leading-5 text-zinc-500">Stops trigger simulated exits; gaps can exceed the planned loss. Fees: {overview.policy.fee_bps} bps; slippage assumption: {overview.policy.slippage_bps} bps.</p>
       </details>
+      {diagnostics?.last_decisions?.length ? <details className="py-4">
+        <summary className="cursor-pointer text-xs font-medium text-zinc-500">Last entry decisions · {when(diagnostics.decisions_at ?? null)}</summary>
+        <ul className="mt-3 space-y-2 text-xs leading-5 text-muted">{diagnostics.last_decisions.map(decision => <li key={`${decision.signal_id}-${decision.code}`}><span className="font-medium text-ink">{decision.ticker}</span> · {decision.reason}</li>)}</ul>
+      </details> : null}
       {overview.blockers.length ? <details open={automatic && queued.length === 0} className="py-4">
         <summary className="cursor-pointer text-xs font-medium text-zinc-500">{automatic && queued.length === 0 ? "Why no new trades" : "Execution checks"} <span className="ml-1 text-zinc-500 dark:text-zinc-400">({overview.blockers.length})</span></summary>
         <ul className="mt-3 list-disc space-y-2 pl-4 text-xs leading-5 text-zinc-500">{overview.blockers.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>

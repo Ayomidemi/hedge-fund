@@ -192,14 +192,21 @@ class PaperBrokerProvider:
             cash_notional = await self._cash_amount(
                 notional, instrument_currency, base_currency
             )
-            if cash_notional > cash_balance:
+            reserved = getattr(account, "reserved_cash", None) or Decimal("0")
+            if cash_notional > cash_balance - reserved:
                 raise BrokerValidationError("Not enough buying power for this order.")
             equity = await self._equity(broker_account_id, cash_balance)
-            if (
-                equity > 0
-                and (cash_notional / (equity + cash_notional))
-                >= policy.concentration_warn_pct
-            ):
+            held = Decimal("0")
+            existing = await self.session.scalar(
+                select(RetailPosition)
+                .where(RetailPosition.account_id == account_id)
+                .where(RetailPosition.instrument_id == instrument_id)
+            )
+            if existing is not None:
+                held = await self._cash_amount(
+                    existing.quantity * mark, instrument_currency, base_currency
+                )
+            if concentration_exceeds(held, cash_notional, equity, policy.concentration_warn_pct):
                 warnings.append(
                     f"This purchase would be a large share of your portfolio "
                     f"({ticker})."
@@ -432,7 +439,7 @@ class PaperBrokerProvider:
             RetailAccount.broker_account_id == broker_account_id
         )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(populate_existing=True)
         account = await self.session.scalar(statement)
         if account is None:
             raise BrokerValidationError("Paper account was not found.")
@@ -555,6 +562,7 @@ class PaperBrokerProvider:
             MONEY
         )
         position.realized_pnl = (position.realized_pnl + realized).quantize(MONEY)
+        account.realized_pnl = ((account.realized_pnl or Decimal("0")) + realized).quantize(MONEY)
         account.cash_balance = (cash_balance + proceeds).quantize(MONEY)
         if position.quantity <= 0:
             await self.session.delete(position)
@@ -660,13 +668,21 @@ def _positive_money(amount: Decimal) -> Decimal:
     return value
 
 
+def concentration_exceeds(existing_value: Decimal, purchase: Decimal, equity: Decimal, threshold: Decimal) -> bool:
+    """Post-trade weight. A cash purchase does not increase total equity."""
+    if equity <= 0:
+        return False
+    return (existing_value + purchase) / equity >= threshold
+
+
 def _balances(account: RetailAccount) -> BrokerBalances:
     cash = account.cash_balance.quantize(MONEY)
+    reserved = Decimal(getattr(account, "reserved_cash", None) or 0).quantize(MONEY)
     return BrokerBalances(
         cash=cash,
-        buying_power=cash,
+        buying_power=max(Decimal("0.00"), cash - reserved),
         currency=account.base_currency,
-        pending=Decimal("0.00"),
+        pending=reserved,
     )
 
 

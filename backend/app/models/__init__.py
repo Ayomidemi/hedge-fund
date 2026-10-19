@@ -111,6 +111,8 @@ class Instrument(Base, TimestampMixin):
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     sector: Mapped[str | None] = mapped_column(String(128))
     industry: Mapped[str | None] = mapped_column(String(128))
+    execution_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
+    metadata_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     positions: Mapped[list["Position"]] = relationship(back_populates="instrument")
     trades: Mapped[list["Trade"]] = relationship(back_populates="instrument")
@@ -1822,6 +1824,27 @@ class RetailAccount(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     cash_balance: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    realized_pnl: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0"
+    )
+    trading_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="manual", server_default="manual"
+    )
+    reserved_cash: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0"
+    )
+    high_water_equity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    max_drawdown_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, default=Decimal("0"), server_default="0"
+    )
+    automation_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="idle", server_default="idle"
+    )
+    halt_reason: Mapped[str | None] = mapped_column(Text)
+    last_cycle_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    automation_blockers: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
 
     orders: Mapped[list["RetailOrder"]] = relationship(back_populates="account")
     positions: Mapped[list["RetailPosition"]] = relationship(back_populates="account")
@@ -1832,6 +1855,15 @@ class RetailAccount(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_invest_accounts_user_id", "user_id"),
         Index("ix_invest_accounts_broker", "broker_provider", "broker_account_id"),
+        CheckConstraint(
+            "trading_mode IN ('manual','automatic')",
+            name="ck_invest_account_trading_mode",
+        ),
+        CheckConstraint(
+            "automation_status IN ('idle','running','paused','halted')",
+            name="ck_invest_account_automation_status",
+        ),
+        CheckConstraint("reserved_cash >= 0", name="ck_invest_account_reserved_cash"),
     )
 
 
@@ -1867,6 +1899,9 @@ class RetailOrder(Base, TimestampMixin):
     idempotency_key: Mapped[str | None] = mapped_column(String(128))
     reject_reason: Mapped[str | None] = mapped_column(Text)
     warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    origin: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="manual", server_default="manual"
+    )
 
     account: Mapped["RetailAccount"] = relationship(back_populates="orders")
     instrument: Mapped["Instrument"] = relationship()
@@ -1977,4 +2012,5 @@ class RetailWatchlistItem(Base, TimestampMixin):
     )
 
 
-from app.models.paper_fund import PaperEquitySnapshot, PaperFundRun, PaperOrder  # noqa: E402,F401
+from app.models.paper_fund import PaperCycleEvent, PaperEquitySnapshot, PaperFundRun, PaperOrder, WorkerHeartbeat  # noqa: E402,F401
+from app.models.invest_automation import InvestManagedOrder  # noqa: E402,F401

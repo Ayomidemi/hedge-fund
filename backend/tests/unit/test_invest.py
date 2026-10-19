@@ -1288,6 +1288,7 @@ class InvestPriceUniverseTests(IsolatedAsyncioTestCase):
             [
                 [],
                 [],  # Active paper-fund orders.
+                [],  # Active Invest automatic plans.
                 [retail_position_id],
                 [watchlist_id],
                 ["BIL"],

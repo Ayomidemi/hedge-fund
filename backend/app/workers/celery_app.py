@@ -26,6 +26,7 @@ celery_app = Celery(
         "app.workers.tasks.radar_scan",
         "app.workers.tasks.news_poll",
         "app.workers.tasks.paper_fund",
+        "app.workers.tasks.invest",
     ],
 )
 
@@ -36,7 +37,10 @@ celery_app.conf.update(
     task_ignore_result=True,
     worker_prefetch_multiplier=1,
     # Long research/data jobs must never occupy the only execution worker.
-    task_routes={"paper_fund.cycle": {"queue": "execution"}},
+    task_routes={"paper_fund.cycle": {"queue": "execution"},
+                 "invest.cycle": {"queue": "invest"},
+                 "paper_fund.refresh_risk_history": {"queue": "preparation"},
+                 "paper_fund.refresh_metadata": {"queue": "preparation"}},
     # A refresh cycle should never outlive the next tick by much.
     task_time_limit=max(settings.price_refresh_interval_seconds * 2, 180),
 )
@@ -68,9 +72,12 @@ def _prime_celery_fast_trace(**_kwargs) -> None:
 
 
 celery_app.conf.beat_schedule = {
+    "capital-metadata": {"task": "paper_fund.refresh_metadata", "schedule": 300.0, "options": {"expires": 300}},
     "capital-risk-history": {"task": "paper_fund.refresh_risk_history", "schedule": 300.0, "options": {"expires": 300}},
     "paper-fund": {"task": "paper_fund.cycle", "schedule": 30.0,
                    "options": {"expires": 30}},
+    "invest-trading": {"task": "invest.cycle", "schedule": 30.0,
+                       "options": {"expires": 30, "queue": "invest"}},
     "price-refresh": {
         "task": "price_refresh.run",
         "schedule": float(settings.price_refresh_interval_seconds),

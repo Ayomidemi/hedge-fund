@@ -1,0 +1,45 @@
+# Worker-only deployment for an always-on host with access to the existing DB.
+# Keep one scheduler for this broker. Stop local workers/beat before cutover.
+x-worker: &worker
+  build: ./backend
+  env_file: ./backend/.env
+  environment:
+    HF_REDIS_URL: redis://redis:6379/0
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 150s
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["broker:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  scheduler:
+    <<: *worker
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "-l", "info", "--schedule", "/state/beat"]
+    volumes: ["scheduler:/state"]
+  execution:
+    <<: *worker
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-l", "info", "-Q", "execution", "-n", "execution@%h", "--concurrency", "1"]
+  invest:
+    <<: *worker
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-l", "info", "-Q", "invest", "-n", "invest@%h", "--concurrency", "1"]
+  preparation:
+    <<: *worker
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-l", "info", "-Q", "preparation", "-n", "preparation@%h", "--concurrency", "1"]
+  data:
+    <<: *worker
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-l", "info", "-Q", "celery", "-n", "data@%h", "--concurrency", "1"]
+
+volumes:
+  broker:
+  scheduler:

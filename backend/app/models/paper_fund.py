@@ -74,9 +74,12 @@ class PaperOrder(Base, TimestampMixin):
     exit_reason: Mapped[str | None] = mapped_column(String(255))
     thesis: Mapped[str] = mapped_column(Text, nullable=False)
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    signal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     __table_args__ = (
-        Index("uq_paper_order_run_instrument", "run_id", "instrument_id", unique=True),
+        Index("uq_paper_order_active_instrument", "run_id", "instrument_id", unique=True,
+              postgresql_where=text("status IN ('pending','open')")),
+        Index("uq_paper_order_signal", "run_id", "instrument_id", "signal_id", unique=True),
         CheckConstraint("quantity > 0 AND stop_price > 0 AND stop_price < limit_price AND target_price > limit_price", name="ck_paper_order_plan"),
         CheckConstraint("status IN ('pending','open','closed','cancelled','expired')", name="ck_paper_order_status"),
     )
@@ -95,3 +98,23 @@ class PaperEquitySnapshot(Base):
     drawdown_pct: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
 
     __table_args__ = (Index("ix_paper_equity_run_time", "run_id", "recorded_at"),)
+
+
+class PaperCycleEvent(Base):
+    """Immutable outcomes and per-symbol entry decisions for one committed cycle."""
+    __tablename__ = "paper_cycle_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("paper_fund_runs.id", ondelete="CASCADE"), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decisions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    transitions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    blockers: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    __table_args__ = (Index("ix_paper_cycle_run_time", "run_id", "recorded_at"),)
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))

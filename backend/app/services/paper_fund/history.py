@@ -5,13 +5,13 @@ from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from time import perf_counter
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.models import (
-    Instrument, MarketPriceBar, Position, RadarHistoryPreparation, RadarRun,
+    Instrument, InvestManagedOrder, MarketPriceBar, Position, RadarHistoryPreparation, RadarRun,
     RadarSnapshot, RadarUniverseMember,
 )
 from app.services.market_radar.watchlist_book import _fill_tiingo_daily
@@ -55,8 +55,11 @@ async def _eligible(session, now):
         RadarSnapshot.jurisdiction == "US", RadarSnapshot.carried_forward.is_(False),
     ).distinct(RadarSnapshot.ticker).order_by(
         RadarSnapshot.ticker, RadarRun.started_at.desc(), RadarRun.created_at.desc(), RadarRun.id.desc())))
-    held = list(await session.scalars(select(Instrument).where(
-        Instrument.id.in_(select(Position.instrument_id).where(Position.quantity > 0)))))
+    held = list(await session.scalars(select(Instrument).where(or_(
+        Instrument.id.in_(select(Position.instrument_id).where(Position.quantity > 0)),
+        Instrument.id.in_(select(InvestManagedOrder.instrument_id).where(
+            InvestManagedOrder.status.in_(["pending", "open"]))),
+    ))))
     # Existing instrument metadata takes precedence over discovery heuristics.
     items = {item.ticker: item for item in [*discoveries, *catalog, *held]}
     known = {item.ticker: item for item in await session.scalars(

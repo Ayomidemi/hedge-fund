@@ -218,6 +218,18 @@ export type PaperFundOverview = {
     drawdown_pct: string;
   }>;
   blockers: string[];
+  diagnostics?: {
+    review_pnl?: string | null;
+    review_return_pct?: string | null;
+    invested_value?: string;
+    cash_pct?: string | null;
+    market_gap_count?: number;
+    longest_market_gap_minutes?: number;
+    profile_stock_cap_pct?: number;
+    workers?: Array<{ name: string; status: string; last_completed_at: string | null }>;
+    decisions_at?: string | null;
+    last_decisions?: Array<{ ticker: string; signal_id: string; outcome: string; code: string; reason: string }>;
+  };
   policy: {
     profile?: CapitalRiskProfile;
     max_etf_position_pct?: number;
@@ -2800,6 +2812,15 @@ export type InvestHome = {
   holdings: InvestHolding[];
   headlines: string[];
   quick_actions: InvestQuickAction[];
+  trading_mode?: "manual" | "automatic";
+  reserved_cash?: string;
+  realized_pnl?: string;
+  automation_status?: string;
+  halt_reason?: string | null;
+  automation_blockers?: string[];
+  last_cycle_at?: string | null;
+  pending_orders?: number;
+  managed_positions?: number;
 };
 
 export type InvestOrder = {
@@ -3125,6 +3146,16 @@ export type InvestConfig = {
 
 export function getInvestHome(options?: ApiRequestOptions) {
   return fetchApi<InvestHome>("/api/invest/home", options);
+}
+
+export function setInvestTradingMode(mode: "manual" | "automatic") {
+  return postApi<{
+    trading_mode: "manual" | "automatic";
+    automation_status: string;
+    halt_reason: string | null;
+    reserved_cash: string;
+    blockers: string[];
+  }, { mode: "manual" | "automatic" }>("/api/invest/trading-mode", { mode });
 }
 
 export function getInvestConfig(options?: ApiRequestOptions) {

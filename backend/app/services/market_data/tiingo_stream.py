@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.models import Instrument, PaperOrder
+from app.models import Instrument, InvestManagedOrder, PaperOrder
 from app.services.market_data.fx_provider import LiveFxRate
 from app.services.market_data.fx_refresh import persist_fx_rate
 from app.services.market_data.ingestion import persist_quotes
@@ -220,6 +220,10 @@ async def run_equity_stream(
             paper_tickers = set(await session.scalars(
                 select(Instrument.ticker).join(PaperOrder, PaperOrder.instrument_id == Instrument.id)
                 .where(PaperOrder.status.in_(["pending", "open"])).distinct()
+            ))
+            paper_tickers.update(await session.scalars(
+                select(Instrument.ticker).join(InvestManagedOrder, InvestManagedOrder.instrument_id == Instrument.id)
+                .where(InvestManagedOrder.status.in_(["pending", "open"])).distinct()
             ))
         us_universe = {
             ticker: ids

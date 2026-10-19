@@ -82,3 +82,4 @@ class PaperFundResponse(BaseModel):
     blockers: list[str]
     policy: dict
     simulation_notice: str
+    diagnostics: dict = Field(default_factory=dict)

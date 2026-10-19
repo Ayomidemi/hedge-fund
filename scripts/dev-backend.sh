@@ -49,6 +49,14 @@ echo "→ Starting automatic execution worker..."
 "$VENV/bin/celery" -A app.workers.celery_app worker -l info --queues execution --hostname 'execution@%h' --concurrency 1 &
 PIDS+=($!)
 
+echo "→ Starting Invest automatic trading worker..."
+"$VENV/bin/celery" -A app.workers.celery_app worker -l info --queues invest --hostname 'invest@%h' --concurrency 1 &
+PIDS+=($!)
+
+echo "→ Starting history and instrument preparation worker..."
+"$VENV/bin/celery" -A app.workers.celery_app worker -l info --queues preparation --hostname 'preparation@%h' --concurrency 1 &
+PIDS+=($!)
+
 echo "→ Starting API at http://${API_HOST}:${API_PORT}"
 "$VENV/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT" --reload &
 PIDS+=($!)

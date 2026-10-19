@@ -57,7 +57,9 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             limit = await session.scalar(select(RiskLimit).where(RiskLimit.portfolio_id == portfolio.id,
                 RiskLimit.limit_type == "max_single_equity_position_pct"))
             limit.threshold_value = D(stock_cap)
-            instrument = Instrument(ticker=ticker, name="Paper test", currency="USD", asset_class="equity", sector="Technology")
+            instrument = Instrument(ticker=ticker, name="Paper test", currency="USD", asset_class="equity", sector="Technology",
+                industry="Software", execution_metadata={"source":"fmp_profile", "symbol":ticker, "product_type":"equity",
+                                                         "currency":"USD", "checked_at":NOW.isoformat()})
             run = await session.get(RadarRun, radar_id) if radar_id else RadarRun(started_at=NOW, finished_at=NOW, status="completed")
             session.add_all([instrument, run])
             await session.flush()
@@ -87,6 +89,22 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             quote.as_of = at
             quote.raw_payload = {"timestamp": int(at.timestamp())}
             await session.commit()
+
+    async def fresh_signal(self, instrument_id, at):
+        async with self.factory() as session:
+            instrument = await session.get(Instrument, instrument_id)
+            old = await session.scalar(select(RadarSnapshot).where(RadarSnapshot.ticker == instrument.ticker)
+                                       .order_by(RadarSnapshot.as_of.desc()).limit(1))
+            values = {col.name: getattr(old, col.name) for col in RadarSnapshot.__table__.columns
+                      if col.name not in {'id','created_at','updated_at','run_id'}}
+            run = RadarRun(started_at=at, finished_at=at, status='completed', working_set_count=1)
+            session.add(run)
+            await session.flush()
+            values.update(as_of=at, source_as_of=at, run_id=run.id)
+            snapshot = RadarSnapshot(**values)
+            session.add(snapshot)
+            await session.commit()
+            return snapshot.id
 
     async def test_radar_history_excludes_current_future_and_duplicate_sources(self):
         from app.services.market_radar.scan import _apply_historical_evidence
@@ -549,7 +567,7 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
     async def test_profile_change_persists_cancels_and_reassesses_pending(self):
         from app.services.paper_fund.settings import risk_settings
         from app.models import Portfolio
-        await self.seed_signal()
+        instrument_id, _ = await self.seed_signal()
         async with self.factory() as session:
             await start_run(session, self.owner, PaperStart(), now=NOW)
         before = await self.call_cycle()
@@ -564,9 +582,13 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
             self.assertEqual(portfolio.trading_mode, 'automatic')
             cancelled = await session.get(PaperOrder, pending.id)
             self.assertEqual(cancelled.status, 'cancelled')
+        unchanged = await self.call_cycle(NOW+timedelta(seconds=15))
+        self.assertFalse(any(o.status == 'pending' for o in unchanged.orders))
+        await self.fresh_signal(instrument_id, NOW+timedelta(seconds=30))
         after = await self.call_cycle(NOW+timedelta(seconds=30))
         queued = next(o for o in after.orders if o.status == 'pending')
-        self.assertEqual(queued.id, pending.id)
+        self.assertNotEqual(queued.id, pending.id)
+        self.assertEqual(next(o for o in after.orders if o.id == pending.id).status, 'cancelled')
         self.assertLess(queued.quantity, pending.quantity)
         self.assertEqual(after.run.cash_balance, before.run.cash_balance)
         self.assertEqual(after.run.started_at, before.run.started_at)

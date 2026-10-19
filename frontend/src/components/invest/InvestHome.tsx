@@ -10,6 +10,7 @@ import type {
   InvestHome as InvestHomeData,
 } from "@/lib/api";
 import { InvestAccountSummary } from "@/components/invest/InvestAccountSummary";
+import { InvestAutomation } from "@/components/invest/InvestAutomation";
 import { money, signedMoney, signedPercent } from "@/components/invest/format";
 
 export function InvestHome({ home }: { home: InvestHomeData | null }) {
@@ -26,7 +27,7 @@ export function InvestHome({ home }: { home: InvestHomeData | null }) {
   return <div className="space-y-9">
     <div className="flex flex-wrap items-end justify-between gap-5">
       <div><p className="mb-2 text-xs text-muted dark:text-muted">Paper account · {home.account.account_number}</p><h2 className="text-3xl sm:text-4xl">Your investments.</h2></div>
-      <Link href="/invest/markets" className={`${buttonPrimaryClassName} gap-8 px-5 py-3`}>Explore investments <span aria-hidden="true">↗</span></Link>
+      <InvestAutomation home={home} />
     </div>
     <InvestAccountSummary home={home} />
     <div className="grid items-start gap-9 xl:grid-cols-[minmax(0,1fr)_300px]">

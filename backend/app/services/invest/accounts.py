@@ -49,6 +49,7 @@ from app.models import (
     RetailPosition,
     RetailTransaction,
     RetailWatchlistItem,
+    InvestManagedOrder,
     SystemLogEntry,
 )
 from app.services.administration.system_log import record_system_log
@@ -280,6 +281,13 @@ async def get_home(
     base_currency = account.base_currency
     created_at = account.created_at
     broker_account_id = account.broker_account_id
+    realized_pnl = account.realized_pnl or Decimal("0")
+    trading_mode = account.trading_mode or "manual"
+    reserved_cash = account.reserved_cash or Decimal("0")
+    automation_status = account.automation_status or "idle"
+    halt_reason = account.halt_reason
+    last_cycle_at = account.last_cycle_at
+    automation_blockers = list(account.automation_blockers or [])
     broker = get_broker_provider(session, broker_provider)
     balances = await broker.get_balances(broker_account_id)
     broker_positions = await broker.get_positions(broker_account_id)
@@ -293,9 +301,22 @@ async def get_home(
             holding.allocation_pct = (
                 (holding.market_value / portfolio_value) * Decimal("100")
             ).quantize(Decimal("0.01"))
-    total_return = sum(
+    unrealized = sum(
         (item.unrealized_pnl for item in holdings), Decimal("0")
     ).quantize(MONEY)
+    total_return = (unrealized + realized_pnl).quantize(MONEY)
+    pending_orders = int(await session.scalar(
+        select(func.count()).select_from(InvestManagedOrder).where(
+            InvestManagedOrder.account_id == account_id,
+            InvestManagedOrder.status == "pending",
+        )
+    ) or 0)
+    managed_positions = int(await session.scalar(
+        select(func.count()).select_from(InvestManagedOrder).where(
+            InvestManagedOrder.account_id == account_id,
+            InvestManagedOrder.status == "open",
+        )
+    ) or 0)
     cost_basis = sum(
         (item.market_value - item.unrealized_pnl for item in holdings), Decimal("0")
     )
@@ -333,6 +354,15 @@ async def get_home(
         holdings=holdings,
         headlines=headlines,
         quick_actions=quick_actions,
+        trading_mode=trading_mode,
+        reserved_cash=reserved_cash,
+        realized_pnl=realized_pnl,
+        automation_status=automation_status,
+        halt_reason=halt_reason,
+        automation_blockers=automation_blockers,
+        last_cycle_at=last_cycle_at,
+        pending_orders=pending_orders,
+        managed_positions=managed_positions,
     )
 
 
@@ -373,6 +403,7 @@ async def submit_order(
     account_id = account.id
     base_currency = account.base_currency
     cash_balance = account.cash_balance
+    spendable = cash_balance - (account.reserved_cash or Decimal("0"))
     broker_provider = account.broker_provider
     broker_account_id = account.broker_account_id
     if payload.amount is None and payload.quantity is None:
@@ -396,7 +427,7 @@ async def submit_order(
         payload.amount,
     )
     risk_assessment = evaluate_order_risk(
-        account=_RiskCash(cash_balance=cash_balance, base_currency=base_currency),
+        account=_RiskCash(cash_balance=spendable, base_currency=base_currency),
         instrument=_RiskName(ticker=ticker, asset_class=asset_class, currency=currency),
         payload=payload,
         fixed_income_product=fixed_income_product,
@@ -643,6 +674,9 @@ async def reset_paper_account(
     broker = get_broker_provider(session, account.broker_provider)
     if not isinstance(broker, PaperBrokerProvider):
         raise InvestValidationError("Only paper accounts can be reset.")
+    from app.services.invest.automation import disarm_for_reset
+
+    await disarm_for_reset(session, account)
     starting_cash = settings.invest_paper_starting_cash.quantize(Decimal("0.01"))
     open_positions = await session.scalar(
         select(func.count())
@@ -1226,6 +1260,7 @@ def _order_response(order: RetailOrder, instrument: Instrument) -> InvestOrderRe
         broker_provider=order.broker_provider,
         broker_order_id=order.broker_order_id,
         warnings=list(order.warnings or []),
+        origin=getattr(order, "origin", None) or "manual",
     )
 
 
