@@ -6,7 +6,8 @@ COMMON = dict(version=VERSION, stop_loss_pct=3, take_profit_pct=6,
               max_liquidity_days=1, max_participation_pct=1,
               correlation_threshold=0.8, reentry_cooldown_minutes=60,
               max_symbol_entries_per_day=2, max_symbol_attempts_per_day=4,
-              max_symbol_daily_turnover_pct=20)
+              max_symbol_daily_turnover_pct=20, hedge_ticker="SPY",
+              hedge_pct=20, borrow_bps_per_day=1)
 PROFILES = {
     "low": dict(max_position_pct=3, max_etf_position_pct=5, risk_per_trade_pct=0.25,
                 max_positions=3, cash_reserve_pct=60, max_drawdown_pct=3,

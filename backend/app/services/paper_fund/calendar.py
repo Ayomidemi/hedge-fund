@@ -3,7 +3,7 @@
 Source: https://www.nyse.com/trade/hours-calendars (2026–2028).
 Fail closed outside the published calendar; refresh this table each year.
 """
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 NEW_YORK = ZoneInfo("America/New_York")
@@ -25,6 +25,18 @@ def market_blocker(now: datetime) -> str | None:
     close = time(13) if day in EARLY_CLOSES[local.year] else time(16)
     if not time(9, 30) <= local.time() < close:
         return "Waiting for the US regular trading session."
+    return None
+
+
+def order_expiry(now: datetime) -> datetime | None:
+    """Day order: the close of the current session, or the next one if it has ended."""
+    local = now.astimezone(NEW_YORK)
+    for offset in range(12):
+        day = local.date() + timedelta(days=offset)
+        probe = datetime.combine(day, time(12), NEW_YORK)
+        bounds = session_bounds(probe)
+        if bounds is not None and now < bounds[1]:
+            return bounds[1]
     return None
 
 

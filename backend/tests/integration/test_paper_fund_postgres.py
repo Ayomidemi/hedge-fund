@@ -174,6 +174,7 @@ class PostgresPaperFundTests(IsolatedAsyncioTestCase):
                  patch('app.services.market_radar.scan.load_catalog_candidates', new=AsyncMock(return_value=[verified])), \
                  patch('app.services.market_radar.scan.fetch_us_movers', new=AsyncMock(return_value=([discovery],3,[]))), \
                  patch('app.services.market_radar.scan.fetch_quotes', new=AsyncMock(return_value={instrument.ticker:live})), \
+                 patch('app.services.market_radar.scan.publish_system_log', new=AsyncMock()), \
                  patch('app.services.market_radar.scan.record_system_log', new=AsyncMock()):
                 radar = await run_radar_scan(session, jurisdictions=['US'])
             self.assertEqual(radar.status, 'completed', radar.errors)

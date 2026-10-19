@@ -9,6 +9,7 @@ from uuid import uuid4
 import app.main  # noqa: F401  # application import order, then the broker
 from app.services.brokerage.paper import _balances, concentration_exceeds
 from app.services.invest.automation import Book, advance
+from app.services.invest.limits import limit_decision, reserve_for
 from app.services.market_data.quote_cache import get_or_fetch_quote_price
 from app.services.paper_fund.engine import fee
 
@@ -147,6 +148,36 @@ class InvestCashTests(TestCase):
         self.assertEqual(balances.buying_power, Decimal("9600.00"))
         self.assertEqual(balances.pending, Decimal("400.00"))
         self.assertEqual(balances.cash, Decimal("10000.00"))
+
+
+    def test_target_sells_half_and_keeps_the_remainder(self):
+        held = plan(
+            status="open", quantity=Decimal("4"), reserved_cash=Decimal("0"),
+            entry_price=Decimal("100"), entry_fee=Decimal("0.20"), entry_quote_at=SUBMITTED,
+            opened_at=SUBMITTED, available_quantity=Decimal("4"),
+        )
+        state = book(reserved_cash=Decimal("0"))
+        later = QUOTED + timedelta(minutes=1)
+        advance(state, [held], {held.instrument_id: quote("107", later)}, [], later)
+        self.assertEqual(held.status, "open")
+        self.assertEqual(held.quantity, Decimal("2.00000000"))
+        self.assertEqual(held.stop_price, Decimal("100"))
+        self.assertIn("pending_scale", held.evidence)
+        self.assertGreater(state.cash, Decimal("10000"))
+
+
+class InvestLimitTests(TestCase):
+    def test_limit_waits_for_a_later_quote_at_or_through_the_price(self):
+        resting = SimpleNamespace(
+            side="BUY", limit_price=Decimal("100"), quantity=Decimal("1"),
+            submitted_at=SUBMITTED, expires_at=NOW + timedelta(hours=2),
+        )
+        self.assertEqual(limit_decision(resting, quote("99", SUBMITTED), NOW), "wait")
+        self.assertEqual(limit_decision(resting, quote("99"), NOW), "fill")
+        self.assertEqual(limit_decision(resting, quote("110"), NOW), "wait")
+        self.assertEqual(reserve_for(Decimal("100"), Decimal("2")), Decimal("200.10"))
+        resting.expires_at = SUBMITTED
+        self.assertEqual(limit_decision(resting, quote("99"), NOW), "expire")
 
 
 class InvestQuoteTests(IsolatedAsyncioTestCase):

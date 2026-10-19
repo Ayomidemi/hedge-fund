@@ -72,10 +72,14 @@ def evaluate_order_risk(
         _check(
             "order_type",
             order_type in risk_policy.allowed_order_types,
-            "Market order accepted for the current paper provider.",
-            "Pease Invest paper V1 only accepts market orders.",
+            "Order type accepted for the current paper provider.",
+            "Pease Invest paper accepts market or limit orders.",
         )
     )
+    if order_type == "limit" and payload.limit_price is None:
+        checks.append(_check("limit_price", False, "Limit price accepted.", "A limit order needs a limit price."))
+    if order_type == "limit" and (fixed_income_product is not None or asset_class in {"bond", "cash_equivalent"}):
+        checks.append(_check("limit_product", False, "Limit accepted.", "Bills and bonds stay immediate."))
     checks.append(
         _check(
             "side",
@@ -118,7 +122,9 @@ def evaluate_order_risk(
                     code="market_hours",
                     level="warning",
                     message=(
-                        f"{session_state.label} is closed. Paper still fills at the last mark."
+                        f"{session_state.label} is closed. A limit rests until the next regular session."
+                        if order_type == "limit"
+                        else f"{session_state.label} is closed. Paper still fills at the last mark."
                     ),
                     passed=True,
                 )

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -11,6 +12,7 @@ from app.services.realtime.events import system_log_entry_event
 from app.services.realtime.redis_bus import publish_event
 
 logger = logging.getLogger(__name__)
+SYSTEM_LOG_PUBLISH_TIMEOUT_SECONDS = 2
 
 
 async def record_system_log(
@@ -22,6 +24,7 @@ async def record_system_log(
     message: str,
     level: str = "info",
     context: dict[str, Any] | None = None,
+    publish: bool = True,
 ) -> SystemLogEntry:
     entry = SystemLogEntry(
         owner_user_id=owner_user_id,
@@ -41,17 +44,28 @@ async def record_system_log(
             "owner_user_id": owner_user_id,
         },
     )
-    # Best-effort live push; failures never block the write.
-    await publish_event(
-        system_log_entry_event(
-            owner_user_id=owner_user_id,
-            level=level,
-            category=category,
-            event=event,
-            message=message,
-        )
-    )
+    if publish:
+        await publish_system_log(entry)
     return entry
+
+
+async def publish_system_log(entry: SystemLogEntry) -> None:
+    """Send a bounded, best-effort notification, including after a commit."""
+    try:
+        async with asyncio.timeout(SYSTEM_LOG_PUBLISH_TIMEOUT_SECONDS):
+            await publish_event(
+                system_log_entry_event(
+                    owner_user_id=entry.owner_user_id,
+                    level=entry.level,
+                    category=entry.category,
+                    event=entry.event,
+                    message=entry.message,
+                )
+            )
+    except TimeoutError:
+        logger.warning("system_log_publish_timed_out")
+    except Exception:
+        logger.warning("system_log_publish_failed", exc_info=True)
 
 
 def _system_log_filters(

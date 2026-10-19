@@ -66,12 +66,16 @@ class InvestHomeResponse(BaseModel):
     last_cycle_at: datetime | None = None
     pending_orders: int = 0
     managed_positions: int = 0
+    gross_exposure: Decimal = Decimal("0")
+    net_exposure: Decimal = Decimal("0")
+    short_exposure: Decimal = Decimal("0")
 
 
 class InvestOrderCreate(BaseModel):
     ticker: str = Field(min_length=1, max_length=32)
     side: str = Field(min_length=3, max_length=8)
     order_type: str = "market"
+    limit_price: Decimal | None = Field(default=None, gt=0)
     amount: Decimal | None = Field(default=None, gt=0)
     quantity: Decimal | None = Field(default=None, gt=0)
     idempotency_key: str | None = Field(default=None, max_length=128)
@@ -97,6 +101,8 @@ class InvestOrderResponse(BaseModel):
     order_type: str
     quantity: Decimal | None
     notional: Decimal | None
+    limit_price: Decimal | None = None
+    expires_at: datetime | None = None
     status: str
     submitted_at: datetime
     filled_at: datetime | None = None

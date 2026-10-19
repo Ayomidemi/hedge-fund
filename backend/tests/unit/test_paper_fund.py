@@ -10,6 +10,7 @@ from app.models import InstrumentQuote, PaperFundRun, PaperOrder, RadarSnapshot
 from app.services.market_radar.execution import execution_rejection, quote_rejection
 from app.services.paper_fund.calendar import market_blocker
 from app.services.paper_fund.engine import POLICY, accounting, process_orders, reservation, size_order
+from app.services.paper_fund.hedge import hedge_levels, hedge_quantity
 
 D = Decimal
 NOW = datetime(2026, 10, 2, 15, tzinfo=timezone.utc)
@@ -120,9 +121,15 @@ class PaperFundTests(TestCase):
         process_orders(run, [order], {order.instrument_id: make_quote(order, "106.11", at=later)}, later)
         self.assertEqual(order.status, "open")
         process_orders(run, [order], {order.instrument_id: make_quote(order, "107", at=later)}, later)
+        self.assertEqual(order.status, "open")
+        self.assertEqual(order.quantity, 5)
+        self.assertTrue(order.evidence["scaled"])
+        self.assertGreater(order.realized_pnl, 0)
+        self.assertLess(order.stop_price, order.limit_price)
+        later_still = later + timedelta(minutes=1)
+        process_orders(run, [order], {order.instrument_id: make_quote(order, "108", at=later_still)}, later_still)
         self.assertEqual(order.status, "closed")
         self.assertEqual(order.exit_reason, "take_profit")
-        self.assertGreater(order.realized_pnl, 0)
 
     def test_manual_mode_stops_discretionary_exits(self):
         run, order = make_run(), make_order()
@@ -279,6 +286,28 @@ class PaperFundTests(TestCase):
             fresh_run = make_run(policy=dict(run.policy))
             process_orders(fresh_run, [order], {order.instrument_id: make_quote(order, str(fillable_quote))}, NOW + timedelta(seconds=30))
             self.assertEqual(order.status, "open", f"sized order at {price} rejected its own planned risk")
+
+
+    def test_spy_hedge_opens_short_and_covers_at_the_stop(self):
+        limit, stop, target = hedge_levels(D("100"), POLICY)
+        self.assertLess(target, limit)
+        self.assertGreater(stop, limit)
+        self.assertEqual(hedge_quantity(D("10000"), D("100"), POLICY), 20)
+        order = make_order(
+            direction="short", ticker="SPY", quantity=20, limit_price=limit,
+            stop_price=stop, target_price=target, evidence={},
+        )
+        run = make_run()
+        opened = NOW + timedelta(seconds=30)
+        process_orders(run, [order], {order.instrument_id: make_quote(order, "100", at=opened)}, opened)
+        self.assertEqual(order.status, "open")
+        self.assertGreater(run.cash_balance, D("10000"))
+        opened_cash = run.cash_balance
+        covered = opened + timedelta(minutes=1)
+        process_orders(run, [order], {order.instrument_id: make_quote(order, str(stop + D("1")), at=covered)}, covered)
+        self.assertEqual(order.status, "closed")
+        self.assertEqual(order.exit_reason, "stop_loss")
+        self.assertLess(run.cash_balance, opened_cash)
 
 
 class ExecutionEligibilityTests(TestCase):

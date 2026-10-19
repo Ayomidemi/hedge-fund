@@ -49,6 +49,8 @@ class InstrumentAccumulator:
     remaining_quantity: Decimal = Decimal("0")
     remaining_cost: Decimal = Decimal("0")
     remaining_entry_fees: Decimal = Decimal("0")
+    remaining_short_quantity: Decimal = Decimal("0")
+    remaining_short_cost: Decimal = Decimal("0")
     gross_buys: Decimal = Decimal("0")
     gross_sells: Decimal = Decimal("0")
     gross_realized_pnl: Decimal = Decimal("0")
@@ -342,6 +344,26 @@ def _accumulate_trade_attribution(
             accumulator.remaining_cost += quantity * price
             accumulator.remaining_quantity += quantity
             accumulator.remaining_entry_fees += fees
+            continue
+
+        if trade.side == "sell_short":
+            accumulator.remaining_short_cost += quantity * price
+            accumulator.remaining_short_quantity += quantity
+            continue
+
+        if trade.side == "buy_to_cover":
+            if accumulator.remaining_short_quantity <= 0:
+                if in_period:
+                    warnings.append(f"{trade.instrument.ticker} has a cover without an open short.")
+                continue
+            average_short = accumulator.remaining_short_cost / accumulator.remaining_short_quantity
+            covered = min(quantity, accumulator.remaining_short_quantity)
+            gross_realized = money(covered * (average_short - price) - fees)
+            accumulator.remaining_short_cost -= average_short * covered
+            accumulator.remaining_short_quantity -= covered
+            if in_period:
+                accumulator.gross_realized_pnl = money(accumulator.gross_realized_pnl + gross_realized)
+                accumulator.closed_trade_count += 1
             continue
 
         if in_period:

@@ -38,6 +38,9 @@ class PaperRunResponse(BaseModel):
     last_cycle_at: datetime | None
     completed_at: datetime | None
     halt_reason: str | None
+    gross_exposure: Decimal = Decimal("0")
+    net_exposure: Decimal = Decimal("0")
+    short_exposure: Decimal = Decimal("0")
 
 
 class PaperOrderResponse(BaseModel):
@@ -45,6 +48,7 @@ class PaperOrderResponse(BaseModel):
     ticker: str
     name: str
     status: Literal["pending", "open", "closed", "cancelled", "expired"]
+    direction: str = "long"
     quantity: int
     limit_price: Decimal
     stop_price: Decimal

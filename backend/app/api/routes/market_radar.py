@@ -14,7 +14,7 @@ from app.api.schemas.market_radar import (
 from app.core.auth import AuthenticatedUser, require_authenticated_user
 from app.db.session import get_session
 from app.services.market_radar.overview import build_radar_overview
-from app.services.market_radar.scan import run_radar_scan
+from app.services.market_radar.runner import RadarScanInProgress, run_locked_radar_scan
 from app.services.market_radar.watchlist_book import (
     WatchlistNotFoundError,
     WatchlistValidationError,
@@ -53,12 +53,15 @@ async def create_market_radar_scan(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> MarketRadarRunResponse:
     request = payload or MarketRadarScanRequest()
-    run = await run_radar_scan(
-        session,
-        jurisdictions=request.jurisdictions,
-        force=request.force,
-        triggered_by_user_id=user.id,
-    )
+    try:
+        run = await run_locked_radar_scan(
+            session,
+            jurisdictions=request.jurisdictions,
+            force=request.force,
+            triggered_by_user_id=user.id,
+        )
+    except RadarScanInProgress as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return MarketRadarRunResponse(
         id=run.id,
         started_at=run.started_at,

@@ -179,6 +179,9 @@ export type PaperFundRun = {
   last_cycle_at: string | null;
   completed_at: string | null;
   halt_reason: string | null;
+  gross_exposure?: string;
+  net_exposure?: string;
+  short_exposure?: string;
 };
 
 export type PaperFundOrder = {
@@ -2821,6 +2824,9 @@ export type InvestHome = {
   last_cycle_at?: string | null;
   pending_orders?: number;
   managed_positions?: number;
+  gross_exposure?: string;
+  net_exposure?: string;
+  short_exposure?: string;
 };
 
 export type InvestOrder = {
@@ -2833,6 +2839,8 @@ export type InvestOrder = {
   order_type: string;
   quantity: string | null;
   notional: string | null;
+  limit_price?: string | null;
+  expires_at?: string | null;
   status: string;
   submitted_at: string;
   filled_at: string | null;
@@ -3189,7 +3197,14 @@ export function getInvestOrder(orderId: string, options?: ApiRequestOptions) {
 }
 
 export function createInvestOrder(
-  payload: { ticker: string; side: "BUY" | "SELL"; amount?: string; quantity?: string },
+  payload: {
+    ticker: string;
+    side: "BUY" | "SELL";
+    order_type?: "market" | "limit";
+    amount?: string;
+    quantity?: string;
+    limit_price?: string;
+  },
   options?: ApiRequestOptions,
 ) {
   return postApi<InvestOrder, typeof payload>("/api/invest/orders", payload, options);

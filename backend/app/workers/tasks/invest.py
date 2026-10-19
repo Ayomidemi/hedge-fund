@@ -8,8 +8,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.config import settings
 from app.db.locks import hold_job_lock
 from app.db.session import engine_options
-from app.models import InvestManagedOrder, RetailAccount
+from app.models import InvestManagedOrder, RetailAccount, RetailOrder
 from app.services.invest.automation import cycle_account, refresh_managed_quotes
+from app.services.invest.limits import refresh_resting_quotes
 from app.services.paper_fund.health import track_job
 from app.workers.celery_app import celery_app
 
@@ -41,14 +42,20 @@ async def _execute(factory) -> None:
     async with factory() as session:
         try:
             await refresh_managed_quotes(session)
+            await refresh_resting_quotes(session)
         except Exception:
             await session.rollback()
             failed = True
-            logger.warning("invest_quote_refresh_failed")
+            logger.exception("invest_quote_refresh_failed")
     async with factory() as session:
         active_plan = exists().where(
             InvestManagedOrder.account_id == RetailAccount.id,
             InvestManagedOrder.status.in_(["pending", "open"]),
+        )
+        resting_limit = exists().where(
+            RetailOrder.account_id == RetailAccount.id,
+            RetailOrder.status == "PENDING",
+            RetailOrder.order_type == "limit",
         )
         account_ids = list(await session.scalars(
             select(RetailAccount.id).where(
@@ -58,6 +65,7 @@ async def _execute(factory) -> None:
                     RetailAccount.trading_mode == "automatic",
                     RetailAccount.automation_status == "halted",
                     active_plan,
+                    resting_limit,
                 ),
             )
         ))

@@ -1027,13 +1027,17 @@ async def _rebuild_positions_from_filled_trades(
                 "average_cost": Decimal("0"),
                 "last_price": trade_price,
                 "opened_at": trade.trade_date,
+                "exposure_side": "long",
             },
         )
         state["last_price"] = trade_price
 
         if trade.side == TradeSide.BUY.value:
+            if state.get("exposure_side") == "short":
+                raise CapitalValidationError(f"Buy cannot add to a short {trade.instrument.ticker} position.")
             if state["quantity"] == 0:
                 state["opened_at"] = trade.trade_date
+                state["exposure_side"] = "long"
             previous_cost = state["quantity"] * state["average_cost"]
             new_cost = trade.quantity * trade_price
             new_quantity = state["quantity"] + trade.quantity
@@ -1041,7 +1045,27 @@ async def _rebuild_positions_from_filled_trades(
             state["quantity"] = new_quantity
             continue
 
-        if trade.quantity > state["quantity"]:
+        if trade.side == "sell_short":
+            if state.get("exposure_side") == "long" and state["quantity"] > 0:
+                raise CapitalValidationError(f"Short sale cannot open against a long {trade.instrument.ticker} position.")
+            if state["quantity"] == 0:
+                state["opened_at"] = trade.trade_date
+                state["exposure_side"] = "short"
+            previous_cost = state["quantity"] * state["average_cost"]
+            new_quantity = state["quantity"] + trade.quantity
+            state["average_cost"] = (previous_cost + trade.quantity * trade_price) / new_quantity
+            state["quantity"] = new_quantity
+            continue
+
+        if trade.side == "buy_to_cover":
+            if state.get("exposure_side") != "short" or trade.quantity > state["quantity"]:
+                raise CapitalValidationError(f"Cover exceeds the short {trade.instrument.ticker} position.")
+            state["quantity"] -= trade.quantity
+            if state["quantity"] == 0:
+                state["average_cost"] = Decimal("0")
+            continue
+
+        if trade.quantity > state["quantity"] or state.get("exposure_side") == "short":
             raise CapitalValidationError(
                 f"Sell quantity exceeds available {trade.instrument.ticker} holdings at execution time."
             )
@@ -1065,14 +1089,17 @@ async def _rebuild_positions_from_filled_trades(
 
         mark_price = marks.get(instrument_id, state["last_price"])
         market_value = money(state["quantity"] * mark_price)
+        short = state.get("exposure_side") == "short"
         unrealized_pnl = money(
-            (mark_price - state["average_cost"]) * state["quantity"]
+            (state["average_cost"] - mark_price) * state["quantity"] if short
+            else (mark_price - state["average_cost"]) * state["quantity"]
         )
         session.add(
             Position(
                 portfolio_id=portfolio.id,
                 instrument_id=instrument_id,
                 quantity=state["quantity"],
+                exposure_side="short" if short else "long",
                 average_cost=state["average_cost"],
                 market_value=market_value,
                 unrealized_pnl=unrealized_pnl,
@@ -1101,7 +1128,7 @@ def _trade_cash_ledger_values(
     trade_value = money(trade.quantity * price)
     fees = _trade_fees_in_base(trade, instrument, portfolio, fx_rates)
     amount = -(trade_value + fees)
-    if trade.side == TradeSide.SELL.value:
+    if trade.side in {TradeSide.SELL.value, "sell_short"}:
         amount = trade_value - fees
 
     return {

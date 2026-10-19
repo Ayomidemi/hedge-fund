@@ -1213,7 +1213,7 @@ class InvestPortfolioResponseTests(TestCase):
 
         policy = default_invest_setting("paper_broker_policy")
         self.assertTrue(policy["instant_fills"])
-        self.assertEqual(policy["allowed_order_types"], ["market"])
+        self.assertEqual(policy["allowed_order_types"], ["market", "limit"])
         quantity, notional = _buy_size(
             SubmitOrderRequest(symbol="SPY", side="BUY", notional=Decimal("500")),
             Decimal("100"),

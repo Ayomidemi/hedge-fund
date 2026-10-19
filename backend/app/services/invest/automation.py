@@ -180,6 +180,8 @@ def advance(book: Book, plans: list, quotes: dict, holdings: list, now: datetime
         price = max(CENT, _slip_sell(quote.price))
         if reason == "take_profit" and price < plan.target_price:
             continue
+        if reason == "take_profit" and _scale_plan(book, plan, price, quote.as_of, now):
+            continue
         _sell(book, plan, price, quote.as_of, now, reason)
     if _daily_loss(plans, _equity(book, plans, holdings), now):
         blockers.append("Daily loss limit reached; new entries are paused.")
@@ -341,6 +343,8 @@ async def cycle_account(session: AsyncSession, account_id, *, now: datetime | No
     )
     if account is None or account.broker_provider != "PAPER" or account.status != "active":
         return
+    from app.services.invest.limits import advance_resting_orders
+    limit_reserved = await advance_resting_orders(session, account, now)
     plans = list(await session.scalars(
         select(InvestManagedOrder).where(InvestManagedOrder.account_id == account.id)
         .execution_options(populate_existing=True)
@@ -385,6 +389,10 @@ async def cycle_account(session: AsyncSession, account_id, *, now: datetime | No
     blockers = advance(book, plans, quotes, holdings, now, entry_check=entry_check)
     realized = account.realized_pnl or ZERO
     for plan in plans:
+        pending_scale = (plan.evidence or {}).pop("pending_scale", None)
+        if pending_scale and plan.status == "open":
+            realized += await _book_partial_sell(session, account, plan, pending_scale, now)
+            plan.evidence = {**(plan.evidence or {})}
         if before.get(plan.id) == plan.status:
             continue
         if before.get(plan.id) == "pending" and plan.status == "open":
@@ -395,7 +403,7 @@ async def cycle_account(session: AsyncSession, account_id, *, now: datetime | No
     if accepting and book.marks_reliable and not market_blocker(now) and not _daily_loss(plans, _equity(book, plans, holdings), now):
         await _queue(session, account, book, plans, positions, holdings, now, blockers)
     account.cash_balance = money(book.cash)
-    account.reserved_cash = _reserved(plans)
+    account.reserved_cash = money(_reserved(plans) + limit_reserved)
     account.realized_pnl = money(realized)
     account.high_water_equity = book.high_water_equity
     account.max_drawdown_pct = book.max_drawdown_pct
@@ -582,6 +590,37 @@ async def _book_buy(session, account, plan, now):
     ))
 
 
+async def _book_partial_sell(session, account, plan, scale, now):
+    price = Decimal(scale["price"])
+    quantity = Decimal(scale["quantity"])
+    fee_paid = Decimal(scale["fee"])
+    proceeds = money(price * quantity - fee_paid)
+    position = await session.scalar(
+        select(RetailPosition).where(
+            RetailPosition.account_id == account.id,
+            RetailPosition.instrument_id == plan.instrument_id,
+        ).with_for_update()
+    )
+    if position is None or position.quantity < quantity:
+        raise RuntimeError(f"Partial exit for {plan.ticker} exceeded the Invest position.")
+    realized = money(proceeds - (position.average_cost * quantity))
+    position.quantity = (position.quantity - quantity).quantize(QTY)
+    position.cost_basis = money(position.average_cost * position.quantity)
+    position.realized_pnl = money(position.realized_pnl + realized)
+    if position.quantity <= 0:
+        await session.delete(position)
+    order = _filled_order(account, plan, "SELL", quantity, price, proceeds, now, "Sold half at the target.")
+    session.add(order)
+    await session.flush()
+    session.add(RetailTransaction(
+        account_id=account.id, entry_type="SELL", amount=proceeds, currency=account.base_currency,
+        instrument_id=plan.instrument_id, occurred_at=now, source="paper",
+        broker_reference=order.broker_order_id,
+        description=f"Automatic sale of {quantity} {plan.ticker} at the target. The remainder stays open.",
+    ))
+    return realized
+
+
 async def _book_sell(session, account, plan, now):
     price = Decimal(plan.exit_price)
     quantity = Decimal(plan.quantity)
@@ -635,6 +674,41 @@ def _buy(book, plan, price, quoted_at, now):
     plan.entry_quote_at = quoted_at
     plan.mark_price = price
     plan.mark_as_of = quoted_at
+
+
+def _scale_plan(book, plan, price, quoted_at, now) -> bool:
+    if (plan.evidence or {}).get("scaled"):
+        return False
+    quantity = Decimal(plan.quantity)
+    sold = (quantity / 2).quantize(QTY, rounding=ROUND_FLOOR)
+    remaining = quantity - sold
+    entry = plan.entry_price or plan.limit_price
+    stop = min(entry, plan.limit_price - CENT)
+    if sold <= 0 or remaining <= 0 or not ZERO < stop < plan.limit_price:
+        return False
+    available = plan.available_quantity
+    if available is not None:
+        sold = min(sold, Decimal(available))
+        if sold <= 0 or quantity - sold <= 0:
+            return False
+    exit_fee = fee(price * sold, POLICY)
+    allocated_entry = money(plan.entry_fee * sold / quantity)
+    proceeds = money(price * sold - exit_fee)
+    realized = money((price - entry) * sold - allocated_entry - exit_fee)
+    book.cash = money(book.cash + proceeds)
+    book.realized_pnl = money(book.realized_pnl + realized)
+    plan.entry_fee = money(plan.entry_fee - allocated_entry)
+    plan.quantity = quantity - sold
+    plan.stop_price = stop
+    plan.realized_pnl = money((plan.realized_pnl or ZERO) + realized)
+    plan.exit_fee = money((plan.exit_fee or ZERO) + exit_fee)
+    plan.evidence = {**(plan.evidence or {}), "scaled": True, "pending_scale": {
+        "quantity": str(sold), "price": str(price), "fee": str(exit_fee), "at": utc(now).isoformat(),
+    }}
+    plan.exit_reason = "Sold half at the target. The stop on the remainder is at the entry price."
+    plan.mark_price = price
+    plan.mark_as_of = quoted_at
+    return True
 
 
 def _sell(book, plan, price, quoted_at, now, reason):

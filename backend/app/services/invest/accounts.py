@@ -363,6 +363,9 @@ async def get_home(
         last_cycle_at=last_cycle_at,
         pending_orders=pending_orders,
         managed_positions=managed_positions,
+        gross_exposure=invested,
+        net_exposure=invested,
+        short_exposure=Decimal("0"),
     )
 
 
@@ -448,6 +451,7 @@ async def submit_order(
                 order_type=payload.order_type,
                 quantity=payload.quantity,
                 notional=payload.amount,
+                limit_price=payload.limit_price,
                 idempotency_key=idempotency_key,
             ),
         )
@@ -472,7 +476,7 @@ async def submit_order(
         owner_user_id=user.id,
         category="invest",
         event="retail_order_submitted",
-        message=f"Paper {response.side.lower()} order for {response.ticker} filled.",
+        message=f"Paper {response.side.lower()} order for {response.ticker} is {response.status.lower()}.",
         context={
             "account_id": str(account_id),
             "order_id": str(response.id),
@@ -1252,6 +1256,8 @@ def _order_response(order: RetailOrder, instrument: Instrument) -> InvestOrderRe
         order_type=order.order_type,
         quantity=order.quantity,
         notional=order.notional,
+        limit_price=order.limit_price,
+        expires_at=getattr(order, "expires_at", None),
         status=order.status,
         submitted_at=order.submitted_at,
         filled_at=order.filled_at,

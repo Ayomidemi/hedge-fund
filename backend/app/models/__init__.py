@@ -253,6 +253,7 @@ class Position(Base, TimestampMixin):
         ForeignKey("instruments.id"), nullable=False, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
+    exposure_side: Mapped[str] = mapped_column(String(8), nullable=False, default="long", server_default="long")
     average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     market_value: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), nullable=False, default=0
@@ -1902,6 +1903,7 @@ class RetailOrder(Base, TimestampMixin):
     origin: Mapped[str] = mapped_column(
         String(16), nullable=False, default="manual", server_default="manual"
     )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     account: Mapped["RetailAccount"] = relationship(back_populates="orders")
     instrument: Mapped["Instrument"] = relationship()
@@ -1934,6 +1936,7 @@ class RetailPosition(Base, TimestampMixin):
         ForeignKey("instruments.id"), nullable=False, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
+    reserved_quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False, default=0, server_default="0")
     average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     cost_basis: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     realized_pnl: Mapped[Decimal] = mapped_column(

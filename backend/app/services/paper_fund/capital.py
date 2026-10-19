@@ -1,6 +1,6 @@
 """Capital is the only cash ledger and position book for automatic fills."""
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 import json
@@ -62,15 +62,17 @@ async def load_book(session, portfolio, *, dashboard_state: DashboardReadState |
     rates = await load_fx_rates(session) if needs_fx else {}
     net_contributions = ZERO
     for entry in entries:
-        if entry.entry_type in {"trade_buy", "trade_sell"} or entry.entry_date > date.today():
+        if entry.entry_type in {"trade_buy", "trade_sell", "trade_sell_short", "trade_buy_to_cover", "borrow_fee"} or entry.entry_date > date.today():
             continue
         converted = amount_in_base(entry.amount, entry.currency, portfolio.base_currency, rates)
         if converted is None:
             raise CapitalValidationError("Capital cash cannot be valued without its FX rate.")
         net_contributions += converted
     lots, _, _ = _accumulate_trade_attribution(trades, portfolio=portfolio, fx_rates=rates)
-    invested = money(sum((position.market_value for position in positions), ZERO))
-    equity = money(cash + invested)
+    long_value = money(sum((position.market_value for position in positions if (getattr(position, "exposure_side", None) or "long") != "short"), ZERO))
+    short_value = money(sum((position.market_value for position in positions if (getattr(position, "exposure_side", None) or "long") == "short"), ZERO))
+    invested = long_value
+    equity = money(cash + long_value - short_value)
     remaining_cost = sum((lot.remaining_cost for lot in lots.values()), ZERO)
     remaining_fees = sum((lot.remaining_entry_fees for lot in lots.values()), ZERO)
     unrealized = money(invested - remaining_cost - remaining_fees)
@@ -78,6 +80,8 @@ async def load_book(session, portfolio, *, dashboard_state: DashboardReadState |
     return CapitalBook(cash, positions, money(net_contributions), {
         "equity": equity, "unrealized_pnl": unrealized,
         "realized_pnl": money(total - unrealized), "total_pnl": total,
+        "gross_exposure": money(long_value + short_value), "net_exposure": money(long_value - short_value),
+        "short_exposure": short_value,
         "return_pct": ((total / net_contributions * 100).quantize(Decimal("0.0001")) if net_contributions > 0 else ZERO),
         "fees_paid": money(sum((lot.fees for lot in lots.values()), ZERO)),
     })
@@ -91,6 +95,8 @@ def bind_book(run, orders, book):
     managed = {order.instrument_id: order for order in orders if order.status == "open"}
     external = []
     for position in book.positions:
+        if (getattr(position, "exposure_side", None) or "long") == "short":
+            continue
         order = managed.get(position.instrument_id)
         managed_quantity = Decimal(order.quantity) if order else ZERO
         if managed_quantity > position.quantity:
@@ -108,22 +114,25 @@ async def book_fills(session, portfolio, orders):
     changed = False
     events = []
     for order in orders:
-        if order.entry_price is not None:
-            events.append((order.opened_at, order, "buy", order.entry_price, order.entry_fee))
+        short = (getattr(order, "direction", None) or "long") == "short"
+        opened_quantity = Decimal(str((order.evidence or {}).get("opened_quantity") or order.quantity))
+        if order.entry_price is not None and order.opened_at is not None:
+            events.append((order.opened_at, order, "sell_short" if short else "buy", order.entry_price, order.entry_fee, opened_quantity, f"automatic:{order.id}:{'short' if short else 'buy'}"))
+        for index, raw in enumerate((order.evidence or {}).get("scale_outs") or []):
+            events.append((datetime.fromisoformat(raw["at"]), order, "sell", Decimal(raw["price"]), Decimal(raw["fee"]), Decimal(raw["quantity"]), f"automatic:{order.id}:scale:{index}"))
         if order.exit_price is not None and order.closed_at is not None:
-            events.append((order.closed_at, order, "sell", order.exit_price, order.exit_fee))
-    for at, order, side, price, fees in sorted(events, key=lambda event: (event[0], event[2] != "buy")):
-        key = f"automatic:{order.id}:{side}"
+            events.append((order.closed_at, order, "buy_to_cover" if short else "sell", order.exit_price, order.exit_fee, Decimal(order.quantity), f"automatic:{order.id}:{'cover' if short else 'sell'}"))
+    for at, order, side, price, fees, quantity, key in sorted(events, key=lambda event: (event[0], event[2] not in {"buy", "buy_to_cover"})):
         if await session.scalar(select(Trade.id).where(Trade.portfolio_id == portfolio.id, Trade.idempotency_key == key)):
             continue
         instrument = await session.get(Instrument, order.instrument_id)
         if instrument.currency != portfolio.base_currency or portfolio.base_currency != "USD":
             raise CapitalValidationError("Automatic execution currently requires USD Capital instruments.")
         trade = Trade(portfolio_id=portfolio.id, instrument_id=order.instrument_id,
-            trade_date=at, side=side, status="filled", quantity=order.quantity,
-            limit_price=order.limit_price if side == "buy" else None,
+            trade_date=at, side=side, status="filled", quantity=quantity,
+            limit_price=order.limit_price if side in {"buy", "sell_short"} else None,
             executed_price=price, executed_price_base=price, fees=fees, fees_base=fees,
-            rationale=order.thesis if side == "buy" else order.exit_reason or "Automatic exit",
+            rationale=order.thesis if side in {"buy", "sell_short"} else order.exit_reason or "Automatic exit",
             risk_decision="approve", risk_notes=(json.dumps(order.evidence["fill_risk"]) if side == "buy" and (order.evidence or {}).get("fill_risk") else "Capital execution checks passed; risk-reducing exit or legacy execution."),
             broker_reference="automatic_paper", idempotency_key=key)
         session.add(trade)

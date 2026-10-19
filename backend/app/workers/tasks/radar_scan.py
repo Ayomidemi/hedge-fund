@@ -6,9 +6,8 @@ import logging
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.db.locks import RADAR_SCAN_LOCK_KEY, hold_job_lock
 from app.db.session import engine_options
-from app.services.market_radar.scan import run_radar_scan
+from app.services.market_radar.runner import RadarScanInProgress, run_locked_radar_scan
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -25,11 +24,10 @@ async def _run() -> None:
         bind=engine, autoflush=False, expire_on_commit=False
     )
     try:
-        async with hold_job_lock(engine, RADAR_SCAN_LOCK_KEY) as locked:
-            if not locked:
+        async with session_factory() as session:
+            try:
+                await run_locked_radar_scan(session)
+            except RadarScanInProgress:
                 logger.info("radar_scan_skipped_overlap")
-                return
-            async with session_factory() as session:
-                await run_radar_scan(session)
     finally:
         await engine.dispose()

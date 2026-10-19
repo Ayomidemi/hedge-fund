@@ -142,6 +142,7 @@ export function PaperFundPanel({
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
         <div><span className="text-xs text-zinc-500">Available cash · USD</span><p className="font-semibold tabular-nums">{money(run?.available_cash ?? overview?.capital?.cash_balance)}</p></div>
+        {run?.gross_exposure != null ? <div><span className="text-xs text-zinc-500">Gross / net</span><p className="font-semibold tabular-nums">{money(run.gross_exposure)} / {money(run.net_exposure)}</p></div> : null}
         <div><span className="text-xs text-zinc-500">Execution</span><p className="text-xs">{executionStatus}</p></div>
         <Link href="/opportunity-queue" className="text-xs underline underline-offset-4">{queued.length} queued orders →</Link>
       </div>{controls}

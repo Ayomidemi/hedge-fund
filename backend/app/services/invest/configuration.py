@@ -49,12 +49,12 @@ DEFAULT_INVEST_SETTINGS: dict[str, Any] = {
     "risk_policy": {
         "supported_asset_classes": ["equity", "etf", "bond", "cash_equivalent"],
         "allowed_sides": ["BUY", "SELL"],
-        "allowed_order_types": ["market"],
+        "allowed_order_types": ["market", "limit"],
         "buying_power_concentration_warn_pct": "0.50",
         "fixed_income_fx_warning_enabled": True,
     },
     "paper_broker_policy": {
-        "allowed_order_types": ["market"],
+        "allowed_order_types": ["market", "limit"],
         "allowed_sides": ["BUY", "SELL"],
         "concentration_warn_pct": "0.25",
         "instant_fills": True,
@@ -398,7 +398,7 @@ def parse_risk_policy(payload: dict[str, Any] | None = None) -> InvestRiskPolicy
             source.get("allowed_order_types"),
             fallback["allowed_order_types"],
             case="lower",
-        ),
+        ) | frozenset({"limit"}),
         buying_power_concentration_warn_pct=_decimal_setting(
             source,
             "buying_power_concentration_warn_pct",
@@ -422,7 +422,7 @@ def parse_paper_broker_policy(
             source.get("allowed_order_types"),
             fallback["allowed_order_types"],
             case="lower",
-        ),
+        ) | frozenset({"limit"}),
         allowed_sides=_string_set(
             source.get("allowed_sides"),
             fallback["allowed_sides"],

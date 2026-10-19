@@ -28,10 +28,10 @@ ZERO = Decimal("0")
 CENT = Decimal("0.01")
 POLICY = profile_policy("medium")
 SIMULATION_NOTICE = (
-    "Capital trades currently use simulated execution; no live broker orders. Whole-share, long-only momentum strategy, "
+    "Capital trades currently use simulated execution; no live broker orders. Whole-share long momentum, plus at most one SPY hedge, "
     "not a validated profit forecast. Fills use later observed prices with 10 bps adverse slippage "
     "and 5 bps fees per side. Tiingo derived reference prices may be used for paper fills; they are not executable exchange bids or offers. "
-    "Order-book depth, queue priority, partial fills, dividends and corporate "
+    "A profit target sells half the position once. Order-book depth, queue priority, dividends and corporate "
     "actions are not simulated. Earnings calendars are not connected. Moves between observations can be missed. Stops can fill below their "
     "trigger. Missing or stale data blocks execution."
 )
@@ -53,17 +53,33 @@ def fee(notional: Decimal, policy: dict) -> Decimal:
     return (notional * Decimal(str(policy["fee_bps"])) / 10000).quantize(CENT, rounding=ROUND_CEILING)
 
 
+def _short(order) -> bool:
+    return (getattr(order, "direction", None) or "long") == "short"
+
+
 def reservation(order: PaperOrder, policy: dict) -> Decimal:
+    if _short(order):
+        return ZERO
     value = order.limit_price * order.quantity
     return value + fee(value, policy)
 
 
 def accounting(run: PaperFundRun, orders: list[PaperOrder]) -> dict:
     opened = [o for o in orders if o.status == "open"] + getattr(run, "_external_holdings", [])
-    invested = money(sum(((o.mark_price or o.entry_price) * o.quantity for o in opened), ZERO))
-    unrealized = money(sum((((o.mark_price or o.entry_price) - o.entry_price) * o.quantity - o.entry_fee
-                            for o in opened), ZERO))
-    realized = money(sum((o.realized_pnl for o in orders if o.status == "closed"), ZERO))
+
+    def _invested(order):
+        value = (order.mark_price or order.entry_price) * order.quantity
+        return -value if _short(order) else value
+
+    def _unrealized(order):
+        mark = order.mark_price or order.entry_price
+        if _short(order):
+            return (order.entry_price - mark) * order.quantity - order.entry_fee
+        return (mark - order.entry_price) * order.quantity - order.entry_fee
+
+    invested = money(sum((_invested(o) for o in opened), ZERO))
+    unrealized = money(sum((_unrealized(o) for o in opened), ZERO))
+    realized = money(sum((o.realized_pnl for o in orders if o.status in {"open", "closed"}), ZERO))
     reserved = money(sum((reservation(o, run.policy) for o in orders if o.status == "pending"), ZERO))
     equity = money(run.cash_balance + invested)
     return {
@@ -75,12 +91,37 @@ def accounting(run: PaperFundRun, orders: list[PaperOrder]) -> dict:
     }
 
 
+def _scale_long(run, order, price: Decimal, now: datetime) -> bool:
+    """Sell half at the target and leave the remainder open with the stop at entry."""
+    if (order.evidence or {}).get("scaled") or order.quantity < 2:
+        return False
+    sold = order.quantity // 2
+    remaining = order.quantity - sold
+    entry = order.entry_price or order.limit_price
+    stop = min(entry, order.limit_price - CENT)
+    if sold < 1 or remaining < 1 or not ZERO < stop < order.limit_price:
+        return False
+    policy = run.policy
+    exit_fee = fee(price * sold, policy)
+    allocated_entry = money(order.entry_fee * Decimal(sold) / Decimal(order.quantity))
+    run.cash_balance = money(run.cash_balance + price * sold - exit_fee)
+    order.realized_pnl = money(order.realized_pnl + (price - entry) * sold - allocated_entry - exit_fee)
+    order.entry_fee = money(order.entry_fee - allocated_entry)
+    order.quantity = remaining
+    order.stop_price = stop
+    slices = list((order.evidence or {}).get("scale_outs") or [])
+    slices.append({"quantity": sold, "price": str(price), "fee": str(exit_fee), "at": utc(now).isoformat(), "reason": "take_profit"})
+    order.evidence = {**(order.evidence or {}), "scale_outs": slices, "scaled": True}
+    order.exit_reason = "Sold half at the target. The stop on the remainder is at the entry price."
+    return True
+
+
 def size_order(run: PaperFundRun, orders: list[PaperOrder], price: Decimal, sector: str | None, asset_class: str = "equity") -> tuple[int, Decimal, Decimal, Decimal]:
     """Round down to whole shares; reserve fees, risk budget and sector capacity."""
     policy = run.policy
     state = accounting(run, orders)
     equity = state["equity"]
-    active = [o for o in orders if o.status in {"open", "pending"}] + getattr(run, "_external_holdings", [])
+    active = [o for o in orders if o.status in {"open", "pending"} and not _short(o)] + getattr(run, "_external_holdings", [])
     limit = (price * (1 + Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
     stop = (limit * (1 - Decimal(str(policy["stop_loss_pct"])) / 100)).quantize(CENT, rounding=ROUND_FLOOR)
     target = (limit * (1 + Decimal(str(policy["take_profit_pct"])) / 100)).quantize(CENT, rounding=ROUND_CEILING)
@@ -208,7 +249,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
             "and liquidate."
         )
     for order in orders:
-        if order.status != "open" or session_error:
+        if order.status != "open" or session_error or _short(order):
             continue
         # Forced risk exits complete even in Manual so a latched halt cannot
         # strand open positions. Discretionary stops/targets stay Automatic-only.
@@ -231,10 +272,12 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         # A profit-target limit cannot fill below its limit after costs of crossing.
         if reason == "take_profit" and price < order.target_price:
             continue
+        if reason == "take_profit" and _scale_long(run, order, max(CENT, price), now):
+            continue
         order.exit_price = max(CENT, price)
         order.exit_fee = fee(order.exit_price * order.quantity, policy)
         run.cash_balance = money(run.cash_balance + order.exit_price * order.quantity - order.exit_fee)
-        order.realized_pnl = money((order.exit_price - order.entry_price) * order.quantity - order.entry_fee - order.exit_fee)
+        order.realized_pnl = money(order.realized_pnl + (order.exit_price - order.entry_price) * order.quantity - order.entry_fee - order.exit_fee)
         order.status = "closed"
         order.closed_at = now
         order.exit_quote_at = quote.as_of
@@ -246,7 +289,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         _cancel_pending(orders, daily_block)
     uncertain_marks = getattr(run, "_external_marks_unreliable", False) or any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
     for order in orders:
-        if order.status != "pending" or run.status != "running" or session_error or uncertain_marks or not automatic_execution:
+        if _short(order) or order.status != "pending" or run.status != "running" or session_error or uncertain_marks or not automatic_execution:
             continue
         if daily_loss_blocker(run, orders, now):
             _cancel_pending(orders, "Daily loss limit reached; entry cancelled.")
@@ -279,7 +322,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
                            if o is not order and o.status in {"pending", "open"} and o.sector == order.sector), ZERO)
         stop_fill = (order.stop_price * (1 - Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_FLOOR)
         planned_loss = (price - stop_fill) * order.quantity + fee(price * order.quantity, policy) + fee(stop_fill * order.quantity, policy)
-        active = [o for o in orders if o.status in {"pending", "open"}] + getattr(run, "_external_holdings", [])
+        active = [o for o in orders if o.status in {"pending", "open"} and not _short(o)] + getattr(run, "_external_holdings", [])
         count = len({getattr(o, "instrument_id", id(o)) for o in active})
         position_used = sum(((o.mark_price or o.limit_price) * o.quantity for o in active
                              if o is not order and getattr(o, "instrument_id", None) == order.instrument_id), ZERO)
@@ -303,6 +346,7 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
         order.entry_price = price
         order.entry_fee = fee(price * order.quantity, policy)
         run.cash_balance = money(run.cash_balance - cost)
+        order.evidence = {**(order.evidence or {}), "opened_quantity": order.quantity}
         order.status = "open"
         order.opened_at = now
         order.entry_quote_at = quote.as_of
@@ -325,6 +369,8 @@ def process_orders(run: PaperFundRun, orders: list[PaperOrder], quotes: dict, no
     if after_daily:
         _cancel_pending(orders, after_daily)
         blockers.append(after_daily)
+    from app.services.paper_fund.hedge import process_shorts
+    process_shorts(run, orders, quotes, now, automatic=automatic_execution, session_error=session_error)
     if run.status in {"liquidating", "halted"} and not any(o.status == "open" for o in orders):
         if getattr(run, "_external_holdings", []):
             blockers.append("Automatic positions are closed; manually managed holdings remain in Capital and require separate management.")
@@ -544,16 +590,24 @@ async def _cycle(session: AsyncSession, owner: str, *, now: datetime | None = No
     if not automatic:
         blockers.insert(0, "Manual mode: ordinary entries and exits are paused; already-triggered liquidation continues.")
     await book_fills(session, portfolio, orders)
+    from app.services.paper_fund.hedge import charge_borrow
+    await charge_borrow(session, portfolio, orders, now)
     # The engine's validated marks update the shared position book as well.
     for position in await session.scalars(select(Position).where(Position.portfolio_id == portfolio.id, Position.quantity > 0)):
         quote = quotes.get(position.instrument_id)
         if not market_blocker(now) and not quote_rejection(quote, now):
             position.market_value = money(position.quantity * quote.price)
-            position.unrealized_pnl = money((quote.price - position.average_cost) * position.quantity)
+            if (getattr(position, "exposure_side", None) or "long") == "short":
+                position.unrealized_pnl = money((position.average_cost - quote.price) * position.quantity)
+            else:
+                position.unrealized_pnl = money((quote.price - position.average_cost) * position.quantity)
     await session.flush()
     book = await load_book(session, portfolio)
     bind_book(run, orders, book)
     decisions = []
+    if automatic and run.status == "running" and not market_blocker(now) and not run.halt_reason:
+        from app.services.paper_fund.hedge import queue_hedge
+        await queue_hedge(session, run, orders, now, blockers)
     if automatic and run.status == "running" and not market_blocker(now) and not external_errors and not daily_loss_blocker(run, orders, now):
         stale_held = any(_position_quote_rejection(o, quotes.get(o.instrument_id), now) for o in orders if o.status == "open")
         if not stale_held:
@@ -694,6 +748,7 @@ async def overview(session: AsyncSession, owner: str, *, now: datetime | None = 
             started_at=run.started_at, ends_at=run.ends_at, last_cycle_at=run.last_cycle_at,
             completed_at=run.completed_at, halt_reason=run.halt_reason, **state),
         orders=[PaperOrderResponse(id=o.id, ticker=o.ticker, name=o.name, status=o.status,
+            direction=getattr(o, "direction", None) or "long",
             quantity=o.quantity, limit_price=o.limit_price, stop_price=o.stop_price, target_price=o.target_price,
             entry_price=o.entry_price, exit_price=o.exit_price, mark_price=o.mark_price,
             realized_pnl=o.realized_pnl, fees_paid=o.entry_fee + o.exit_fee,

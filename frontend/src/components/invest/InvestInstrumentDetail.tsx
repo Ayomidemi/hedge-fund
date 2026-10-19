@@ -39,6 +39,8 @@ export function InvestInstrumentDetail({
   const [tab, setTab] = useState<DetailTab>(initialTab);
   const [amount, setAmount] = useState("500");
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  const [orderType, setOrderType] = useState<"market" | "limit">("market");
+  const [limitPrice, setLimitPrice] = useState("");
   const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState<"buy" | "watch" | null>(null);
   const orderKey = useRef<string | null>(null);
@@ -112,7 +114,9 @@ export function InvestInstrumentDetail({
         {
           ticker: instrument.ticker,
           side,
+          order_type: orderType,
           amount,
+          limit_price: orderType === "limit" ? limitPrice : undefined,
         },
         { idempotencyKey: orderKey.current },
       );
@@ -351,6 +355,40 @@ export function InvestInstrumentDetail({
               </button>
             ))}
           </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            {(["market", "limit"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setOrderType(value);
+                  setReviewing(false);
+                  if (value === "limit" && !limitPrice && price) setLimitPrice(String(price));
+                }}
+                className={`rounded-sm border px-4 py-2 text-sm font-medium capitalize ${
+                  orderType === value
+                    ? "border-action bg-action text-action-ink"
+                    : "border-rule bg-paper text-zinc-700 dark:border-rule dark:bg-paper dark:text-zinc-300"
+                }`}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+          {orderType === "limit" ? (
+            <label className="mt-4 block text-sm">
+              <span className="text-xs uppercase tracking-wide text-zinc-500">Limit price</span>
+              <input
+                value={limitPrice}
+                onChange={(event) => {
+                  setLimitPrice(event.target.value);
+                  setReviewing(false);
+                }}
+                className={inputClassName}
+                inputMode="decimal"
+              />
+            </label>
+          ) : null}
           <label className="mt-4 block text-sm">
             <span className="text-xs uppercase tracking-wide text-zinc-500">
               Amount ({instrument.currency})
@@ -371,7 +409,8 @@ export function InvestInstrumentDetail({
               <p className="font-medium">Review paper order</p>
               <p className="mt-1 text-zinc-500">
                 {side} about {estimatedUnits} units of {instrument.ticker} for{" "}
-                {money(amount, instrument.currency)}.
+                {money(amount, instrument.currency)}
+                {orderType === "limit" ? ` at a limit of ${limitPrice || "—"}.` : "."}
               </p>
             </div>
           ) : null}

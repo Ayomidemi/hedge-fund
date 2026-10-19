@@ -143,7 +143,7 @@ class PaperBrokerProvider:
         if side not in policy.allowed_sides:
             raise BrokerValidationError("Order side must be BUY or SELL.")
         if order_type not in policy.allowed_order_types:
-            raise BrokerValidationError("Paper V1 only accepts market orders.")
+            raise BrokerValidationError("Paper orders must be market or limit.")
 
         instrument = await self._load_instrument(request.symbol)
         ticker = instrument.ticker
@@ -176,6 +176,11 @@ class PaperBrokerProvider:
         now = datetime.now(timezone.utc)
         broker_order_id = str(uuid4())
         warnings: list[str] = []
+        if order_type == "limit":
+            return await self._submit_limit(
+                account, request, instrument, ticker, instrument_id, asset_class, sector,
+                fixed_income_product, now, broker_order_id, warnings, side, base_currency, user_id, account_id,
+            )
 
         if side == "BUY":
             if fixed_income_product is not None:
@@ -290,6 +295,51 @@ class PaperBrokerProvider:
         await self.session.flush()
         return _order_snapshot(order, ticker)
 
+    async def _submit_limit(
+        self, account, request, instrument, ticker, instrument_id, asset_class, sector,
+        fixed_income_product, now, broker_order_id, warnings, side, base_currency, user_id, account_id,
+    ) -> BrokerOrder:
+        from app.services.invest.limits import reserve_for
+        from app.services.paper_fund.calendar import order_expiry
+
+        if fixed_income_product is not None or (asset_class or "").lower() in {"bond", "cash_equivalent"}:
+            raise BrokerValidationError("Bills and bonds stay immediate. Limit orders are for listed names.")
+        if request.limit_price is None or request.limit_price <= 0:
+            raise BrokerValidationError("A limit order needs a limit price.")
+        expiry = order_expiry(now)
+        if expiry is None:
+            raise BrokerValidationError("NYSE calendar requires an update before this limit can rest.")
+        limit_price = request.limit_price.quantize(MONEY, rounding=ROUND_HALF_UP)
+        if side == "BUY":
+            quantity, notional = _buy_size(request, limit_price)
+            reserved = reserve_for(limit_price, quantity)
+            spendable = account.cash_balance - (account.reserved_cash or Decimal("0"))
+            if reserved > spendable:
+                raise BrokerValidationError("Not enough buying power to reserve this limit.")
+            account.reserved_cash = (account.reserved_cash or Decimal("0")) + reserved
+            warnings.append("Limit buy rests until a later quote can fill it at or below the limit.")
+        else:
+            quantity, notional = await self._sell_size(
+                account_id, instrument_id, ticker, request, limit_price,
+            )
+            position = await self.session.scalar(
+                select(RetailPosition).where(RetailPosition.account_id == account_id)
+                .where(RetailPosition.instrument_id == instrument_id).with_for_update()
+            )
+            if position is None:
+                raise BrokerValidationError(f"Not enough {ticker} to sell.")
+            position.reserved_quantity = (position.reserved_quantity or Decimal("0")) + quantity
+            warnings.append("Limit sell rests until a later quote can fill it at or above the limit.")
+        order = RetailOrder(
+            user_id=user_id, account_id=account_id, instrument_id=instrument_id, side=side,
+            order_type="limit", quantity=quantity, notional=notional, limit_price=limit_price,
+            status="PENDING", submitted_at=now, expires_at=expiry, broker_provider=self.provider_code,
+            broker_order_id=broker_order_id, idempotency_key=request.idempotency_key, warnings=warnings,
+        )
+        self.session.add(order)
+        await self.session.flush()
+        return _order_snapshot(order, ticker)
+
     async def cancel_order(
         self, broker_account_id: str, broker_order_id: str
     ) -> BrokerOrder:
@@ -304,8 +354,10 @@ class PaperBrokerProvider:
             raise BrokerValidationError("Order was not found.")
         if order.status == "FILLED":
             raise BrokerValidationError("Filled paper orders cannot be cancelled.")
-        if order.status == "CANCELLED":
+        if order.status in {"CANCELLED", "EXPIRED"}:
             return _order_snapshot(order, order.instrument.ticker)
+        from app.services.invest.limits import release_resting_order
+        await release_resting_order(self.session, account, order)
         order.status = "CANCELLED"
         await self.session.flush()
         return _order_snapshot(order, order.instrument.ticker)
@@ -598,7 +650,8 @@ class PaperBrokerProvider:
             .where(RetailPosition.instrument_id == instrument_id)
             .with_for_update()
         )
-        held = position.quantity if position is not None else Decimal("0")
+        reserved_shares = (position.reserved_quantity or Decimal("0")) if position is not None else Decimal("0")
+        held = (position.quantity if position is not None else Decimal("0")) - reserved_shares
         if request.quantity is not None:
             quantity = _order_quantity(request.quantity, quantity_increment)
         elif request.notional is not None:

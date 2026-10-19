@@ -58,7 +58,7 @@ echo "→ Starting history and instrument preparation worker..."
 PIDS+=($!)
 
 echo "→ Starting API at http://${API_HOST}:${API_PORT}"
-"$VENV/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT" --reload &
+"$VENV/bin/uvicorn" app.main:app --host "$API_HOST" --port "$API_PORT" --reload --timeout-graceful-shutdown 15 &
 PIDS+=($!)
 
 echo

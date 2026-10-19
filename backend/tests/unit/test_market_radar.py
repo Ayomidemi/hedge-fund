@@ -424,6 +424,9 @@ class RadarScanVendorGateTests(IsolatedAsyncioTestCase):
 
     def _scan_stack(self, *extra_patches):
         stack = ExitStack()
+        stack.enter_context(patch(
+            "app.services.market_radar.scan.publish_system_log", new_callable=AsyncMock
+        ))
         stack.enter_context(
             patch(
                 "app.services.market_radar.scan.sync_monitored_universe",

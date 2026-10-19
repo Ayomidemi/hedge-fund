@@ -15,7 +15,7 @@ export function InvestOrderActions({
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
-  const canCancel = !["FILLED", "CANCELLED", "REJECTED"].includes(status);
+  const canCancel = !["FILLED", "CANCELLED", "REJECTED", "EXPIRED"].includes(status);
 
   async function handleCancel() {
     setPending(true);

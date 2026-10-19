@@ -42,6 +42,10 @@ export default async function InvestOrderDetailPage({
             label="Notional"
             value={order.notional ? money(order.notional, order.currency) : "-"}
           />
+          <Detail
+            label="Limit"
+            value={order.limit_price ? money(order.limit_price, order.currency) : "-"}
+          />
           <Detail label="Requested quantity" value={order.quantity ?? "-"} />
           <Detail label="Filled quantity" value={order.filled_quantity ?? "-"} />
           <Detail

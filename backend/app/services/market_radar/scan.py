@@ -6,14 +6,16 @@ FMP/Tiingo/Polygon. A closed NGX never hits NGN Market.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from math import isfinite, sqrt
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,7 +40,7 @@ from app.models import (
     RadarRun,
     RadarSnapshot,
 )
-from app.services.administration.system_log import record_system_log
+from app.services.administration.system_log import publish_system_log, record_system_log
 from app.services.market_data.ingestion import persist_quotes
 from app.services.market_data.quote_provider import LiveQuote, fetch_quotes
 from app.services.market_data.sessions import (
@@ -84,13 +86,12 @@ async def run_radar_scan(
     ] or list(ALL_JURISDICTIONS)
 
     run = RadarRun(
+        id=uuid4(),
         started_at=started_at,
         status="running",
         triggered_by_user_id=triggered_by_user_id,
         jurisdictions_requested=requested,
     )
-    session.add(run)
-    await session.flush()
     run_id = run.id
 
     scanned: list[str] = []
@@ -105,11 +106,16 @@ async def run_radar_scan(
     flagged: list[RadarCandidate] = []
     promotion_owner_ids: list[str] = []
     promoted = 0
+    quote_batches: dict[str, dict[str, LiveQuote]] = {}
 
     try:
+        await _configure_scan_transaction(session)
         watched = await load_always_watched(session)
         catalog_sync = await sync_monitored_universe(session, watched=watched)
         catalog_count = catalog_sync.active_count
+        # Catalog maintenance is independent of scan publication. Release its
+        # row locks before discovery/quotes can wait on an external service.
+        await session.commit()
 
         for jurisdiction in requested:
             state = session_for(
@@ -145,6 +151,9 @@ async def run_radar_scan(
                 candidates,
                 jurisdictions=[jurisdiction],
             )
+            # Candidates are plain values; no database transaction is needed
+            # while waiting for discovery providers.
+            await session.commit()
 
             if jurisdiction == JURISDICTION_US:
                 movers, calls, vendor_errors = await fetch_us_movers()
@@ -170,6 +179,7 @@ async def run_radar_scan(
                 session, jurisdiction_candidates, now=datetime.now(timezone.utc)
             )
             missing = _quote_targets(jurisdiction_candidates, jurisdiction)
+            await session.commit()
             live_quotes: dict[str, LiveQuote] = {}
             if missing and (state.allows_live_quotes or force):
                 if jurisdiction == JURISDICTION_NG:
@@ -181,6 +191,14 @@ async def run_radar_scan(
                 live_quotes = await fetch_quotes(missing)
                 _apply_quotes(candidates, live_quotes)
 
+            quote_batches[jurisdiction] = live_quotes
+
+        # All vendor requests finish before publishing any quotes, snapshots,
+        # or annotations. A later jurisdiction cannot strand earlier writes.
+        await _configure_scan_transaction(session)
+        session.add(run)
+        await session.flush()
+        for jurisdiction, live_quotes in quote_batches.items():
             persisted = await _persist_vendor_tapes(
                 session,
                 [item for item in candidates.values() if item.jurisdiction == jurisdiction],
@@ -251,8 +269,9 @@ async def run_radar_scan(
         run.errors = errors
         run.notes = notes
 
-        await record_system_log(
+        log_entry = await record_system_log(
             session,
+            publish=False,
             owner_user_id=triggered_by_user_id,
             category="market_data",
             event="radar_scan_completed",
@@ -273,9 +292,13 @@ async def run_radar_scan(
             },
         )
         await session.commit()
+    except asyncio.CancelledError:
+        await session.rollback()
+        raise
     except Exception as exc:
         logger.exception("radar_scan_failed")
-        # Roll back quotes, catalog changes, snapshots and annotations together.
+        # Roll back quotes, snapshots and annotations together. Committed
+        # catalog preparation remains useful even when a provider fails.
         # A database error also requires rollback before any further SQL.
         await session.rollback()
         run = RadarRun(
@@ -284,13 +307,16 @@ async def run_radar_scan(
             jurisdictions_requested=requested, jurisdictions_scanned=scanned,
             jurisdictions_skipped=skipped, vendor_calls=vendor_calls,
             cache_hits=cache_hits, catalog_count=catalog_count,
-            errors=errors + [{"error": type(exc).__name__, "message": "Scan failed; all scan writes were rolled back."}],
+            errors=errors + [{"error": type(exc).__name__, "message": "Scan failed; scan results were rolled back. Catalog preparation may have completed."}],
             notes=notes,
         )
         session.add(run)
         await session.commit()
         return run
 
+    # A slow live notification must not retain the scan's database locks or
+    # convert an already committed scan into a failure.
+    await publish_system_log(log_entry)
     logger.info(
         "radar_scan_completed",
         extra={
@@ -302,6 +328,15 @@ async def run_radar_scan(
         },
     )
     return run
+
+
+async def _configure_scan_transaction(session: AsyncSession) -> None:
+    # Bound lock waits and release abandoned write transactions if a worker
+    # disappears. These limits apply only to this transaction, not the pool.
+    await session.execute(text(
+        "SELECT set_config('lock_timeout', '5s', true), "
+        "set_config('idle_in_transaction_session_timeout', '60s', true)"
+    ))
 
 
 def _vendors_for(jurisdiction: str) -> list[str]:
