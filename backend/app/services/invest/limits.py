@@ -1,7 +1,7 @@
 """Resting Invest limit orders. Market orders stay immediate."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 
 from sqlalchemy import select
@@ -48,7 +48,7 @@ def limit_decision(order, quote, now: datetime) -> str:
 
 
 async def refresh_resting_quotes(session: AsyncSession, *, now: datetime | None = None) -> int:
-    now = utc(now or datetime.now())
+    now = utc(now or datetime.now(timezone.utc))
     if market_blocker(now):
         return 0
     rows = (await session.execute(

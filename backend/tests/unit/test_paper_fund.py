@@ -9,7 +9,7 @@ from app.api.schemas.paper_fund import PaperStart
 from app.models import InstrumentQuote, PaperFundRun, PaperOrder, RadarSnapshot
 from app.services.market_radar.execution import execution_rejection, quote_rejection
 from app.services.paper_fund.calendar import market_blocker
-from app.services.paper_fund.engine import POLICY, accounting, process_orders, reservation, size_order
+from app.services.paper_fund.engine import POLICY, accounting, aggregate_risk, process_orders, reservation, size_order
 from app.services.paper_fund.hedge import hedge_levels, hedge_quantity
 
 D = Decimal
@@ -308,6 +308,68 @@ class PaperFundTests(TestCase):
         self.assertEqual(order.status, "closed")
         self.assertEqual(order.exit_reason, "stop_loss")
         self.assertLess(run.cash_balance, opened_cash)
+
+    def test_stale_quote_cannot_open_cancel_or_cover_the_hedge(self):
+        limit, stop, target = hedge_levels(D("100"), POLICY)
+        pending = make_order(
+            direction="short", ticker="SPY", quantity=20, limit_price=limit,
+            stop_price=stop, target_price=target, evidence={},
+        )
+        opened = make_order(
+            direction="short", status="open", ticker="SPY", quantity=20, limit_price=limit,
+            stop_price=stop, target_price=target, entry_price=limit, entry_fee=D("1"),
+            entry_quote_at=NOW, evidence={},
+        )
+        stale = NOW + timedelta(minutes=5)
+        run = make_run()
+        process_orders(run, [pending], {pending.instrument_id: make_quote(pending, str(stop + D("1")), at=NOW)}, stale)
+        self.assertEqual(pending.status, "pending")
+        process_orders(run, [opened], {opened.instrument_id: make_quote(opened, str(stop + D("1")), at=NOW)}, stale)
+        self.assertEqual(opened.status, "open")
+        self.assertIsNone(opened.exit_price)
+
+    def test_cover_waits_when_cash_cannot_buy_the_shares_back(self):
+        limit, stop, target = hedge_levels(D("100"), POLICY)
+        short = make_order(
+            direction="short", status="open", ticker="SPY", quantity=20, limit_price=limit,
+            stop_price=stop, target_price=target, entry_price=limit, entry_fee=D("1"),
+            entry_quote_at=NOW, evidence={"opened_quantity": 20},
+        )
+        long = make_order(
+            status="open", quantity=2, entry_price=D("100"), mark_price=D("100"),
+            entry_quote_at=NOW, stop_price=D("90"), target_price=D("120"),
+        )
+        run = make_run(cash_balance=D("1"))
+        at = NOW + timedelta(minutes=1)
+        blockers = process_orders(run, [long, short], {
+            long.instrument_id: make_quote(long, "80", at=at),
+            short.instrument_id: make_quote(short, str(stop + D("1")), at=at),
+        }, at)
+        self.assertEqual(long.status, "closed")
+        self.assertEqual(short.status, "open")
+        self.assertIsNone(short.exit_price)
+        self.assertGreater(run.cash_balance, D("1"))
+        self.assertTrue(any("cover needs more cash" in reason for reason in blockers))
+
+    def test_short_stop_is_risk_and_its_value_is_not_a_long_sector(self):
+        limit, stop, target = hedge_levels(D("100"), POLICY)
+        short = make_order(
+            direction="short", status="open", sector="Financials", quantity=20,
+            limit_price=limit, stop_price=stop, target_price=target,
+            entry_price=limit, mark_price=limit, entry_fee=D("0"), entry_quote_at=NOW,
+        )
+        run = make_run()
+        self.assertGreater(aggregate_risk(run, [short]), (stop - limit) * 20)
+        self.assertGreater(accounting(run, [short])["reserved_cash"], limit * 20)
+        run.policy.update(max_position_pct=100, cash_reserve_pct=0, risk_per_trade_pct=100,
+                         max_aggregate_risk_pct=100, max_drawdown_pct=100, max_daily_loss_pct=100)
+        pending = make_order(sector="Financials", quantity=9, submitted_at=NOW)
+        at = NOW + timedelta(seconds=30)
+        process_orders(run, [short, pending], {
+            short.instrument_id: make_quote(short, str(limit), at=at),
+            pending.instrument_id: make_quote(pending, "100", at=at),
+        }, at)
+        self.assertEqual(pending.status, "open")
 
 
 class ExecutionEligibilityTests(TestCase):

@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from sqlalchemy import select
 
 from app.models import CashLedgerEntry, Instrument, InstrumentQuote, PaperOrder
+from app.services.market_radar.execution import quote_rejection
 from app.services.paper_fund.calendar import NEW_YORK, order_expiry
 from app.services.paper_fund.engine import fee, money, utc
 
@@ -47,8 +48,9 @@ def long_exposure(run, orders) -> Decimal:
     return money(total)
 
 
-def process_shorts(run, orders, quotes, now: datetime, *, automatic: bool, session_error: str | None) -> None:
+def process_shorts(run, orders, quotes, now: datetime, *, automatic: bool, session_error: str | None) -> list[str]:
     policy = run.policy
+    blocked: list[str] = []
     for order in orders:
         if not is_short(order) or order.status != "open" or session_error:
             continue
@@ -56,7 +58,7 @@ def process_shorts(run, orders, quotes, now: datetime, *, automatic: bool, sessi
         if not automatic and not forced:
             continue
         quote = quotes.get(order.instrument_id)
-        if quote is None or utc(quote.as_of) <= utc(order.entry_quote_at or order.submitted_at):
+        if quote_rejection(quote, now) or utc(quote.as_of) <= utc(order.entry_quote_at or order.submitted_at):
             continue
         reason = None
         if forced:
@@ -70,12 +72,13 @@ def process_shorts(run, orders, quotes, now: datetime, *, automatic: bool, sessi
         price = (quote.price * (1 + Decimal(str(policy["slippage_bps"])) / 10000)).quantize(CENT, rounding=ROUND_CEILING)
         if reason == "take_profit" and price > order.target_price:
             continue
-        _cover(run, order, max(CENT, price), quote.as_of, now, reason)
+        if not _cover(run, order, max(CENT, price), quote.as_of, now, reason):
+            blocked.append(f"{order.ticker}: cover needs more cash than the account holds; the short stays open.")
     for order in orders:
         if not is_short(order) or order.status != "pending" or not automatic or run.status != "running" or session_error:
             continue
         quote = quotes.get(order.instrument_id)
-        if quote is None or utc(quote.as_of) <= utc(order.submitted_at):
+        if quote_rejection(quote, now) or utc(quote.as_of) <= utc(order.submitted_at):
             continue
         if quote.price >= order.stop_price:
             order.status = "cancelled"
@@ -94,12 +97,15 @@ def process_shorts(run, orders, quotes, now: datetime, *, automatic: bool, sessi
         order.mark_price = quote.price
         order.mark_as_of = quote.as_of
         order.evidence = {**(order.evidence or {}), "opened_quantity": order.quantity, "locate": "paper"}
+    return blocked
 
 
-def _cover(run, order, price, quoted_at, now, reason) -> None:
+def _cover(run, order, price, quoted_at, now, reason) -> bool:
     policy = run.policy
     cover_fee = fee(price * order.quantity, policy)
     cost = money(price * order.quantity + cover_fee)
+    if run.cash_balance < cost:
+        return False
     run.cash_balance = money(run.cash_balance - cost)
     entry = order.entry_price or order.limit_price
     order.exit_price = price
@@ -109,6 +115,7 @@ def _cover(run, order, price, quoted_at, now, reason) -> None:
     order.closed_at = now
     order.exit_quote_at = quoted_at
     order.exit_reason = reason
+    return True
 
 
 async def charge_borrow(session, portfolio, orders, now: datetime) -> None:
@@ -155,7 +162,6 @@ async def queue_hedge(session, run, orders, now: datetime, blockers: list[str]) 
         blockers.append(f"{ticker}: already held long, so it cannot be the hedge.")
         return
     quote = await session.scalar(select(InstrumentQuote).where(InstrumentQuote.instrument_id == instrument.id))
-    from app.services.market_radar.execution import quote_rejection
     error = quote_rejection(quote, now)
     if error:
         blockers.append(f"{ticker}: {error}")
