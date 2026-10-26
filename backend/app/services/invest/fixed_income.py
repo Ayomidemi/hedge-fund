@@ -144,14 +144,29 @@ class FixedIncomeProductSyncResult:
 
 _SEED_DIR = Path(__file__).with_name("seed_data")
 _TREASURY_AUCTIONS_PATH = "/v1/accounting/od/auctions_query"
-_CBN_GOVERNMENT_SECURITY_DRILLDOWN_PATHS = (
-    "/rates/GovtSecuritiesDrillDown.html",
-    "/rates/GovtSecuritiesDrillDown.asp",
-)
 _CBN_MARKET_SEGMENTS = (
-    ("NTBP", "Nigerian Treasury Bills"),
-    ("FGNB", "FGN Bonds"),
+    ("NTBP", "Nigerian Treasury Bills", "/api/GetAllSecuritiesNTB"),
+    ("FGNB", "FGN Bonds", "/api/GetAllSecuritiesFGNBond"),
 )
+_CBN_API_FIELDS = {
+    "auctionDate": "auction_date",
+    "securityType": "security_type",
+    "tenor": "tenor",
+    "auctionNo": "auction_no",
+    "week": "auction_week",
+    "maturityDate": "maturity_date",
+    "totalSubscription": "total_subscription",
+    "totalSuccessful": "total_successful",
+    "rangeBid": "range_bid",
+    "successfulBidRates": "successful_bid_rates",
+    "rateDescription": "description",
+    "rate": "rate",
+    "trueYield": "true_yield",
+    "amtOffered": "amount_offered",
+    "totalAmtRepaid": "total_amount_repaid",
+    "netType": "net_type",
+    "netValue": "net_value",
+}
 _FIXED_INCOME_PROVIDER_ERROR_BACKOFF = timedelta(hours=1)
 _fixed_income_provider_retry_after: dict[str, datetime] = {}
 _TREASURY_AUCTION_FIELDS = (
@@ -612,21 +627,22 @@ def _product_from_cbn_government_security_row(
     if maturity_days is None and auction_date is not None:
         maturity_days = max((maturity - auction_date).days, 0)
     tenor = _tenor_label_from_days(maturity_days, raw_tenor)
-    indicative_yield = _row_decimal_field_any(
-        row,
-        "true_yield",
-        "rate",
-        "marginal_rate",
-        "successful_bid_rates",
-    )
+    indicative_yield = None
+    for key in ("true_yield", "rate", "marginal_rate", "successful_bid_rates"):
+        candidate = _row_decimal_field_any(row, key)
+        if candidate is not None and candidate > 0:
+            indicative_yield = _percent(candidate)
+            break
     if indicative_yield is None:
         return None
-    indicative_yield = _percent(indicative_yield)
 
     security_type = _row_text_any(row, "security_type")
     coupon_rate = Decimal("0") if instrument_type == "treasury_bill" else None
     if instrument_type == "government_bond":
         coupon_rate = _coupon_from_security_text(security_type)
+        if coupon_rate is None:
+            issue_rate = _row_decimal_field_any(row, "rate")
+            coupon_rate = _percent(issue_rate) if issue_rate is not None and issue_rate > 0 else None
         if coupon_rate is None:
             return None
 
@@ -1525,37 +1541,46 @@ async def _fetch_us_treasury_auction_rows(limit: int) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)]
 
 
+def _cbn_row_from_api(payload: dict, *, market_code: str, market_label: str) -> dict:
+    row = {
+        target: payload.get(source)
+        for source, target in _CBN_API_FIELDS.items()
+        if payload.get(source) not in (None, "", "-")
+    }
+    row["source_market_code"] = market_code
+    row["source_market_label"] = market_label
+    return row
+
+
 async def _fetch_cbn_government_security_rows(limit: int) -> list[dict]:
+    """Read the JSON feeds the CBN securities page loads. The HTML table is empty."""
     rows: list[dict] = []
-    last_error: httpx.HTTPError | None = None
+    last_error: Exception | None = None
     async with httpx.AsyncClient(
         base_url=settings.cbn_base_url,
         timeout=httpx.Timeout(QUOTE_HTTP_TIMEOUT_SECONDS),
+        headers={"Accept": "application/json"},
     ) as client:
-        for market_code, market_label in _CBN_MARKET_SEGMENTS:
-            for path in _CBN_GOVERNMENT_SECURITY_DRILLDOWN_PATHS:
-                try:
-                    response = await client.get(
-                        path,
-                        params={"market": market_code},
-                    )
-                    response.raise_for_status()
-                except httpx.HTTPError as exc:
-                    last_error = exc
-                    continue
-                parsed = _parse_cbn_government_security_rows(
-                    response.text,
-                    market_code=market_code,
-                    market_label=market_label,
-                )
-                if parsed:
-                    rows.extend(parsed)
-                    break
-            if len(rows) >= limit:
-                break
+        for market_code, market_label, path in _CBN_MARKET_SEGMENTS:
+            try:
+                response = await client.get(path)
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
+                continue
+            if not isinstance(payload, list):
+                last_error = ValueError("CBN securities response did not include data rows.")
+                continue
+            parsed = [
+                _cbn_row_from_api(item, market_code=market_code, market_label=market_label)
+                for item in payload
+                if isinstance(item, dict)
+            ]
+            rows.extend(parsed[:limit])
     if not rows and last_error is not None:
         raise last_error
-    return rows[:limit]
+    return rows
 
 
 async def _fetch_fmdq_fixed_income_rows(limit: int) -> list[dict]:

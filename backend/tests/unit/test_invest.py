@@ -32,6 +32,7 @@ from app.services.invest.fixed_income import (
     _fmdq_market_quote,
     _official_ngn_quote,
     _official_treasury_quote,
+    _cbn_row_from_api,
     _parse_cbn_government_security_rows,
     _preferred_fixed_income_records,
     _product_from_cbn_government_security_row,
@@ -479,6 +480,46 @@ class FixedIncomeScopeTests(TestCase):
         self.assertEqual(product.provider_security_id, "NTBP|NTB|182-Day|2027-03-17")
         self.assertEqual(product.indicative_yield_pct, Decimal("19.70"))
         self.assertEqual(product.source_as_of, synced_at)
+
+    def test_cbn_api_row_uses_the_issue_rate_when_true_yield_is_zero(self) -> None:
+        synced_at = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
+        bill = _product_from_cbn_government_security_row(
+            _cbn_row_from_api(
+                {
+                    "auctionDate": "October-14-2026",
+                    "securityType": "NTB",
+                    "tenor": "91Day",
+                    "maturityDate": "January-14-2027",
+                    "rate": "15.5000",
+                    "trueYield": "0.0000",
+                },
+                market_code="NTBP",
+                market_label="Nigerian Treasury Bills",
+            ),
+            synced_at=synced_at,
+        )
+        bond = _product_from_cbn_government_security_row(
+            _cbn_row_from_api(
+                {
+                    "auctionDate": "June-19-2023",
+                    "securityType": "FGN BOND",
+                    "tenor": "10YEAR",
+                    "maturityDate": "June-26-2029",
+                    "rate": "13.9000",
+                    "trueYield": "0.0000",
+                },
+                market_code="FGNB",
+                market_label="FGN Bonds",
+            ),
+            synced_at=synced_at,
+        )
+
+        assert bill is not None and bond is not None
+        self.assertEqual(bill.indicative_yield_pct, Decimal("15.50"))
+        self.assertEqual(bill.quote_source, "cbn_official")
+        self.assertEqual(bond.instrument_type, "government_bond")
+        self.assertEqual(bond.coupon_rate_pct, Decimal("13.90"))
+        self.assertEqual(bond.indicative_yield_pct, Decimal("13.90"))
 
     def test_official_ngn_quote_uses_cbn_provider_metadata(self) -> None:
         synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)
