@@ -29,6 +29,7 @@ from app.services.invest.accounts import (
     _withheld_capital_signals,
 )
 from app.services.invest.fixed_income import (
+    _first_product_per_ticker,
     _fmdq_market_quote,
     _official_ngn_quote,
     _official_treasury_quote,
@@ -520,6 +521,43 @@ class FixedIncomeScopeTests(TestCase):
         self.assertEqual(bond.instrument_type, "government_bond")
         self.assertEqual(bond.coupon_rate_pct, Decimal("13.90"))
         self.assertEqual(bond.indicative_yield_pct, Decimal("13.90"))
+
+    def test_repeated_cbn_auctions_keep_one_product_per_ticker(self) -> None:
+        synced_at = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
+        latest = _product_from_cbn_government_security_row(
+            _cbn_row_from_api(
+                {
+                    "auctionDate": "June-19-2023",
+                    "securityType": "FGN BOND",
+                    "tenor": "10YEAR",
+                    "maturityDate": "June-26-2029",
+                    "rate": "13.9000",
+                    "trueYield": "0.0000",
+                },
+                market_code="FGNB",
+                market_label="FGN Bonds",
+            ),
+            synced_at=synced_at,
+        )
+        older = _product_from_cbn_government_security_row(
+            _cbn_row_from_api(
+                {
+                    "auctionDate": "January-18-2023",
+                    "securityType": "FGN BOND",
+                    "tenor": "10 YEAR",
+                    "maturityDate": "June-26-2029",
+                    "rate": "12.5000",
+                    "trueYield": "0.0000",
+                },
+                market_code="FGNB",
+                market_label="FGN Bonds",
+            ),
+            synced_at=synced_at,
+        )
+        assert latest is not None and older is not None
+        self.assertEqual(latest.ticker, older.ticker)
+        kept = _first_product_per_ticker([latest, older])
+        self.assertEqual([product.indicative_yield_pct for product in kept], [Decimal("13.90")])
 
     def test_official_ngn_quote_uses_cbn_provider_metadata(self) -> None:
         synced_at = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc)

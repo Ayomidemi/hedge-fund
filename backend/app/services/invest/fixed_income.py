@@ -1669,10 +1669,23 @@ def _product_from_treasury_auction_row(
     )
 
 
+def _first_product_per_ticker(products: list[FixedIncomeProduct]) -> list[FixedIncomeProduct]:
+    """Several auctions can share one maturity. The ticker is unique, so the first row wins."""
+    chosen: list[FixedIncomeProduct] = []
+    seen: set[str] = set()
+    for product in products:
+        if product.ticker in seen:
+            continue
+        seen.add(product.ticker)
+        chosen.append(product)
+    return chosen
+
+
 async def _upsert_fixed_income_products(
     session: AsyncSession,
     products: list[FixedIncomeProduct],
 ) -> list[FixedIncomeProduct]:
+    products = _first_product_per_ticker(products)
     if not products:
         return []
 
