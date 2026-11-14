@@ -18,7 +18,7 @@ cp env.example .env.local
 npm run dev
 ```
 
-App: http://localhost:3000
+App: http://localhost:3000 or http://localhost:3001
 
 `env.example` points `NEXT_PUBLIC_API_URL` at port 8001, which is the port the dev script uses. If that variable is missing, the client falls back to http://localhost:8000. Set the Supabase URL and anon key in `.env.local` before signing in.
 
