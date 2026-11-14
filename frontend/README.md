@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Frontend
 
-## Getting Started
+Next.js app for the two paper books: **Invest** and **Capital**.
 
-First, run the development server:
+Invest is the retail account: markets, orders, holdings, cash, and fixed income. Capital is the fund desk: positions, the trade journal, radar, risk, research, and administration. Both talk to the FastAPI backend. Sign-in uses Supabase.
+
+## Prerequisites
+
+- Node.js 20+
+- The backend API running. `./scripts/dev-backend.sh` from the repo root serves it at http://127.0.0.1:8001
+
+## Setup
 
 ```bash
+cd frontend
+npm install
+cp env.example .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+App: http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`env.example` points `NEXT_PUBLIC_API_URL` at port 8001, which is the port the dev script uses. If that variable is missing, the client falls back to http://localhost:8000. Set the Supabase URL and anon key in `.env.local` before signing in.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Scripts
 
-## Learn More
+```bash
+npm run dev     # next dev, webpack
+npm run build
+npm run start
+npm run lint
+```
 
-To learn more about Next.js, take a look at the following resources:
+Route and refresh checks live in `tests/` and run with Node’s test runner:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+node --test tests/*.test.mjs
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Layout
 
-## Deploy on Vercel
+```
+frontend/src/
+├── app/
+│   ├── invest/          # Invest account
+│   ├── capital/         # Capital entry
+│   ├── (platform)/      # Capital desk pages
+│   ├── login/           # Supabase sign-in
+│   └── settings/
+├── components/
+└── lib/                 # API client and helpers
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Live quotes and news arrive on the backend WebSocket and refresh the open page. Order entry, mode changes, and account data go through `/api` on `NEXT_PUBLIC_API_URL`.
